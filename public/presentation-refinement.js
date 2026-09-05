@@ -124,7 +124,7 @@
         if (!mobileQuery.matches) return;
         const rootId = currentRootId();
         if (!rootId) return;
-        const card = document.getElementById(`card-${CSS.escape(rootId)}`);
+        const card = document.getElementById(`card-${rootId}`);
         if (!card) return;
 
         const viewportRect = viewport.getBoundingClientRect();
