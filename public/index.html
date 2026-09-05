@@ -418,61 +418,95 @@
             return [...unit.parents].map(parent => parent.id).sort().join('|');
         }
 
-        // Order generations with repeated barycentric sweeps. During downward sweeps,
-        // siblings sharing the same parent set are moved as a single block so unrelated
-        // nodes cannot get inserted between siblings.
+        // Siblings sharing the same set of parent-family units form an indivisible block
+        // for ordering purposes. This prevents an upward sweep from inserting a bridge
+        // child (or an unrelated node) between ordinary siblings.
+        function siblingBlocks(units) {
+            const oldIndex = indexMap(units);
+            const groups = new Map();
+
+            for (const unit of units) {
+                const key = parentSignature(unit);
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(unit);
+            }
+
+            return [...groups.entries()].map(([key, members]) => ({
+                key,
+                members: members.sort((a, b) =>
+                    oldIndex.get(a) - oldIndex.get(b) || a.id.localeCompare(b.id)
+                ),
+                old: average(members.map(member => oldIndex.get(member)))
+            })).sort((a, b) => a.old - b.old || a.key.localeCompare(b.key));
+        }
+
+        // Repeated barycentric sweeps minimize crossings between adjacent generations,
+        // but all reordering happens at sibling-block granularity. A married child whose
+        // spouse connects to another ancestry branch naturally gets a different parent
+        // signature and is therefore pulled to the outer edge nearest that branch.
         function orderGenerations(byGen) {
             const gens = [...byGen.keys()].sort((a, b) => a - b);
             gens.forEach(gen => byGen.get(gen).sort((a, b) => a.id.localeCompare(b.id)));
 
             for (let pass = 0; pass < ORDER_SWEEPS; pass++) {
-                // Downward: group siblings, order groups around their parents.
+                // Downward sweep: order sibling blocks by the horizontal order of all
+                // parent-family units feeding them.
                 for (let gi = 1; gi < gens.length; gi++) {
                     const prev = byGen.get(gens[gi - 1]);
-                    const units = byGen.get(gens[gi]);
                     const prevIndex = indexMap(prev);
-                    const oldIndex = indexMap(units);
-                    const groups = new Map();
+                    const blocks = siblingBlocks(byGen.get(gens[gi]));
 
-                    for (const unit of units) {
-                        const key = parentSignature(unit);
-                        if (!groups.has(key)) groups.set(key, []);
-                        groups.get(key).push(unit);
-                    }
-
-                    const blocks = [...groups.entries()].map(([key, members]) => {
-                        const parentPositions = members.flatMap(member =>
+                    for (const block of blocks) {
+                        const positions = block.members.flatMap(member =>
                             [...member.parents]
                                 .filter(parent => prevIndex.has(parent))
                                 .map(parent => prevIndex.get(parent))
                         );
-                        const old = Math.min(...members.map(member => oldIndex.get(member)));
-                        return {
-                            key,
-                            members: members.sort((a, b) => oldIndex.get(a) - oldIndex.get(b) || a.id.localeCompare(b.id)),
-                            score: parentPositions.length ? average(parentPositions) : old,
-                            old
-                        };
-                    });
+                        block.score = positions.length ? average(positions) : block.old;
+                    }
 
-                    blocks.sort((a, b) => a.score - b.score || a.old - b.old || a.key.localeCompare(b.key));
+                    blocks.sort((a, b) =>
+                        a.score - b.score || a.old - b.old || a.key.localeCompare(b.key)
+                    );
                     byGen.set(gens[gi], blocks.flatMap(block => block.members));
                 }
 
-                // Upward: move parent families toward the center of their children.
+                // Upward sweep: move whole sibling blocks toward their descendants.
+                // Members may reorder inside their own block, but the block itself can
+                // never be split by another family.
                 for (let gi = gens.length - 2; gi >= 0; gi--) {
-                    const units = byGen.get(gens[gi]);
                     const next = byGen.get(gens[gi + 1]);
                     const nextIndex = indexMap(next);
-                    const oldIndex = indexMap(units);
+                    const blocks = siblingBlocks(byGen.get(gens[gi]));
 
-                    units.sort((a, b) => {
-                        const aChildren = [...a.children].filter(child => nextIndex.has(child)).map(child => nextIndex.get(child));
-                        const bChildren = [...b.children].filter(child => nextIndex.has(child)).map(child => nextIndex.get(child));
-                        const ax = aChildren.length ? average(aChildren) : oldIndex.get(a);
-                        const bx = bChildren.length ? average(bChildren) : oldIndex.get(b);
-                        return ax - bx || oldIndex.get(a) - oldIndex.get(b) || a.id.localeCompare(b.id);
-                    });
+                    for (const block of blocks) {
+                        const oldMemberIndex = indexMap(block.members);
+                        block.members.sort((a, b) => {
+                            const aChildren = [...a.children]
+                                .filter(child => nextIndex.has(child))
+                                .map(child => nextIndex.get(child));
+                            const bChildren = [...b.children]
+                                .filter(child => nextIndex.has(child))
+                                .map(child => nextIndex.get(child));
+                            const ax = aChildren.length ? average(aChildren) : oldMemberIndex.get(a);
+                            const bx = bChildren.length ? average(bChildren) : oldMemberIndex.get(b);
+                            return ax - bx ||
+                                oldMemberIndex.get(a) - oldMemberIndex.get(b) ||
+                                a.id.localeCompare(b.id);
+                        });
+
+                        const positions = block.members.flatMap(member =>
+                            [...member.children]
+                                .filter(child => nextIndex.has(child))
+                                .map(child => nextIndex.get(child))
+                        );
+                        block.score = positions.length ? average(positions) : block.old;
+                    }
+
+                    blocks.sort((a, b) =>
+                        a.score - b.score || a.old - b.old || a.key.localeCompare(b.key)
+                    );
+                    byGen.set(gens[gi], blocks.flatMap(block => block.members));
                 }
             }
         }
@@ -590,7 +624,63 @@
             }
         }
 
+        // Prefer the side of a couple that keeps a person's own lineage straight.
+        // Parents have priority; when parents are not recorded, direct children provide
+        // a weaker but still useful side hint. This makes parent-family order and spouse
+        // order agree instead of visually crossing through the marriage block.
+        function memberLineageTargetX(member) {
+            const unit = unitByNodeId.get(member.id);
+            if (!unit) return null;
+
+            if (member.parent_id) {
+                const parentUnit = unitByNodeId.get(member.parent_id);
+                if (parentUnit && parentUnit.gen === unit.gen - 1) {
+                    return parentUnit.centerX;
+                }
+            }
+
+            const childUnits = globalNodes
+                .filter(child => child.parent_id === member.id)
+                .map(child => unitByNodeId.get(child.id))
+                .filter(childUnit => childUnit && childUnit.gen === unit.gen + 1);
+
+            return childUnits.length ? average(childUnits.map(childUnit => childUnit.centerX)) : null;
+        }
+
+        function orientCouples() {
+            for (const unit of globalUnits) {
+                if (unit.members.length !== 2) continue;
+
+                const [a, b] = unit.members;
+                const ax = memberLineageTargetX(a);
+                const bx = memberLineageTargetX(b);
+                let left = a;
+                let right = b;
+
+                if (Number.isFinite(ax) && Number.isFinite(bx) && Math.abs(ax - bx) > 1) {
+                    if (ax > bx) {
+                        left = b;
+                        right = a;
+                    }
+                } else if (Number.isFinite(ax) && !Number.isFinite(bx)) {
+                    if (ax > unit.centerX + 1) {
+                        left = b;
+                        right = a;
+                    }
+                } else if (!Number.isFinite(ax) && Number.isFinite(bx)) {
+                    if (bx < unit.centerX - 1) {
+                        left = b;
+                        right = a;
+                    }
+                }
+
+                unit.members = [left, right];
+            }
+        }
+
         function positionMembers() {
+            orientCouples();
+
             for (const unit of globalUnits) {
                 if (unit.members.length === 1) {
                     unit.members[0].x = unit.centerX;
