@@ -3,7 +3,32 @@ export default {
     const url = new URL(request.url);
 
     if (!url.pathname.startsWith('/api/nodes')) {
-      return env.ASSETS.fetch(request);
+      const assetResponse = await env.ASSETS.fetch(request);
+
+      // Keep the layout refinement in its own frontend file while the main UI remains
+      // a single static index.html. Inject it only into HTML responses so every normal
+      // page load gets the refinement without changing asset handling.
+      const contentType = assetResponse.headers.get('Content-Type') || '';
+      if (contentType.includes('text/html')) {
+        const html = await assetResponse.text();
+        const scriptTag = '<script src="/layout-refinement.js"></script>';
+        const refinedHtml = html.includes(scriptTag)
+          ? html
+          : html.replace('</body>', `${scriptTag}\n</body>`);
+
+        const headers = new Headers(assetResponse.headers);
+        headers.set('Content-Type', 'text/html; charset=UTF-8');
+        headers.set('Cache-Control', 'no-store');
+        headers.delete('Content-Length');
+
+        return new Response(refinedHtml, {
+          status: assetResponse.status,
+          statusText: assetResponse.statusText,
+          headers
+        });
+      }
+
+      return assetResponse;
     }
 
     try {
