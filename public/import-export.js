@@ -1,5 +1,63 @@
 // Human-readable JSON import/export controls for the global family graph.
 (() => {
+    const ANCHOR_STORAGE_KEY = 'family-tree.anchor-person';
+
+    function readStoredAnchor() {
+        try {
+            return localStorage.getItem(ANCHOR_STORAGE_KEY);
+        } catch (error) {
+            console.warn('Unable to read saved family anchor:', error);
+            return null;
+        }
+    }
+
+    function writeStoredAnchor(personId) {
+        if (!personId) return;
+        try {
+            localStorage.setItem(ANCHOR_STORAGE_KEY, personId);
+        } catch (error) {
+            console.warn('Unable to save family anchor:', error);
+        }
+    }
+
+    function persistAnchorFromLocation() {
+        const personId = new URL(window.location.href).searchParams.get('person');
+        if (personId) writeStoredAnchor(personId);
+    }
+
+    // Restore the last anchor for this browser/origin before graph-view performs its
+    // first canonical render. An explicit ?person= link wins and becomes the new saved
+    // anchor. Only the anchor persists; lateral +N expansion state remains ephemeral.
+    const startupUrl = new URL(window.location.href);
+    const explicitAnchor = startupUrl.searchParams.get('person');
+    if (explicitAnchor) {
+        writeStoredAnchor(explicitAnchor);
+    } else {
+        const storedAnchor = readStoredAnchor();
+        if (storedAnchor) {
+            startupUrl.searchParams.set('person', storedAnchor);
+            history.replaceState(null, '', startupUrl);
+        }
+    }
+
+    // graph-view updates ?person= whenever search/autocomplete or node-click changes the
+    // anchor. Persist those URL changes transparently so reload returns to that person.
+    const nativeReplaceState = history.replaceState;
+    history.replaceState = function persistedReplaceState(...args) {
+        const result = nativeReplaceState.apply(this, args);
+        persistAnchorFromLocation();
+        return result;
+    };
+
+    const nativePushState = history.pushState;
+    history.pushState = function persistedPushState(...args) {
+        const result = nativePushState.apply(this, args);
+        persistAnchorFromLocation();
+        return result;
+    };
+
+    window.addEventListener('popstate', persistAnchorFromLocation);
+
     // The legacy inline page starts one /api/nodes request before injected scripts run.
     // If that request finishes after graph-view.js, redirect its initial centering hook
     // back into the graph renderer so the old full-tree response cannot win the race.
