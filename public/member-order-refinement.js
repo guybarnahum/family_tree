@@ -3,13 +3,15 @@
 // The planar row solver can move whole FamilyUnits, but ancestry can still cross when the
 // people *inside* one unit are in the wrong left/right order. This layer treats member order
 // as part of the topology: maximize adjacent spouse links first, then minimize incoming
-// ancestry crossings, then shorten parent/child connectors. No persistent data is changed.
+// ancestry crossings, then shorten parent/child connectors. Chosen orders are ephemeral
+// layout preferences and are fed back through the next layout pass; no DB state is changed.
 (() => {
     if (window.__familyMemberOrderInstalled) return;
     window.__familyMemberOrderInstalled = true;
 
     const NON_SPOUSE_MEMBER_GAP = 58;
     const EXACT_MEMBER_LIMIT = 7;
+    const MAX_FEEDBACK_PASSES = 3;
     const EPSILON = 0.5;
 
     let graphDocument = null;
@@ -18,6 +20,7 @@
     let parentsByChild = new Map();
     let spousesByPerson = new Map();
     let installed = false;
+    const preferredOrders = new Map();
 
     function addSet(map, key, value) {
         if (!map.has(key)) map.set(key, new Set());
@@ -53,6 +56,12 @@
                 graphSignature = signature;
                 graphDocument = value;
                 rebuildIndexes();
+                if (changed) {
+                    // Unit ids are stable for unchanged spouse components, but relationship
+                    // mutations can split/merge components. Stale preferences are harmless;
+                    // clear them so the next topology starts from its own structural order.
+                    preferredOrders.clear();
+                }
                 return { graph: value, changed };
             })
             .finally(() => { graphPromise = null; });
@@ -108,6 +117,26 @@
             cursor = right + (gaps[index] || 0);
         });
         return { width, gaps, xById, edgesById };
+    }
+
+    function applyOrder(unit, orderIds) {
+        if (!unit?.members?.length || !Array.isArray(orderIds)) return false;
+        const byId = new Map(unit.members.map(member => [member.id, member]));
+        if (orderIds.length !== unit.members.length || orderIds.some(id => !byId.has(id))) return false;
+        const order = orderIds.map(id => byId.get(id));
+        const geometry = candidateGeometry(unit, order);
+        unit.members = order;
+        unit.width = geometry.width;
+        unit.memberGaps = [...geometry.gaps];
+        unit.members.forEach(member => { member.x = geometry.xById.get(member.id); });
+        return true;
+    }
+
+    function applyPreferredOrders() {
+        for (const unit of globalUnits || []) {
+            const order = preferredOrders.get(unit.id);
+            if (order) applyOrder(unit, order);
+        }
     }
 
     function parentAnchorForUnit(parentUnit, parentIdsInUnit) {
@@ -278,9 +307,10 @@
 
     function heuristicCandidates(currentOrder) {
         const candidates = [currentOrder, [...currentOrder].reverse()];
+        const ids = new Set(currentOrder.map(member => member.id));
         const degree = new Map(currentOrder.map(member => [
             member.id,
-            spouseIds(member.id).filter(id => currentOrder.some(value => value.id === id)).length
+            spouseIds(member.id).filter(id => ids.has(id)).length
         ]));
         const hub = [...currentOrder].sort((a, b) => degree.get(b.id) - degree.get(a.id))[0];
         if (hub && degree.get(hub.id) > 1) {
@@ -312,19 +342,24 @@
 
         const beforeScore = scoreCandidate(unit, currentOrder, currentOrder, incoming);
         if (bestOrder.every((member, index) => member === currentOrder[index])) {
-            return { changed: false, before: beforeScore, after: bestScore, order: currentOrder.map(member => member.id) };
+            preferredOrders.set(unit.id, currentOrder.map(member => member.id));
+            return {
+                changed: false,
+                before: beforeScore,
+                after: bestScore,
+                order: currentOrder.map(member => member.id)
+            };
         }
 
-        unit.members = [...bestOrder];
-        unit.memberGaps = [...bestScore.geometry.gaps];
-        unit.width = bestScore.geometry.width;
-        unit.members.forEach(member => { member.x = bestScore.geometry.xById.get(member.id); });
+        const nextIds = bestOrder.map(member => member.id);
+        preferredOrders.set(unit.id, nextIds);
+        applyOrder(unit, nextIds);
         return {
             changed: true,
             before: beforeScore,
             after: bestScore,
             from: currentOrder.map(member => member.id),
-            to: bestOrder.map(member => member.id)
+            to: nextIds
         };
     }
 
@@ -363,12 +398,49 @@
     function installWrapper() {
         if (installed) return;
         installed = true;
-        const BASE_LAYOUT = layoutAndRender;
 
+        // Feed chosen member orders into every subsequent family-unit rebuild. This is the
+        // crucial feedback step: union child groups and the planar row solver then see the
+        // same internal topology that the final router sees.
+        const BASE_BUILD_FAMILY_UNITS = buildFamilyUnits;
+        buildFamilyUnits = function lineagePreferredBuildFamilyUnits(...args) {
+            const result = BASE_BUILD_FAMILY_UNITS(...args);
+            applyPreferredOrders();
+            return result;
+        };
+
+        // The planar layer still invokes the ordinary couple-orientation heuristic during
+        // positioning. Let it make its suggestion, then restore an exact preferred order if
+        // this optimizer has already found a better crossing-free orientation.
+        const BASE_ORIENT_COUPLES = orientCouples;
+        orientCouples = function lineagePreferredOrientCouples(...args) {
+            const result = BASE_ORIENT_COUPLES(...args);
+            applyPreferredOrders();
+            return result;
+        };
+
+        const BASE_LAYOUT = layoutAndRender;
         layoutAndRender = function lineageAwareLayoutAndRender() {
-            BASE_LAYOUT();
-            if (!graphDocument || !globalUnits?.length) return;
-            optimizeAllMemberOrders();
+            if (!graphDocument) return BASE_LAYOUT();
+
+            let diagnostics = [];
+            let changed = false;
+            for (let pass = 0; pass < MAX_FEEDBACK_PASSES; pass++) {
+                BASE_LAYOUT();
+                if (!globalUnits?.length) return;
+                diagnostics = optimizeAllMemberOrders();
+                changed = diagnostics.some(item => item.changed);
+                if (!changed) break;
+            }
+
+            // If the final optimization pass changed an order, consume that preference in
+            // one last complete planar pass so descendant union blocks are centered on the
+            // new union anchors rather than on pre-swap geometry.
+            if (changed) {
+                BASE_LAYOUT();
+                optimizeAllMemberOrders();
+            }
+
             updateCanvasBounds();
             syncCardPositions();
             requestAnimationFrame(() => {
