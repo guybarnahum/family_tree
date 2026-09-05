@@ -138,11 +138,45 @@
                 display: none !important;
             }
 
-            .absolute-card.graph-root {
+            /* Higher specificity intentionally wins over the later presentation layer.
+               A selected person on touch is a complete, roomy desktop-like card. */
+            #cards-layer .absolute-card.graph-root {
+                min-width: min(228px, calc(100vw - 46px)) !important;
+                width: min(264px, calc(100vw - 40px)) !important;
+                max-width: min(286px, calc(100vw - 28px)) !important;
+                min-height: 138px !important;
+                padding: 20px 16px 40px !important;
+                border-radius: 13px !important;
                 outline-width: 3px !important;
                 outline-offset: 3px !important;
                 box-shadow: 0 12px 28px rgba(52, 78, 65, 0.24) !important;
                 overflow: visible !important;
+            }
+
+            #cards-layer .absolute-card.graph-root h2[data-field="name"] {
+                margin-top: 2px !important;
+                margin-bottom: 7px !important;
+                font-size: 1.28rem !important;
+                line-height: 1.15 !important;
+                text-align: center !important;
+            }
+
+            #cards-layer .absolute-card.graph-root p[data-field="dates"] {
+                margin-bottom: 7px !important;
+                font-size: 11px !important;
+                line-height: 1.35 !important;
+                text-align: center !important;
+            }
+
+            #cards-layer .absolute-card.graph-root p[data-field="description"] {
+                font-size: 11px !important;
+                line-height: 1.45 !important;
+                text-align: center !important;
+            }
+
+            /* Empty fields should still look editable on the selected/full card. */
+            #cards-layer .absolute-card.graph-root .default-node-text {
+                opacity: 0.58 !important;
             }
 
             /* On touch, actions belong to the selected/full card only. */
@@ -207,10 +241,10 @@
             /* Selected-card marker mirrors desktop, but is informational on touch. */
             .absolute-card.graph-root .graph-select-zone {
                 display: block !important;
-                left: 14px !important;
-                right: 14px !important;
-                bottom: 5px !important;
-                height: 22px !important;
+                left: 16px !important;
+                right: 16px !important;
+                bottom: 7px !important;
+                height: 23px !important;
                 opacity: 0.78 !important;
                 pointer-events: none !important;
                 transform: none !important;
@@ -218,7 +252,7 @@
                 border-top: 1px solid rgba(88, 129, 87, 0.14) !important;
                 color: #526b58 !important;
                 font-size: 9px !important;
-                line-height: 21px !important;
+                line-height: 22px !important;
             }
 
             /* Expansion markers sit outside the card without competing with CRUD pills. */
