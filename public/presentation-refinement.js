@@ -202,6 +202,17 @@
         }, 120);
     }
 
+    function relayoutForPresentation() {
+        if (!globalNodes?.length) return;
+        try {
+            layoutAndRender();
+            queueCardUpdate();
+            queueMobileCenter();
+        } catch (error) {
+            console.warn('Unable to reflow presentation-sized cards:', error);
+        }
+    }
+
     const observer = new MutationObserver(mutations => {
         if (!mutations.some(mutation => mutation.type === 'childList')) return;
         queueCardUpdate();
@@ -236,14 +247,15 @@
         queueMobileCenter();
     }, { passive: true });
     window.addEventListener('orientationchange', () => {
-        queueCardUpdate();
-        queueMobileCenter();
+        requestAnimationFrame(relayoutForPresentation);
     }, { passive: true });
     mobileQuery.addEventListener?.('change', () => {
-        queueCardUpdate();
-        queueMobileCenter();
+        requestAnimationFrame(relayoutForPresentation);
     });
 
-    queueCardUpdate();
-    queueMobileCenter();
+    // presentation-refinement loads after the mobile sizing layer. Re-measure exactly once
+    // after its CSS applies so connector geometry uses the wider selected card immediately.
+    requestAnimationFrame(() => {
+        requestAnimationFrame(relayoutForPresentation);
+    });
 })();
