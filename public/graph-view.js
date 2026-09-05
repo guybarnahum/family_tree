@@ -1,14 +1,12 @@
 // Person-centric, ephemeral family graph view.
 //
-// The database is one global graph. This file chooses a root person and projects a
-// temporary visible subgraph into the existing layered layout engine:
-//   - ancestry: eager, recursively all the way back for the anchor person
-//   - descendants: eager, recursively downward
-//   - root spouse ancestry: one parent level by default
-//   - spouses needed to form the vertical family line: visible
-//   - root siblings: visible but de-emphasized
-//   - collateral branches: collapsed behind +N markers
-// Clicking a person makes them the new root and clears all temporary expansions.
+// The database is one global graph. This file projects it around one selected person:
+//   - selected ancestry + descendants are eager
+//   - spouse ancestry is capped at one generation by default
+//   - siblings are contextual
+//   - collateral branches are behind reversible +N / − controls
+//   - legacy one-parent children are projected under both partners only when the known
+//     parent has exactly one spouse; multiple-partner cases are deliberately not guessed.
 (() => {
     let graphPeople = [];
     let graphRelationships = [];
@@ -21,11 +19,15 @@
     let visibleIds = new Set();
     let primaryIds = new Set();
     let lateralIds = new Set();
-    const expandedBranches = new Set();
+
+    // Source card -> exact immediate branches opened from that card. Keeping ownership
+    // makes expansion reversible without hiding people still needed by another expansion.
+    const expandedBySource = new Map();
 
     const title = document.querySelector('h1');
     const titleCard = title?.parentElement;
     const subtitle = titleCard?.querySelector('p');
+    titleCard?.classList.add('family-title-card');
 
     const style = document.createElement('style');
     style.textContent = `
@@ -113,9 +115,7 @@
             border-top-width: 4px;
         }
 
-        .absolute-card:not(:has([contenteditable]:focus)) {
-            cursor: pointer;
-        }
+        .absolute-card:not(:has([contenteditable]:focus)) { cursor: pointer; }
 
         .graph-frontier {
             position: absolute;
@@ -137,6 +137,14 @@
             opacity: 0.72;
             z-index: 35;
             cursor: pointer;
+        }
+
+        .graph-frontier.graph-frontier-collapse {
+            color: #344e41;
+            background: rgba(237, 242, 232, 0.98);
+            border-color: rgba(52, 78, 65, 0.42);
+            font-size: 15px;
+            line-height: 21px;
         }
 
         .graph-frontier:hover,
@@ -185,6 +193,24 @@
                 addToMapSet(spousesByPerson, relation.person2Id, relation.person1Id);
             }
         }
+
+        // Legacy rows often contain only one parent relationship. When that parent has
+        // exactly one spouse and the child has exactly one explicit parent, project the
+        // child under both partners. This is intentionally view-only and conservative:
+        // once a parent has multiple spouses, the renderer refuses to guess the co-parent.
+        const explicitParents = new Map(
+            [...parentsByChild].map(([childId, parents]) => [childId, new Set(parents)])
+        );
+        for (const [childId, parents] of explicitParents) {
+            if (parents.size !== 1) continue;
+            const [parentId] = parents;
+            const spouses = [...(spousesByPerson.get(parentId) || [])];
+            if (spouses.length !== 1) continue;
+            const coParentId = spouses[0];
+            if (!graphPeopleById.has(coParentId)) continue;
+            addToMapSet(parentsByChild, childId, coParentId);
+            addToMapSet(childrenByParent, coParentId, childId);
+        }
     }
 
     function addAncestorCouples(seedId, target) {
@@ -197,13 +223,10 @@
             walked.add(childId);
 
             for (const parentId of parentsByChild.get(childId) || []) {
-                if (!target.has(parentId)) target.add(parentId);
+                target.add(parentId);
                 queue.push(parentId);
-
-                // Legacy data often identifies only one parent explicitly. A spouse of
-                // that parent is still part of the ancestral couple, so walk both sides.
                 for (const spouseId of spousesByPerson.get(parentId) || []) {
-                    if (!target.has(spouseId)) target.add(spouseId);
+                    target.add(spouseId);
                     queue.push(spouseId);
                 }
             }
@@ -213,13 +236,7 @@
     function addDirectParentsWithSpouses(seedId, target) {
         for (const parentId of parentsByChild.get(seedId) || []) {
             target.add(parentId);
-
-            // Preserve the parent couple when legacy data records only one explicit
-            // parent edge. Do not walk upward from either parent here: spouse ancestry
-            // intentionally stops after this single generation unless the user expands it.
-            for (const spouseId of spousesByPerson.get(parentId) || []) {
-                target.add(spouseId);
-            }
+            for (const spouseId of spousesByPerson.get(parentId) || []) target.add(spouseId);
         }
     }
 
@@ -233,7 +250,7 @@
             walked.add(parentId);
 
             for (const childId of childrenByParent.get(parentId) || []) {
-                if (!target.has(childId)) target.add(childId);
+                target.add(childId);
                 queue.push(childId);
             }
         }
@@ -247,6 +264,14 @@
             }
         }
         return siblings;
+    }
+
+    function activeExpandedBranches() {
+        const active = new Set();
+        for (const branches of expandedBySource.values()) {
+            for (const branchId of branches) active.add(branchId);
+        }
+        return active;
     }
 
     function computeVisibleGraph() {
@@ -264,15 +289,13 @@
         addDescendants(graphRootId, descendants);
         descendants.forEach(id => primaryIds.add(id));
 
-        // Root spouses are part of the main family unit. Their ancestry is contextual:
-        // show only their parents by default, leaving older spouse ancestors behind +N.
-        // During migration from the legacy one-parent model, descendants may be attached
-        // to only one spouse, so root-spouse descendants still join the main vertical line.
         const rootSpouses = new Set(spousesByPerson.get(graphRootId) || []);
         for (const spouseId of rootSpouses) {
             primaryIds.add(spouseId);
             addDirectParentsWithSpouses(spouseId, primaryIds);
 
+            // Kept for compatibility with legacy/imported data. With conservative
+            // co-parent projection above, children naturally appear from either parent.
             const spouseDescendants = new Set();
             addDescendants(spouseId, spouseDescendants);
             for (const descendantId of spouseDescendants) {
@@ -281,31 +304,23 @@
             }
         }
 
-        // Descendant spouses are shown without opening their unrelated side trees.
         for (const personId of [graphRootId, ...descendants]) {
-            for (const spouseId of spousesByPerson.get(personId) || []) {
-                primaryIds.add(spouseId);
-            }
+            for (const spouseId of spousesByPerson.get(personId) || []) primaryIds.add(spouseId);
         }
 
-        // Any spouse necessary to complete a visible ancestral couple should remain visible.
-        // This does not add parents, so the root spouse branch stays capped at one level.
+        // Complete ancestral couples, but do not recurse farther up the selected spouse's
+        // ancestry unless a frontier is explicitly expanded.
         for (const personId of [...primaryIds]) {
             const isAncestorOrRoot = personId === graphRootId || !descendants.has(personId);
             if (!isAncestorOrRoot) continue;
-            for (const spouseId of spousesByPerson.get(personId) || []) {
-                primaryIds.add(spouseId);
-            }
+            for (const spouseId of spousesByPerson.get(personId) || []) primaryIds.add(spouseId);
         }
 
-        const rootSiblings = siblingsOf(graphRootId);
-        for (const siblingId of rootSiblings) {
+        for (const siblingId of siblingsOf(graphRootId)) {
             if (!primaryIds.has(siblingId)) lateralIds.add(siblingId);
         }
 
-        // A user-expanded lateral branch becomes vertically complete for that person,
-        // but remains visually secondary until they click the person to re-root.
-        for (const branchId of expandedBranches) {
+        for (const branchId of activeExpandedBranches()) {
             if (!graphPeopleById.has(branchId)) continue;
             lateralIds.add(branchId);
             addAncestorCouples(branchId, lateralIds);
@@ -318,7 +333,6 @@
             }
         }
 
-        // Primary always wins if an expanded collateral branch reconnects to it.
         primaryIds.forEach(id => lateralIds.delete(id));
         visibleIds = new Set([...primaryIds, ...lateralIds]);
     }
@@ -350,8 +364,7 @@
             candidates.sort((a, b) => {
                 const score = candidateId => {
                     let value = 0;
-                    if ((personId === graphRootId && candidateId !== graphRootId) ||
-                        (candidateId === graphRootId && personId !== graphRootId)) value += 1000;
+                    if (personId === graphRootId || candidateId === graphRootId) value += 1000;
                     if (sharedVisibleChild(personId, candidateId)) value += 500;
                     if (primaryIds.has(candidateId)) value += 100;
                     return value;
@@ -381,7 +394,7 @@
                     .sort((a, b) => a.localeCompare(b));
 
                 // The current layout engine connects a child to one FamilyUnit. If both
-                // parents are visible spouses, either parent reaches the same couple unit.
+                // parents are visible spouses, either endpoint resolves to the same unit.
                 let parentId = visibleParents[0] || null;
                 for (const candidate of visibleParents) {
                     const spouseId = spouseChoice.get(candidate);
@@ -399,7 +412,9 @@
                     last_updated: person.lastUpdated,
                     parent_id: parentId,
                     spouse_id: spouseChoice.get(person.id) || null,
-                    viewRole: lateralIds.has(person.id) ? 'context' : (person.id === graphRootId ? 'root' : 'primary')
+                    viewRole: lateralIds.has(person.id)
+                        ? 'context'
+                        : (person.id === graphRootId ? 'root' : 'primary')
                 };
             });
     }
@@ -428,25 +443,31 @@
             const card = document.getElementById(`card-${node.id}`);
             if (!card) continue;
 
-            // Rendering/layout may call this more than once. Keep exactly one frontier
-            // control per card rather than stacking identical +N buttons.
             card.querySelectorAll('.graph-frontier').forEach(button => button.remove());
-
             card.classList.toggle('graph-root', node.id === graphRootId);
             card.classList.toggle('graph-context', lateralIds.has(node.id));
             card.setAttribute('title', node.id === graphRootId
                 ? 'Current center'
                 : 'Click to center the family graph here');
 
+            const isExpandedSource = expandedBySource.has(node.id);
             const hidden = hiddenBranchesFor(node.id);
-            if (!hidden.size) continue;
+            if (!isExpandedSource && !hidden.size) continue;
 
             const button = document.createElement('button');
             button.type = 'button';
-            button.className = 'graph-frontier';
-            button.dataset.graphExpand = node.id;
-            button.textContent = `+${hidden.size}`;
-            button.title = `Show ${hidden.size} more connected ${hidden.size === 1 ? 'person' : 'people'}`;
+            button.className = `graph-frontier${isExpandedSource ? ' graph-frontier-collapse' : ''}`;
+
+            if (isExpandedSource) {
+                button.dataset.graphCollapse = node.id;
+                button.textContent = '−';
+                button.title = 'Collapse the branch opened here';
+            } else {
+                button.dataset.graphExpand = node.id;
+                button.textContent = `+${hidden.size}`;
+                button.title = `Show ${hidden.size} more connected ${hidden.size === 1 ? 'person' : 'people'}`;
+            }
+
             button.setAttribute('aria-label', button.title);
             card.appendChild(button);
         }
@@ -463,12 +484,15 @@
         const root = graphPeopleById.get(graphRootId);
         if (!root) return;
 
-        if (subtitle) {
-            subtitle.textContent = `מרכז: ${root.name || 'ללא שם'} • לחץ על אדם כדי למרכז`;
-        }
-        if (searchInput && document.activeElement !== searchInput) {
-            searchInput.value = root.name || '';
-        }
+        if (subtitle) subtitle.textContent = `מרכז: ${root.name || 'ללא שם'} • לחץ על אדם כדי למרכז`;
+        if (searchInput && document.activeElement !== searchInput) searchInput.value = root.name || '';
+    }
+
+    function expansionSignature() {
+        return [...expandedBySource]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([sourceId, branches]) => `${sourceId}:${[...branches].sort().join('|')}`)
+            .join(',');
     }
 
     function renderGraphView({ recenter = false } = {}) {
@@ -480,7 +504,7 @@
         computeVisibleGraph();
         globalNodes = projectVisiblePeople();
         globalNodeMap = new Map(globalNodes.map(node => [node.id, node]));
-        dataSignature = `graph:${graphSignature}:${graphRootId}:${[...expandedBranches].sort().join(',')}`;
+        dataSignature = `graph:${graphSignature}:${graphRootId}:${expansionSignature()}`;
 
         renderCards();
         decorateCards();
@@ -497,12 +521,10 @@
     }
 
     function chooseInitialRoot() {
-        const url = new URL(window.location.href);
-        const requested = url.searchParams.get('person');
+        const requested = new URL(window.location.href).searchParams.get('person');
         if (requested && graphPeopleById.has(requested)) return requested;
         if (graphPeopleById.has('guy_1')) return 'guy_1';
 
-        // Fall back to the most connected named person rather than an arbitrary ID.
         return [...graphPeople]
             .filter(person => person.name && person.name !== 'משפחתנו')
             .sort((a, b) => {
@@ -517,7 +539,7 @@
     function setRoot(personId, { updateUrl = true } = {}) {
         if (!graphPeopleById.has(personId)) return;
         graphRootId = personId;
-        expandedBranches.clear();
+        expandedBySource.clear();
 
         if (updateUrl) {
             const url = new URL(window.location.href);
@@ -570,9 +592,8 @@
 
     function matchesSearch(person, query) {
         const q = query.toLocaleLowerCase();
-        const name = String(person.name || '').toLocaleLowerCase();
-        const dates = String(person.dates || '').toLocaleLowerCase();
-        return name.includes(q) || dates.includes(q);
+        return String(person.name || '').toLocaleLowerCase().includes(q) ||
+            String(person.dates || '').toLocaleLowerCase().includes(q);
     }
 
     function renderSearchResults(query) {
@@ -590,9 +611,8 @@
                 const q = trimmed.toLocaleLowerCase();
                 const an = String(a.name || '').toLocaleLowerCase();
                 const bn = String(b.name || '').toLocaleLowerCase();
-                const as = an.startsWith(q) ? 0 : 1;
-                const bs = bn.startsWith(q) ? 0 : 1;
-                return as - bs || an.localeCompare(bn) || a.id.localeCompare(b.id);
+                return Number(!an.startsWith(q)) - Number(!bn.startsWith(q)) ||
+                    an.localeCompare(bn) || a.id.localeCompare(b.id);
             })
             .slice(0, 8);
 
@@ -611,7 +631,6 @@
                 dates.textContent = person.dates;
                 button.appendChild(dates);
             }
-
             searchResults.appendChild(button);
         }
 
@@ -645,12 +664,22 @@
     }
 
     cardsLayer.addEventListener('click', event => {
+        const collapse = event.target.closest('[data-graph-collapse]');
+        if (collapse) {
+            event.preventDefault();
+            event.stopPropagation();
+            expandedBySource.delete(collapse.dataset.graphCollapse);
+            renderGraphView({ recenter: false });
+            return;
+        }
+
         const expand = event.target.closest('[data-graph-expand]');
         if (expand) {
             event.preventDefault();
             event.stopPropagation();
             const sourceId = expand.dataset.graphExpand;
-            for (const personId of hiddenBranchesFor(sourceId)) expandedBranches.add(personId);
+            const branches = hiddenBranchesFor(sourceId);
+            if (branches.size) expandedBySource.set(sourceId, new Set(branches));
             renderGraphView({ recenter: false });
             return;
         }
@@ -661,8 +690,7 @@
         setRoot(card.dataset.nodeId);
     });
 
-    // Existing add/edit/delete flows call loadTree(). Point them at the global graph
-    // instead; structural edits keep the current root while refreshing the projection.
+    // Existing add/edit/delete flows call loadTree(). Point them at the global graph.
     loadTree = async function graphAwareLoadTree(anchorId = null, force = false) {
         return loadGraph(force, { recenter: false });
     };
