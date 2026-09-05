@@ -251,13 +251,23 @@
         descendants.forEach(id => primaryIds.add(id));
 
         // Spouses are part of the vertical family unit. Root spouse ancestry is also
-        // expanded fully; descendant spouses are shown without opening their side trees.
+        // expanded fully. During migration from the legacy one-parent model, descendants
+        // may be attached to only one spouse, so root-spouse descendants are folded into
+        // the same primary vertical branch as well.
         const rootSpouses = new Set(spousesByPerson.get(graphRootId) || []);
         for (const spouseId of rootSpouses) {
             primaryIds.add(spouseId);
             addAncestorCouples(spouseId, primaryIds);
+
+            const spouseDescendants = new Set();
+            addDescendants(spouseId, spouseDescendants);
+            for (const descendantId of spouseDescendants) {
+                descendants.add(descendantId);
+                primaryIds.add(descendantId);
+            }
         }
 
+        // Descendant spouses are shown without opening their unrelated side trees.
         for (const personId of [graphRootId, ...descendants]) {
             for (const spouseId of spousesByPerson.get(personId) || []) {
                 primaryIds.add(spouseId);
@@ -402,6 +412,10 @@
         for (const node of globalNodes) {
             const card = document.getElementById(`card-${node.id}`);
             if (!card) continue;
+
+            // Rendering/layout may call this more than once. Keep exactly one frontier
+            // control per card rather than stacking identical +N buttons.
+            card.querySelectorAll('.graph-frontier').forEach(button => button.remove());
 
             card.classList.toggle('graph-root', node.id === graphRootId);
             card.classList.toggle('graph-context', lateralIds.has(node.id));
