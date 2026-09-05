@@ -1,4 +1,5 @@
-// Mobile/touch presentation and interaction for the person-centric family graph.
+// Responsive/touch refinements for the person-centric family graph.
+// This file also installs the shared generation-center vertical layout used by desktop.
 (() => {
     const viewport = document.getElementById('scroll-viewport');
     const cardsLayer = document.getElementById('cards-layer');
@@ -133,14 +134,12 @@
                 line-height: 1.22 !important;
             }
 
-            /* Non-root cards use their whole body as the selection target. */
             .absolute-card:not(.graph-root) .graph-select-zone {
                 display: none !important;
             }
 
-            /* The selected person becomes a complete desktop-like card. Its transform is
-               lifted by half of its extra height so selection expands around the prior
-               card center instead of growing only downward. */
+            /* The layout itself centers every card on its generation line, so the selected
+               card can grow naturally around its center without a separate visual lift. */
             #cards-layer .absolute-card.graph-root {
                 min-width: min(228px, calc(100vw - 46px)) !important;
                 width: min(264px, calc(100vw - 40px)) !important;
@@ -152,7 +151,7 @@
                 outline-offset: 3px !important;
                 box-shadow: 0 12px 28px rgba(52, 78, 65, 0.24) !important;
                 overflow: visible !important;
-                transform: translate(-50%, calc(-1 * var(--mobile-root-lift, 0px))) !important;
+                transform: translateX(-50%) !important;
                 transform-origin: center center !important;
                 background: #fff !important;
             }
@@ -182,7 +181,6 @@
                 opacity: 0.58 !important;
             }
 
-            /* Touch actions belong to the selected/full card only. */
             .absolute-card [data-action] {
                 opacity: 0 !important;
                 pointer-events: none !important;
@@ -259,8 +257,6 @@
                 color: #fff !important;
             }
 
-            /* Match the desktop selected-card footer rather than using a mobile-only
-               transparent approximation. */
             #cards-layer .absolute-card.graph-root .graph-select-zone {
                 display: block !important;
                 left: 8px !important;
@@ -292,7 +288,7 @@
 
             .absolute-card.graph-root .graph-frontier {
                 right: -24px !important;
-                top: 58% !important;
+                top: 50% !important;
             }
 
             #status {
@@ -311,8 +307,6 @@
     `;
     document.head.appendChild(style);
 
-    // Load card presentation polish on every device. This script contains shared desktop
-    // hover behavior plus the mobile root-centering correction and mobile node borders.
     if (!document.querySelector('script[data-family-presentation]')) {
         const presentation = document.createElement('script');
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
@@ -321,7 +315,114 @@
         document.body.appendChild(presentation);
     }
 
-    if (!mobileQuery.matches) return;
+    function installGenerationCenteredVerticalLayout(topPadding, generationGap, fallbackHeight) {
+        assignVerticalPositions = function generationCenteredVerticalPositions(byGen) {
+            const gens = [...byGen.keys()].sort((a, b) => a - b);
+            let bandTop = topPadding;
+
+            for (const gen of gens) {
+                const units = byGen.get(gen);
+                const bandHeight = Math.max(...units.map(unit => unit.height), fallbackHeight);
+                const centerY = bandTop + bandHeight / 2;
+
+                for (const unit of units) {
+                    unit.generationCenterY = centerY;
+                    for (const member of unit.members) {
+                        member.generationCenterY = centerY;
+                        member.targetY = centerY - member.cardHeight / 2;
+                    }
+                }
+
+                bandTop += bandHeight + generationGap;
+            }
+        };
+    }
+
+    function generationLineY(unit) {
+        if (Number.isFinite(unit?.generationCenterY)) return unit.generationCenterY;
+        const member = unit?.members?.[0];
+        if (!member) return 0;
+        return member.targetY + member.cardHeight / 2;
+    }
+
+    function generationCenteredDrawSVGLines() {
+        let svgHTML = '';
+
+        // Spouses always connect on the generation centerline. Different card heights are
+        // centered around that same line, so the marriage connector is always horizontal.
+        for (const unit of globalUnits) {
+            if (unit.members.length !== 2) continue;
+            const [left, right] = unit.members;
+            const y = generationLineY(unit);
+            const x1 = left.x + left.cardWidth / 2;
+            const x2 = right.x - right.cardWidth / 2;
+            svgHTML += svgPath(`M ${x1} ${y} L ${x2} ${y}`, 2.5);
+        }
+
+        for (const unit of globalUnits) {
+            const childNodes = globalNodes
+                .filter(child => {
+                    if (!child.parent_id) return false;
+                    const parentUnit = unitByNodeId.get(child.parent_id);
+                    return parentUnit === unit && child.gen === unit.gen + 1;
+                })
+                .sort((a, b) => a.x - b.x);
+
+            if (!childNodes.length) continue;
+
+            let startX;
+            let startY;
+            if (unit.members.length === 2) {
+                startX = unit.centerX;
+                startY = generationLineY(unit);
+            } else {
+                const parent = unit.members[0];
+                startX = parent.x;
+                startY = parent.targetY + parent.cardHeight;
+            }
+
+            const childTop = Math.min(...childNodes.map(child => child.targetY));
+            const midY = startY + Math.max(48, (childTop - startY) * 0.52);
+
+            childNodes.forEach(child => {
+                const childX = child.x;
+                const childY = child.targetY;
+
+                if (Math.abs(childX - startX) < 0.5) {
+                    svgHTML += svgPath(`M ${startX} ${startY} L ${childX} ${childY}`);
+                    return;
+                }
+
+                svgHTML += svgPath(roundedOrthogonalPath([
+                    [startX, startY],
+                    [startX, midY],
+                    [childX, midY],
+                    [childX, childY]
+                ]));
+            });
+        }
+
+        svgLayer.innerHTML = svgHTML;
+    }
+
+    // Install the shared desktop rule before the mobile early-return. Mobile replaces only
+    // the spacing constants below; both devices use the same generation-center semantics.
+    try {
+        installGenerationCenteredVerticalLayout(CANVAS_PAD_TOP, GENERATION_GAP, CARD_FALLBACK_HEIGHT);
+        drawSVGLines = generationCenteredDrawSVGLines;
+    } catch (error) {
+        console.warn('Unable to install generation-centered layout:', error);
+    }
+
+    if (!mobileQuery.matches) {
+        if (globalNodes?.length) {
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+                try { layoutAndRender(); }
+                catch (error) { console.warn('Unable to reflow centered generations:', error); }
+            }));
+        }
+        return;
+    }
 
     try {
         unitSeparation = function mobileUnitSeparation(left, right) {
@@ -340,18 +441,7 @@
             units.forEach(unit => unit.centerX -= total / 2);
         };
 
-        assignVerticalPositions = function mobileVerticalPositions(byGen) {
-            const gens = [...byGen.keys()].sort((a, b) => a - b);
-            let y = 150;
-            const generationGap = 112;
-
-            for (const gen of gens) {
-                const units = byGen.get(gen);
-                const bandHeight = Math.max(...units.map(unit => unit.height), 92);
-                units.forEach(unit => unit.members.forEach(member => member.targetY = y));
-                y += bandHeight + generationGap;
-            }
-        };
+        installGenerationCenteredVerticalLayout(150, 112, 92);
     } catch (error) {
         console.warn('Unable to install compact mobile layout:', error);
     }
@@ -363,131 +453,6 @@
         catch (_) { return null; }
     }
 
-    function updateRootLift() {
-        const root = cardsLayer.querySelector('.absolute-card.graph-root');
-        if (!root) return;
-
-        const contextHeights = [...cardsLayer.querySelectorAll('.absolute-card:not(.graph-root)')]
-            .map(card => card.offsetHeight)
-            .filter(height => height > 0)
-            .sort((a, b) => a - b);
-        const normalHeight = contextHeights.length
-            ? contextHeights[Math.floor(contextHeights.length / 2)]
-            : 100;
-        const extraHeight = Math.max(0, root.offsetHeight - normalHeight);
-        const lift = Math.min(56, extraHeight / 2);
-        root.style.setProperty('--mobile-root-lift', `${lift}px`);
-    }
-
-    function cardBounds(node) {
-        const card = document.getElementById(`card-${node.id}`);
-        if (!card) {
-            return {
-                left: node.x - node.cardWidth / 2,
-                right: node.x + node.cardWidth / 2,
-                top: node.targetY,
-                bottom: node.targetY + node.cardHeight,
-                width: node.cardWidth,
-                height: node.cardHeight,
-                centerX: node.x,
-                centerY: node.targetY + node.cardHeight / 2
-            };
-        }
-
-        const canvasRect = canvas.getBoundingClientRect();
-        const rect = card.getBoundingClientRect();
-        const left = rect.left - canvasRect.left;
-        const top = rect.top - canvasRect.top;
-        return {
-            left,
-            right: left + rect.width,
-            top,
-            bottom: top + rect.height,
-            width: rect.width,
-            height: rect.height,
-            centerX: left + rect.width / 2,
-            centerY: top + rect.height / 2
-        };
-    }
-
-    function coupleLineY(left, right) {
-        const leftBox = cardBounds(left);
-        const rightBox = cardBounds(right);
-        const overlapTop = Math.max(leftBox.top, rightBox.top);
-        const overlapBottom = Math.min(leftBox.bottom, rightBox.bottom);
-        const preferred = overlapTop + Math.min(32, Math.min(leftBox.height, rightBox.height) / 2);
-        return Math.max(overlapTop + 8, Math.min(preferred, overlapBottom - 8));
-    }
-
-    // Use the visible card rectangles for connector endpoints on touch. This matters because
-    // the selected card is deliberately lifted around its center; SVG stems now stop exactly
-    // at the visible border and remain hidden beneath the opaque card body.
-    const desktopDrawSVGLines = drawSVGLines;
-    drawSVGLines = function mobileAwareDrawSVGLines() {
-        if (!mobileQuery.matches) return desktopDrawSVGLines();
-
-        updateRootLift();
-        let svgHTML = '';
-
-        for (const unit of globalUnits) {
-            if (unit.members.length !== 2) continue;
-            const [left, right] = unit.members;
-            const leftBox = cardBounds(left);
-            const rightBox = cardBounds(right);
-            const y = coupleLineY(left, right);
-            svgHTML += svgPath(`M ${leftBox.right} ${y} L ${rightBox.left} ${y}`, 2.5);
-        }
-
-        for (const unit of globalUnits) {
-            const childNodes = globalNodes
-                .filter(child => {
-                    if (!child.parent_id) return false;
-                    const parentUnit = unitByNodeId.get(child.parent_id);
-                    return parentUnit === unit && child.gen === unit.gen + 1;
-                })
-                .sort((a, b) => a.x - b.x);
-
-            if (!childNodes.length) continue;
-
-            let startX, startY;
-            if (unit.members.length === 2) {
-                const [left, right] = unit.members;
-                startX = unit.centerX;
-                startY = coupleLineY(left, right);
-            } else {
-                const parentBox = cardBounds(unit.members[0]);
-                startX = parentBox.centerX;
-                startY = parentBox.bottom;
-            }
-
-            const childBoxes = new Map(childNodes.map(child => [child.id, cardBounds(child)]));
-            const childTop = Math.min(...childNodes.map(child => childBoxes.get(child.id).top));
-            const midY = startY + Math.max(48, (childTop - startY) * 0.52);
-
-            childNodes.forEach(child => {
-                const childBox = childBoxes.get(child.id);
-                const childX = childBox.centerX;
-                const childY = childBox.top;
-
-                if (Math.abs(childX - startX) < 0.5) {
-                    svgHTML += svgPath(`M ${startX} ${startY} L ${childX} ${childY}`);
-                    return;
-                }
-
-                svgHTML += svgPath(roundedOrthogonalPath([
-                    [startX, startY],
-                    [startX, midY],
-                    [childX, midY],
-                    [childX, childY]
-                ]));
-            });
-        }
-
-        svgLayer.innerHTML = svgHTML;
-    };
-
-    // First tap on editable text in a non-root card selects it. Once selected, the same
-    // text behaves as a normal editor, matching the desktop selected-card model.
     let redispatching = false;
     cardsLayer.addEventListener('click', event => {
         if (redispatching) return;
@@ -516,14 +481,13 @@
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             try {
-                updateRootLift();
                 layoutAndRender();
-                requestAnimationFrame(() => drawSVGLines());
                 const root = globalNodeMap.get(rootId());
                 if (root?.x != null && root?.targetY != null) {
                     viewport.scrollLeft = Math.max(0, root.x - viewport.clientWidth / 2);
+                    const rootCenterY = root.targetY + root.cardHeight / 2;
                     const headerClearance = Math.min(150, viewport.clientHeight * 0.22);
-                    viewport.scrollTop = Math.max(0, root.targetY - headerClearance);
+                    viewport.scrollTop = Math.max(0, rootCenterY - viewport.clientHeight / 2 + headerClearance / 2);
                 }
             } catch (error) {
                 console.warn('Unable to apply mobile family layout:', error);
