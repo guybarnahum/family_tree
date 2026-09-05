@@ -414,6 +414,18 @@
         console.warn('Unable to install generation-centered layout:', error);
     }
 
+    // Load after the shared generation-center hooks are installed. Dynamic classic scripts
+    // with async=false execute in insertion order after this script completes, so the
+    // relationship layer can safely extend (rather than race) the ordinary/mobile layout.
+    if (!document.querySelector('script[data-family-multi-partner]')) {
+        const multiPartner = document.createElement('script');
+        const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
+        multiPartner.src = `/multi-partner-refinement.js?v=${encodeURIComponent(build)}`;
+        multiPartner.dataset.familyMultiPartner = 'true';
+        multiPartner.async = false;
+        document.body.appendChild(multiPartner);
+    }
+
     if (!mobileQuery.matches) {
         if (globalNodes?.length) {
             requestAnimationFrame(() => requestAnimationFrame(() => {
