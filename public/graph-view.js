@@ -2,8 +2,9 @@
 //
 // The database is one global graph. This file chooses a root person and projects a
 // temporary visible subgraph into the existing layered layout engine:
-//   - ancestry: eager, recursively all the way back
+//   - ancestry: eager, recursively all the way back for the anchor person
 //   - descendants: eager, recursively downward
+//   - root spouse ancestry: one parent level by default
 //   - spouses needed to form the vertical family line: visible
 //   - root siblings: visible but de-emphasized
 //   - collateral branches: collapsed behind +N markers
@@ -209,6 +210,19 @@
         }
     }
 
+    function addDirectParentsWithSpouses(seedId, target) {
+        for (const parentId of parentsByChild.get(seedId) || []) {
+            target.add(parentId);
+
+            // Preserve the parent couple when legacy data records only one explicit
+            // parent edge. Do not walk upward from either parent here: spouse ancestry
+            // intentionally stops after this single generation unless the user expands it.
+            for (const spouseId of spousesByPerson.get(parentId) || []) {
+                target.add(spouseId);
+            }
+        }
+    }
+
     function addDescendants(seedId, target) {
         const queue = [seedId];
         const walked = new Set();
@@ -250,14 +264,14 @@
         addDescendants(graphRootId, descendants);
         descendants.forEach(id => primaryIds.add(id));
 
-        // Spouses are part of the vertical family unit. Root spouse ancestry is also
-        // expanded fully. During migration from the legacy one-parent model, descendants
-        // may be attached to only one spouse, so root-spouse descendants are folded into
-        // the same primary vertical branch as well.
+        // Root spouses are part of the main family unit. Their ancestry is contextual:
+        // show only their parents by default, leaving older spouse ancestors behind +N.
+        // During migration from the legacy one-parent model, descendants may be attached
+        // to only one spouse, so root-spouse descendants still join the main vertical line.
         const rootSpouses = new Set(spousesByPerson.get(graphRootId) || []);
         for (const spouseId of rootSpouses) {
             primaryIds.add(spouseId);
-            addAncestorCouples(spouseId, primaryIds);
+            addDirectParentsWithSpouses(spouseId, primaryIds);
 
             const spouseDescendants = new Set();
             addDescendants(spouseId, spouseDescendants);
@@ -274,7 +288,8 @@
             }
         }
 
-        // Any spouse necessary to complete an ancestral couple should remain visible.
+        // Any spouse necessary to complete a visible ancestral couple should remain visible.
+        // This does not add parents, so the root spouse branch stays capped at one level.
         for (const personId of [...primaryIds]) {
             const isAncestorOrRoot = personId === graphRootId || !descendants.has(personId);
             if (!isAncestorOrRoot) continue;
