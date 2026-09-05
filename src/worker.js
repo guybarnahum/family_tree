@@ -5,16 +5,24 @@ export default {
     if (!url.pathname.startsWith('/api/nodes')) {
       const assetResponse = await env.ASSETS.fetch(request);
 
-      // Keep the layout refinement in its own frontend file while the main UI remains
-      // a single static index.html. Inject it only into HTML responses so every normal
-      // page load gets the refinement without changing asset handling.
+      // Keep UI refinements in small frontend files while the main UI remains a single
+      // static index.html. Inject them only into HTML responses so normal asset handling
+      // remains unchanged.
       const contentType = assetResponse.headers.get('Content-Type') || '';
       if (contentType.includes('text/html')) {
         const html = await assetResponse.text();
-        const scriptTag = '<script src="/layout-refinement.js"></script>';
-        const refinedHtml = html.includes(scriptTag)
-          ? html
-          : html.replace('</body>', `${scriptTag}\n</body>`);
+        const refinementScripts = [
+          '<script src="/layout-refinement.js"></script>',
+          '<script src="/node-hover.js"></script>'
+        ];
+
+        const missingScripts = refinementScripts
+          .filter(scriptTag => !html.includes(scriptTag))
+          .join('\n');
+
+        const refinedHtml = missingScripts
+          ? html.replace('</body>', `${missingScripts}\n</body>`)
+          : html;
 
         const headers = new Headers(assetResponse.headers);
         headers.set('Content-Type', 'text/html; charset=UTF-8');
