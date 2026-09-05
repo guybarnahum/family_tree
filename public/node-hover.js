@@ -128,20 +128,43 @@
         document.body.appendChild(script);
     }
 
-    function loadRouterWhenPlanarReady(build, attempt = 0) {
+    function loadRouterWhenMemberOrderReady(build, attempt = 0) {
         if (document.querySelector('script[data-family-planar-router]')) return;
-        const planarReady = typeof layoutAndRender === 'function' &&
-            layoutAndRender.name === 'crossingSafeLayoutAndRender';
-        if (!planarReady && attempt < 120) {
-            setTimeout(() => loadRouterWhenPlanarReady(build, attempt + 1), 20);
+        const memberOrderReady = typeof layoutAndRender === 'function' &&
+            layoutAndRender.name === 'lineageAwareLayoutAndRender';
+        if (!memberOrderReady && attempt < 150) {
+            setTimeout(() => loadRouterWhenMemberOrderReady(build, attempt + 1), 20);
             return;
+        }
+        if (!memberOrderReady) {
+            console.warn('Lineage-aware member ordering did not initialize before planar routing');
         }
         appendScript('/planar-router.js', 'data-family-planar-router', build);
     }
 
+    function loadMemberOrderWhenPlanarReady(build, attempt = 0) {
+        if (document.querySelector('script[data-family-member-order]')) {
+            loadRouterWhenMemberOrderReady(build);
+            return;
+        }
+        const planarReady = typeof layoutAndRender === 'function' &&
+            layoutAndRender.name === 'crossingSafeLayoutAndRender';
+        if (!planarReady && attempt < 150) {
+            setTimeout(() => loadMemberOrderWhenPlanarReady(build, attempt + 1), 20);
+            return;
+        }
+        if (!planarReady) {
+            console.warn('Crossing-safe planar layout did not initialize before member ordering');
+            loadRouterWhenMemberOrderReady(build, 150);
+            return;
+        }
+        appendScript('/member-order-refinement.js', 'data-family-member-order', build);
+        loadRouterWhenMemberOrderReady(build);
+    }
+
     // Late refinements depend on controls/layout layers injected after this script. Load
-    // them once the page is complete; the planar layout waits for multi-partner initialization,
-    // and the router waits until that crossing-safe layout wrapper is actually installed.
+    // them once the page is complete. Row planarity is established first, then people inside
+    // spouse units are lineage-oriented, and only then are final orthogonal routes installed.
     function loadLateRefinements() {
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
 
@@ -149,7 +172,7 @@
         appendScript('/print-refinement.js', 'data-family-print', build);
         appendScript('/planar-core.js', 'data-family-planar-core', build);
         appendScript('/planar-layout.js', 'data-family-planar-layout', build);
-        loadRouterWhenPlanarReady(build);
+        loadMemberOrderWhenPlanarReady(build);
     }
 
     if (document.readyState === 'complete') loadLateRefinements();
