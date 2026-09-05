@@ -203,6 +203,16 @@
     `;
     document.head.appendChild(style);
 
+    // Load card presentation polish on every device. This script contains shared desktop
+    // hover behavior plus the mobile root-centering correction and mobile node borders.
+    if (!document.querySelector('script[data-family-presentation]')) {
+        const presentation = document.createElement('script');
+        const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
+        presentation.src = `/presentation-refinement.js?v=${encodeURIComponent(build)}`;
+        presentation.dataset.familyPresentation = 'true';
+        document.body.appendChild(presentation);
+    }
+
     if (!mobileQuery.matches) return;
 
     // Tighter graph geometry on narrow/touch screens. Function declarations from the
