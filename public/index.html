@@ -34,7 +34,7 @@
             outline: none;
         }
 
-        /* Coordinates are always LTR. Card contents remain RTL. */
+        /* Geometry is LTR even though the card contents are Hebrew/RTL. */
         #scroll-viewport {
             direction: ltr;
             width: 100vw;
@@ -116,6 +116,8 @@
         const CANVAS_PAD_BOTTOM = 220;
         const CARD_FALLBACK_WIDTH = 170;
         const CARD_FALLBACK_HEIGHT = 100;
+        const ORDER_SWEEPS = 8;
+        const POSITION_SWEEPS = 10;
 
         const viewport = document.getElementById('scroll-viewport');
         const canvas = document.getElementById('canvas');
@@ -267,18 +269,26 @@
             });
         }
 
-        // A spouse pair is an indivisible horizontal layout unit. No other person can
-        // ever be packed between the two spouses.
+        // A couple is one indivisible layout unit. Reverse spouse links are accepted too,
+        // so older/asymmetric data still renders as a couple.
         function buildFamilyUnits() {
             globalUnits = [];
             unitByNodeId = new Map();
             const claimed = new Set();
+            const reverseSpouse = new Map();
+
+            for (const node of globalNodes) {
+                if (node.spouse_id && globalNodeMap.has(node.spouse_id)) {
+                    reverseSpouse.set(node.spouse_id, node);
+                }
+            }
 
             const sorted = [...globalNodes].sort((a, b) => a.id.localeCompare(b.id));
             for (const node of sorted) {
                 if (claimed.has(node.id)) continue;
 
-                const spouse = node.spouse_id ? globalNodeMap.get(node.spouse_id) : null;
+                const directSpouse = node.spouse_id ? globalNodeMap.get(node.spouse_id) : null;
+                const spouse = directSpouse || reverseSpouse.get(node.id) || null;
                 let members = [node];
 
                 if (spouse && !claimed.has(spouse.id) && spouse.id !== node.id) {
@@ -293,10 +303,11 @@
                     members,
                     parents: new Set(),
                     children: new Set(),
-                    gen: 0,
+                    gen: null,
                     width: 0,
                     height: 0,
-                    centerX: 0
+                    centerX: 0,
+                    component: -1
                 };
 
                 globalUnits.push(unit);
@@ -305,8 +316,7 @@
 
             for (const unit of globalUnits) {
                 for (const member of unit.members) {
-                    const parentId = member.parent_id;
-                    const parentUnit = parentId ? unitByNodeId.get(parentId) : null;
+                    const parentUnit = member.parent_id ? unitByNodeId.get(member.parent_id) : null;
                     if (parentUnit && parentUnit !== unit) {
                         unit.parents.add(parentUnit);
                         parentUnit.children.add(unit);
@@ -324,161 +334,247 @@
             }
         }
 
-        // Assign strict generation bands to units. This is a longest-path pass over
-        // parent relationships, so every parent is above every child and spouses
-        // necessarily share one generation because they live in the same unit.
+        // Solve generation constraints exactly across each connected family component:
+        //   spouse = same generation (already one unit)
+        //   child  = parent generation + 1
+        // Parentless people are NOT automatically generation zero. This matters when
+        // spouses bring ancestry branches of different depth into the same family.
         function assignGenerations() {
-            const indegree = new Map(globalUnits.map(unit => [unit, unit.parents.size]));
-            const queue = globalUnits
-                .filter(unit => indegree.get(unit) === 0)
-                .sort((a, b) => a.id.localeCompare(b.id));
+            globalUnits.forEach(unit => {
+                unit.gen = null;
+                unit.component = -1;
+            });
 
-            let processed = 0;
-            while (queue.length) {
-                const unit = queue.shift();
-                processed++;
+            let componentId = 0;
+            const seeds = [...globalUnits].sort((a, b) => a.id.localeCompare(b.id));
 
-                const children = [...unit.children].sort((a, b) => a.id.localeCompare(b.id));
-                for (const child of children) {
-                    child.gen = Math.max(child.gen, unit.gen + 1);
-                    indegree.set(child, indegree.get(child) - 1);
-                    if (indegree.get(child) === 0) queue.push(child);
+            for (const seed of seeds) {
+                if (seed.gen !== null) continue;
+
+                seed.gen = 0;
+                seed.component = componentId;
+                const queue = [seed];
+                const component = [];
+                let conflict = false;
+
+                while (queue.length) {
+                    const unit = queue.shift();
+                    component.push(unit);
+
+                    const neighbors = [
+                        ...[...unit.parents].map(parent => ({ unit: parent, expected: unit.gen - 1 })),
+                        ...[...unit.children].map(child => ({ unit: child, expected: unit.gen + 1 }))
+                    ].sort((a, b) => a.unit.id.localeCompare(b.unit.id));
+
+                    for (const edge of neighbors) {
+                        if (edge.unit.gen === null) {
+                            edge.unit.gen = edge.expected;
+                            edge.unit.component = componentId;
+                            queue.push(edge.unit);
+                        } else if (edge.unit.gen !== edge.expected) {
+                            conflict = true;
+                            console.error(
+                                'Inconsistent family generation constraints:',
+                                unit.id, '->', edge.unit.id,
+                                'expected', edge.expected, 'found', edge.unit.gen
+                            );
+                        }
+                    }
                 }
-                queue.sort((a, b) => a.id.localeCompare(b.id));
+
+                const minGen = Math.min(...component.map(unit => unit.gen));
+                component.forEach(unit => unit.gen -= minGen);
+
+                if (conflict) {
+                    console.warn('This family component contains contradictory parent/spouse generation constraints.');
+                }
+                componentId++;
             }
 
-            if (processed !== globalUnits.length) {
-                console.warn('Family relationship cycle detected; using safe fallback generations.');
-                for (const unit of globalUnits) {
-                    if (indegree.get(unit) > 0) unit.gen = Math.max(unit.gen, 0);
-                }
-            }
-
-            globalUnits.forEach(unit => unit.members.forEach(member => member.gen = unit.gen));
+            globalUnits.forEach(unit => {
+                unit.members.forEach(member => member.gen = unit.gen);
+            });
         }
 
-        function descendantsWidth(unit, visiting = new Set(), memo = new Map()) {
-            if (memo.has(unit)) return memo.get(unit);
-            if (visiting.has(unit)) return unit.width;
-            visiting.add(unit);
-
-            const children = [...unit.children];
-            let width = unit.width;
-            if (children.length) {
-                const childWidth = children.reduce((sum, child) =>
-                    sum + descendantsWidth(child, visiting, memo), 0) +
-                    UNIT_GAP * (children.length - 1);
-                width = Math.max(width, childWidth);
-            }
-
-            visiting.delete(unit);
-            memo.set(unit, width);
-            return width;
-        }
-
-        // Produce a stable family-first ordering. Descendants of the same family stay
-        // together, but a unit is emitted only once even when both spouses have parents.
-        function buildGenerationOrder() {
+        function generationsMap() {
             const byGen = new Map();
-            const emitted = new Set();
-            const roots = globalUnits
-                .filter(unit => unit.parents.size === 0)
-                .sort((a, b) => a.id.localeCompare(b.id));
-
-            function emit(unit) {
-                if (emitted.has(unit)) return;
-                emitted.add(unit);
+            for (const unit of globalUnits) {
                 if (!byGen.has(unit.gen)) byGen.set(unit.gen, []);
                 byGen.get(unit.gen).push(unit);
-
-                const children = [...unit.children].sort((a, b) => a.id.localeCompare(b.id));
-                children.forEach(emit);
             }
-
-            roots.forEach(emit);
-            [...globalUnits].sort((a, b) => a.id.localeCompare(b.id)).forEach(emit);
             return byGen;
         }
 
-        function packGeneration(units, desiredCenter = null) {
-            if (!units.length) return;
+        function indexMap(units) {
+            return new Map(units.map((unit, index) => [unit, index]));
+        }
 
-            // Keep current family order and pack exact measured rectangles with a hard gap.
+        function average(values, fallback = 0) {
+            return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : fallback;
+        }
+
+        function parentSignature(unit) {
+            if (!unit.parents.size) return `~${unit.id}`;
+            return [...unit.parents].map(parent => parent.id).sort().join('|');
+        }
+
+        // Order generations with repeated barycentric sweeps. During downward sweeps,
+        // siblings sharing the same parent set are moved as a single block so unrelated
+        // nodes cannot get inserted between siblings.
+        function orderGenerations(byGen) {
+            const gens = [...byGen.keys()].sort((a, b) => a - b);
+            gens.forEach(gen => byGen.get(gen).sort((a, b) => a.id.localeCompare(b.id)));
+
+            for (let pass = 0; pass < ORDER_SWEEPS; pass++) {
+                // Downward: group siblings, order groups around their parents.
+                for (let gi = 1; gi < gens.length; gi++) {
+                    const prev = byGen.get(gens[gi - 1]);
+                    const units = byGen.get(gens[gi]);
+                    const prevIndex = indexMap(prev);
+                    const oldIndex = indexMap(units);
+                    const groups = new Map();
+
+                    for (const unit of units) {
+                        const key = parentSignature(unit);
+                        if (!groups.has(key)) groups.set(key, []);
+                        groups.get(key).push(unit);
+                    }
+
+                    const blocks = [...groups.entries()].map(([key, members]) => {
+                        const parentPositions = members.flatMap(member =>
+                            [...member.parents]
+                                .filter(parent => prevIndex.has(parent))
+                                .map(parent => prevIndex.get(parent))
+                        );
+                        const old = Math.min(...members.map(member => oldIndex.get(member)));
+                        return {
+                            key,
+                            members: members.sort((a, b) => oldIndex.get(a) - oldIndex.get(b) || a.id.localeCompare(b.id)),
+                            score: parentPositions.length ? average(parentPositions) : old,
+                            old
+                        };
+                    });
+
+                    blocks.sort((a, b) => a.score - b.score || a.old - b.old || a.key.localeCompare(b.key));
+                    byGen.set(gens[gi], blocks.flatMap(block => block.members));
+                }
+
+                // Upward: move parent families toward the center of their children.
+                for (let gi = gens.length - 2; gi >= 0; gi--) {
+                    const units = byGen.get(gens[gi]);
+                    const next = byGen.get(gens[gi + 1]);
+                    const nextIndex = indexMap(next);
+                    const oldIndex = indexMap(units);
+
+                    units.sort((a, b) => {
+                        const aChildren = [...a.children].filter(child => nextIndex.has(child)).map(child => nextIndex.get(child));
+                        const bChildren = [...b.children].filter(child => nextIndex.has(child)).map(child => nextIndex.get(child));
+                        const ax = aChildren.length ? average(aChildren) : oldIndex.get(a);
+                        const bx = bChildren.length ? average(bChildren) : oldIndex.get(b);
+                        return ax - bx || oldIndex.get(a) - oldIndex.get(b) || a.id.localeCompare(b.id);
+                    });
+                }
+            }
+        }
+
+        function unitSeparation(left, right) {
+            return left.width / 2 + UNIT_GAP + right.width / 2;
+        }
+
+        // Compact one generation as close as possible to relationship targets while
+        // respecting its established order and exact rectangle spacing.
+        function compactGeneration(units, targets) {
+            if (!units.length) return;
+            if (units.length === 1) {
+                units[0].centerX = targets.get(units[0]) ?? units[0].centerX ?? 0;
+                return;
+            }
+
+            const positions = units.map(unit => {
+                const target = targets.get(unit);
+                return Number.isFinite(target) ? target : (Number.isFinite(unit.centerX) ? unit.centerX : 0);
+            });
+
+            for (let i = 1; i < units.length; i++) {
+                positions[i] = Math.max(
+                    positions[i],
+                    positions[i - 1] + unitSeparation(units[i - 1], units[i])
+                );
+            }
+
+            for (let i = units.length - 2; i >= 0; i--) {
+                positions[i] = Math.min(
+                    positions[i],
+                    positions[i + 1] - unitSeparation(units[i], units[i + 1])
+                );
+            }
+
+            // Recenter the packed row around its requested targets. Translation cannot
+            // break spacing, and makes same-target siblings straddle the parent center.
+            const requested = units.map((unit, i) => {
+                const value = targets.get(unit);
+                return Number.isFinite(value) ? value : positions[i];
+            });
+            const delta = average(requested.map((value, i) => value - positions[i]));
+
+            units.forEach((unit, i) => unit.centerX = positions[i] + delta);
+        }
+
+        function simplePack(units) {
+            if (!units.length) return;
             let cursor = 0;
             for (const unit of units) {
                 unit.centerX = cursor + unit.width / 2;
                 cursor += unit.width + UNIT_GAP;
             }
-
-            const totalWidth = cursor - UNIT_GAP;
-            const target = desiredCenter ?? totalWidth / 2;
-            const shift = target - totalWidth / 2;
-            units.forEach(unit => unit.centerX += shift);
+            const total = cursor - UNIT_GAP;
+            units.forEach(unit => unit.centerX -= total / 2);
         }
 
         function layoutUnits() {
-            const byGen = buildGenerationOrder();
+            const byGen = generationsMap();
             const gens = [...byGen.keys()].sort((a, b) => a - b);
+            orderGenerations(byGen);
+            gens.forEach(gen => simplePack(byGen.get(gen)));
 
-            // Initial exact packing.
-            gens.forEach(gen => packGeneration(byGen.get(gen)));
-
-            // Reorder within each generation using parent barycenters, then repack.
-            // This is deterministic and reduces crossings without ever violating spacing.
-            for (let pass = 0; pass < 5; pass++) {
-                for (const gen of gens) {
-                    const units = byGen.get(gen);
-                    if (gen === gens[0]) continue;
-
-                    const oldIndex = new Map(units.map((u, i) => [u, i]));
-                    units.sort((a, b) => {
-                        const aParents = [...a.parents].filter(p => p.centerX != null);
-                        const bParents = [...b.parents].filter(p => p.centerX != null);
-                        const ax = aParents.length ? aParents.reduce((s, p) => s + p.centerX, 0) / aParents.length : Infinity;
-                        const bx = bParents.length ? bParents.reduce((s, p) => s + p.centerX, 0) / bParents.length : Infinity;
-                        return ax - bx || oldIndex.get(a) - oldIndex.get(b) || a.id.localeCompare(b.id);
-                    });
-
-                    const parentCenters = units.flatMap(u => [...u.parents].map(p => p.centerX));
-                    const desired = parentCenters.length
-                        ? (Math.min(...parentCenters) + Math.max(...parentCenters)) / 2
-                        : null;
-                    packGeneration(units, desired);
+            // Alternating sweeps make newly-created relatives land close to their target:
+            // parents chase children upward; children/siblings chase parents downward.
+            for (let pass = 0; pass < POSITION_SWEEPS; pass++) {
+                for (let gi = gens.length - 2; gi >= 0; gi--) {
+                    const units = byGen.get(gens[gi]);
+                    const targets = new Map();
+                    for (const unit of units) {
+                        const children = [...unit.children].filter(child => child.gen === unit.gen + 1);
+                        targets.set(unit, children.length ? average(children.map(child => child.centerX)) : unit.centerX);
+                    }
+                    compactGeneration(units, targets);
                 }
 
-                // Pull parents toward the center of their children, then re-pack their
-                // complete generation so hard non-overlap remains guaranteed.
-                for (let gi = gens.length - 2; gi >= 0; gi--) {
-                    const gen = gens[gi];
-                    const units = byGen.get(gen);
+                for (let gi = 1; gi < gens.length; gi++) {
+                    const units = byGen.get(gens[gi]);
                     const targets = new Map();
-                    units.forEach(unit => {
-                        const children = [...unit.children];
-                        targets.set(unit, children.length
-                            ? children.reduce((s, c) => s + c.centerX, 0) / children.length
-                            : unit.centerX);
-                    });
-
-                    const oldIndex = new Map(units.map((u, i) => [u, i]));
-                    units.sort((a, b) =>
-                        targets.get(a) - targets.get(b) ||
-                        oldIndex.get(a) - oldIndex.get(b) ||
-                        a.id.localeCompare(b.id)
-                    );
-
-                    const desiredValues = [...targets.values()];
-                    const desired = desiredValues.length
-                        ? (Math.min(...desiredValues) + Math.max(...desiredValues)) / 2
-                        : null;
-                    packGeneration(units, desired);
+                    for (const unit of units) {
+                        const parents = [...unit.parents].filter(parent => parent.gen === unit.gen - 1);
+                        targets.set(unit, parents.length ? average(parents.map(parent => parent.centerX)) : unit.centerX);
+                    }
+                    compactGeneration(units, targets);
                 }
             }
 
-            // Translate everything to positive canvas coordinates.
-            const minLeft = Math.min(...globalUnits.map(u => u.centerX - u.width / 2));
+            // One final upward pass centers parents over their finished child groups.
+            for (let gi = gens.length - 2; gi >= 0; gi--) {
+                const units = byGen.get(gens[gi]);
+                const targets = new Map();
+                for (const unit of units) {
+                    const children = [...unit.children].filter(child => child.gen === unit.gen + 1);
+                    targets.set(unit, children.length ? average(children.map(child => child.centerX)) : unit.centerX);
+                }
+                compactGeneration(units, targets);
+            }
+
+            const minLeft = Math.min(...globalUnits.map(unit => unit.centerX - unit.width / 2));
             const offsetX = CANVAS_PAD_X - minLeft;
             globalUnits.forEach(unit => unit.centerX += offsetX);
-
             return byGen;
         }
 
@@ -488,7 +584,7 @@
 
             for (const gen of gens) {
                 const units = byGen.get(gen);
-                const bandHeight = Math.max(...units.map(u => u.height), CARD_FALLBACK_HEIGHT);
+                const bandHeight = Math.max(...units.map(unit => unit.height), CARD_FALLBACK_HEIGHT);
                 units.forEach(unit => unit.members.forEach(member => member.targetY = y));
                 y += bandHeight + GENERATION_GAP;
             }
@@ -508,9 +604,8 @@
         }
 
         function updateCanvasBounds() {
-            const maxRight = Math.max(...globalNodes.map(n => n.x + n.cardWidth / 2));
-            const maxBottom = Math.max(...globalNodes.map(n => n.targetY + n.cardHeight));
-
+            const maxRight = Math.max(...globalNodes.map(node => node.x + node.cardWidth / 2));
+            const maxBottom = Math.max(...globalNodes.map(node => node.targetY + node.cardHeight));
             const width = Math.max(viewport.clientWidth, Math.ceil(maxRight + CANVAS_PAD_X));
             const height = Math.max(viewport.clientHeight, Math.ceil(maxBottom + CANVAS_PAD_BOTTOM));
 
@@ -537,7 +632,7 @@
         function drawSVGLines() {
             let svgHTML = '';
 
-            // Marriage lines connect the actual inner edges of the measured cards.
+            // Marriage lines connect the actual inner card edges.
             for (const unit of globalUnits) {
                 if (unit.members.length !== 2) continue;
                 const [left, right] = unit.members;
@@ -547,11 +642,17 @@
                 svgHTML += svgPath(`M ${x1} ${y} L ${x2} ${y}`, 2.5);
             }
 
-            // One sibling bus per family unit. Children connected to either spouse
-            // share the same bus, so the visual grammar reads as one family.
+            // Each family gets one sibling bus. Because exact generation constraints put
+            // every valid child exactly one band below its parent, every connector stays
+            // inside the empty inter-generation corridor and cannot pass through an
+            // unrelated card in an intermediate generation.
             for (const unit of globalUnits) {
                 const childNodes = globalNodes
-                    .filter(child => child.parent_id && unitByNodeId.get(child.parent_id) === unit)
+                    .filter(child => {
+                        if (!child.parent_id) return false;
+                        const parentUnit = unitByNodeId.get(child.parent_id);
+                        return parentUnit === unit && child.gen === unit.gen + 1;
+                    })
                     .sort((a, b) => a.x - b.x);
 
                 if (!childNodes.length) continue;
@@ -584,8 +685,6 @@
         }
 
         function assertLayout() {
-            // Development-time safety checks. They remain cheap at this tree size and
-            // make broken relationship/layout states visible in the console.
             const byGen = new Map();
             globalNodes.forEach(node => {
                 if (!byGen.has(node.gen)) byGen.set(node.gen, []);
@@ -609,10 +708,23 @@
             globalNodes.forEach(child => {
                 if (!child.parent_id) return;
                 const parent = globalNodeMap.get(child.parent_id);
-                if (parent && child.gen <= parent.gen) {
-                    console.error('Invalid generation ordering:', parent.id, child.id);
+                if (parent && child.gen !== parent.gen + 1) {
+                    console.error(
+                        'Parent/child edge is not exactly one generation:',
+                        parent.id, parent.gen, '->', child.id, child.gen
+                    );
                 }
             });
+
+            for (const unit of globalUnits) {
+                if (unit.members.length !== 2) continue;
+                const [a, b] = unit.members;
+                if (a.gen !== b.gen) console.error('Spouses on different generations:', a.id, b.id);
+                const actualGap = (b.x - b.cardWidth / 2) - (a.x + a.cardWidth / 2);
+                if (Math.abs(actualGap - SPOUSE_EDGE_GAP) > 0.5) {
+                    console.error('Spouse gap violated:', a.id, b.id, actualGap);
+                }
+            }
         }
 
         function layoutAndRender() {
@@ -625,12 +737,6 @@
             measureCards();
             buildFamilyUnits();
             assignGenerations();
-
-            // Prime descendant widths; useful for diagnostics and future tuning while
-            // keeping the placement algorithm deterministic.
-            const memo = new Map();
-            globalUnits.forEach(unit => unit.subtreeWidth = descendantsWidth(unit, new Set(), memo));
-
             const byGen = layoutUnits();
             assignVerticalPositions(byGen);
             positionMembers();
@@ -645,13 +751,21 @@
 
         function centerInitialTree() {
             if (!globalUnits.length) return;
-            const roots = globalUnits
-                .filter(unit => unit.parents.size === 0)
-                .sort((a, b) => a.centerX - b.centerX);
 
-            const focal = roots[Math.floor((roots.length - 1) / 2)] || globalUnits[0];
+            // Prefer a well-connected family near the top of the component rather than
+            // simply the leftmost arbitrary root.
+            const minGen = Math.min(...globalUnits.map(unit => unit.gen));
+            const candidates = globalUnits
+                .filter(unit => unit.gen <= minGen + 1)
+                .sort((a, b) =>
+                    b.children.size - a.children.size ||
+                    a.centerX - b.centerX ||
+                    a.id.localeCompare(b.id)
+                );
+            const focal = candidates[0] || globalUnits[0];
+
             viewport.scrollLeft = Math.max(0, focal.centerX - viewport.clientWidth / 2);
-            const topY = Math.min(...focal.members.map(m => m.targetY));
+            const topY = Math.min(...focal.members.map(member => member.targetY));
             viewport.scrollTop = Math.max(0, topY - 120);
         }
 
@@ -674,7 +788,6 @@
                 return;
             }
 
-            // Text can change card dimensions, so immediately remeasure and re-layout.
             const anchor = captureAnchor(id);
             layoutAndRender();
             requestAnimationFrame(() => restoreAnchor(anchor));
@@ -705,11 +818,14 @@
             });
 
             if (postRes.ok) {
-                await fetch(`/api/nodes/${encodeURIComponent(childId)}`, {
+                const patchRes = await fetch(`/api/nodes/${encodeURIComponent(childId)}`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ parent_id: newParentId })
                 });
+                if (!patchRes.ok) return showStatus('שגיאה בהוספה');
+            } else {
+                return showStatus('שגיאה בהוספה');
             }
 
             await loadTree(childId, true);
@@ -727,11 +843,14 @@
             });
 
             if (postRes.ok) {
-                await fetch(`/api/nodes/${encodeURIComponent(partnerId)}`, {
+                const patchRes = await fetch(`/api/nodes/${encodeURIComponent(partnerId)}`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ spouse_id: spouseId })
                 });
+                if (!patchRes.ok) return showStatus('שגיאה בהוספה');
+            } else {
+                return showStatus('שגיאה בהוספה');
             }
 
             await loadTree(partnerId, true);
@@ -790,8 +909,7 @@
             requestAnimationFrame(() => restoreAnchor(anchor));
         });
 
-        // Polling remains useful for multi-client updates, but unchanged data no longer
-        // causes a five-second relayout/jump.
+        // Poll for multi-client edits, but unchanged data does not cause a relayout.
         setInterval(() => {
             if (!isEditing) loadTree(null, false);
         }, 5000);
