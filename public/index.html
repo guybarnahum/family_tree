@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>עץ משפחה</title>
-    
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@300;400;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
@@ -19,35 +19,77 @@
             }
         }
     </script>
-    
+
     <style>
-        html, body { overflow: hidden; width: 100vw; height: 100vh; background-color: #fdfbf7; margin: 0; }
-        [contenteditable="true"] { transition: all 0.2s ease; outline: none; }
-        
-        #scroll-viewport { width: 100vw; height: 100vh; overflow: auto; cursor: grab; position: relative; }
-        #scroll-viewport:active { cursor: grabbing; }
-        
-        #canvas { position: relative; min-width: 100vw; min-height: 100vh; width: max-content; height: max-content; padding: 250px; }
-        
-        /* Cards are positioned directly by their mathematical center */
-        .absolute-card { 
-            position: absolute; 
-            transform: translateX(50%); /* RTL correction for -50% */
-            transition: left 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), top 0.6s ease-out; 
+        html, body {
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            background-color: #fdfbf7;
+            margin: 0;
         }
-        
-        .sync-status { position: fixed; bottom: 10px; left: 10px; font-size: 0.8rem; color: #888; transition: opacity 0.3s; z-index: 50; }
+
+        [contenteditable="true"] {
+            transition: background-color 0.2s ease;
+            outline: none;
+        }
+
+        /* Coordinates are always LTR. Card contents remain RTL. */
+        #scroll-viewport {
+            direction: ltr;
+            width: 100vw;
+            height: 100vh;
+            overflow: auto;
+            cursor: grab;
+            position: relative;
+            overscroll-behavior: none;
+        }
+
+        #scroll-viewport:active { cursor: grabbing; }
+
+        #canvas {
+            position: relative;
+            min-width: 100vw;
+            min-height: 100vh;
+        }
+
+        .absolute-card {
+            direction: rtl;
+            position: absolute;
+            transform: translateX(-50%);
+            transform-origin: center top;
+            transition:
+                left 0.45s cubic-bezier(0.2, 0.8, 0.2, 1),
+                top 0.45s ease-out,
+                transform 0.18s ease,
+                box-shadow 0.18s ease;
+        }
+
+        .absolute-card:hover {
+            transform: translate(-50%, -4px);
+            box-shadow: 0 10px 22px rgba(52, 78, 65, 0.15);
+        }
+
+        .sync-status {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            font-size: 0.8rem;
+            color: #888;
+            transition: opacity 0.3s;
+            z-index: 50;
+        }
     </style>
 </head>
 <body class="text-gray-800 font-sans antialiased selection:bg-leaf-light selection:text-white">
-    
+
     <div class="fixed top-0 left-0 w-full p-4 pointer-events-none z-50 flex justify-between items-start">
         <div class="pointer-events-auto bg-white/80 backdrop-blur px-5 py-3 rounded-lg shadow-sm border border-leaf-light/30">
             <h1 class="font-script text-3xl text-leaf-dark mb-0.5">עץ המשפחה שלנו</h1>
             <p class="text-gray-500 font-light tracking-widest text-[9px]">דורות של אהבה • גרור כדי לנווט</p>
         </div>
     </div>
-    
+
     <div id="status" class="sync-status opacity-0 bg-white/90 px-3 py-1 rounded shadow">נשמר...</div>
 
     <div id="scroll-viewport">
@@ -61,13 +103,26 @@
         let isEditing = false;
         let globalNodes = [];
         let globalNodeMap = new Map();
-        
-        const Y_SPACING = 240; 
-        const SPOUSE_GAP = 240; // Fixed pixels center-to-center for married couples
-        const MIN_NODE_GAP = 320; // Absolute minimum clearance between unrelated branches
+        let globalUnits = [];
+        let unitByNodeId = new Map();
+        let dataSignature = '';
+        let didInitialCenter = false;
 
-        // Drag to Pan
+        const SPOUSE_EDGE_GAP = 34;
+        const UNIT_GAP = 90;
+        const GENERATION_GAP = 150;
+        const CANVAS_PAD_X = 240;
+        const CANVAS_PAD_TOP = 180;
+        const CANVAS_PAD_BOTTOM = 220;
+        const CARD_FALLBACK_WIDTH = 170;
+        const CARD_FALLBACK_HEIGHT = 100;
+
         const viewport = document.getElementById('scroll-viewport');
+        const canvas = document.getElementById('canvas');
+        const cardsLayer = document.getElementById('cards-layer');
+        const svgLayer = document.getElementById('svg-layer');
+
+        // Drag to pan.
         let isDragging = false, startX, startY, scrollLeft, scrollTop;
         viewport.addEventListener('mousedown', (e) => {
             if (e.target.closest('.absolute-card')) return;
@@ -85,267 +140,663 @@
             viewport.scrollTop = scrollTop - ((e.pageY - viewport.offsetTop) - startY);
         });
 
-        async function loadTree() {
-            try {
-                const res = await fetch('/api/nodes');
-                if (!res.ok) throw new Error(await res.text());
-                globalNodes = await res.json();
-                
-                globalNodes.forEach(n => {
-                    if (n.parent_id === 'null' || n.parent_id === 'undefined') n.parent_id = null;
-                    if (n.spouse_id === 'null' || n.spouse_id === 'undefined') n.spouse_id = null;
-                });
-                
-                globalNodeMap = new Map(globalNodes.map(n => [n.id, n]));
-                
-                calculatePhysicsLayout();
-                
-                requestAnimationFrame(() => {
-                    syncAbsoluteCards();
-                    drawSVGLines();
-                });
-            } catch (err) { console.error(err); }
+        function cleanNullable(value) {
+            return value === null || value === undefined || value === '' ||
+                value === 'null' || value === 'undefined' ? null : value;
         }
 
-        // Iterative Constraint Solver (Force-Directed Engine)
-        function calculatePhysicsLayout() {
-            if (globalNodes.length === 0) return;
+        function escapeHTML(value) {
+            return String(value ?? '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#039;');
+        }
 
-            // 1. Calculate strict Y-axis generations
-            const gens = new Map();
-            const processing = new Set();
-            
-            function assignGen(id, gen) {
-                if (gens.has(id) || processing.has(id)) return;
-                processing.add(id);
-                gens.set(id, gen);
-                
-                const n = globalNodeMap.get(id);
-                if (!n) return;
-                
-                if (n.parent_id) assignGen(n.parent_id, gen - 1);
-                if (n.spouse_id) assignGen(n.spouse_id, gen);
-                globalNodes.forEach(child => {
-                    if (child.parent_id === id || child.parent_id === n.spouse_id) assignGen(child.id, gen + 1);
-                });
-                processing.delete(id);
+        function signatureFor(nodes) {
+            return JSON.stringify(nodes.map(n => [
+                n.id, n.parent_id, n.spouse_id, n.name, n.dates,
+                n.description, n.last_updated
+            ]));
+        }
+
+        function captureAnchor(preferredId = null) {
+            let node = preferredId ? globalNodeMap.get(preferredId) : null;
+            if (!node && globalNodes.length) {
+                const centerX = viewport.scrollLeft + viewport.clientWidth / 2;
+                const centerY = viewport.scrollTop + viewport.clientHeight / 2;
+                node = globalNodes.reduce((best, candidate) => {
+                    if (candidate.x == null || candidate.targetY == null) return best;
+                    const d = Math.abs(candidate.x - centerX) + Math.abs(candidate.targetY - centerY);
+                    return !best || d < best.d ? { node: candidate, d } : best;
+                }, null)?.node;
             }
-            
-            globalNodes.forEach(n => { if (!gens.has(n.id)) assignGen(n.id, 0); });
-            const minGen = Math.min(...Array.from(gens.values()));
-            
-            let genMap = {};
-            globalNodes.forEach(n => {
-                n.gen = gens.get(n.id) - minGen;
-                n.targetY = (n.gen * Y_SPACING) + 200;
-                
-                if (!genMap[n.gen]) genMap[n.gen] = [];
-                genMap[n.gen].push(n);
-            });
+            if (!node || node.x == null || node.targetY == null) return null;
+            return {
+                id: node.id,
+                screenX: node.x - viewport.scrollLeft,
+                screenY: node.targetY - viewport.scrollTop
+            };
+        }
 
-            // 2. Initialize rough X coordinates
-            Object.values(genMap).forEach(nodes => {
-                nodes.sort((a, b) => a.id.localeCompare(b.id)); // Stable sort
-                nodes.forEach((n, i) => n.x = i * MIN_NODE_GAP);
-            });
+        function restoreAnchor(anchor) {
+            if (!anchor) return;
+            const node = globalNodeMap.get(anchor.id);
+            if (!node || node.x == null || node.targetY == null) return;
+            viewport.scrollLeft = Math.max(0, node.x - anchor.screenX);
+            viewport.scrollTop = Math.max(0, node.targetY - anchor.screenY);
+        }
 
-            // 3. Mathematical Relaxation Loop (200 Iterations)
-            for (let iter = 0; iter < 200; iter++) {
-                
-                // Attraction: Pull children and parents into straight vertical alignment
-                globalNodes.forEach(c => {
-                    if (c.parent_id) {
-                        const p1 = globalNodeMap.get(c.parent_id);
-                        if (p1) {
-                            let pX = p1.x;
-                            if (p1.spouse_id) {
-                                const p2 = globalNodeMap.get(p1.spouse_id);
-                                if (p2) pX = (p1.x + p2.x) / 2;
-                            }
-                            const dx = pX - c.x;
-                            c.x += dx * 0.05;
-                            p1.x -= dx * 0.05;
-                            if (p1.spouse_id) {
-                                const p2 = globalNodeMap.get(p1.spouse_id);
-                                if(p2) p2.x -= dx * 0.05;
-                            }
-                        }
-                    }
+        async function loadTree(anchorId = null, force = false) {
+            const anchor = didInitialCenter ? captureAnchor(anchorId) : null;
+            try {
+                const res = await fetch('/api/nodes', { cache: 'no-store' });
+                if (!res.ok) throw new Error(await res.text());
+
+                const incoming = await res.json();
+                incoming.forEach(n => {
+                    n.parent_id = cleanNullable(n.parent_id);
+                    n.spouse_id = cleanNullable(n.spouse_id);
                 });
 
-                // Constraint: Lock married couples to an exact distance
-                globalNodes.forEach(n => {
-                    if (n.spouse_id && n.id < n.spouse_id) {
-                        const spouse = globalNodeMap.get(n.spouse_id);
-                        if (spouse) {
-                            const cx = (n.x + spouse.x) / 2;
-                            n.x = cx - (SPOUSE_GAP / 2);
-                            spouse.x = cx + (SPOUSE_GAP / 2);
-                        }
-                    }
-                });
+                const nextSignature = signatureFor(incoming);
+                if (!force && nextSignature === dataSignature) return;
+                dataSignature = nextSignature;
 
-                // Repulsion: Sweep each generation and physically push overlapping bounds apart
-                Object.values(genMap).forEach(nodes => {
-                    nodes.sort((a, b) => a.x - b.x);
-                    for (let i = 0; i < nodes.length - 1; i++) {
-                        const left = nodes[i];
-                        const right = nodes[i+1];
-                        
-                        const isSpouse = left.spouse_id === right.id || right.spouse_id === left.id;
-                        const requiredDist = isSpouse ? SPOUSE_GAP : MIN_NODE_GAP;
-                        const currentDist = right.x - left.x;
-                        
-                        if (currentDist < requiredDist) {
-                            const push = (requiredDist - currentDist) / 2;
-                            left.x -= push;
-                            right.x += push;
-                        }
+                globalNodes = incoming;
+                globalNodeMap = new Map(globalNodes.map(n => [n.id, n]));
+
+                renderCards();
+                requestAnimationFrame(() => {
+                    layoutAndRender();
+                    if (!didInitialCenter) {
+                        centerInitialTree();
+                        didInitialCenter = true;
+                    } else {
+                        restoreAnchor(anchor);
                     }
                 });
+            } catch (err) {
+                console.error('Failed to load family tree:', err);
+                showStatus('שגיאה בטעינת העץ');
             }
-
-            // 4. Anchor tree back to the positive canvas viewport
-            const minX = Math.min(...globalNodes.map(n => n.x));
-            globalNodes.forEach(n => { n.x = (n.x - minX) + 400; });
-            
-            // Auto-expand canvas to fit calculated bounds
-            const maxX = Math.max(...globalNodes.map(n => n.x));
-            const maxY = Math.max(...globalNodes.map(n => n.targetY));
-            const svgCanvas = document.getElementById('svg-layer');
-            svgCanvas.style.minWidth = `${maxX + 400}px`;
-            svgCanvas.style.minHeight = `${maxY + 400}px`;
         }
 
         function createCardHTML(node) {
             const hasParent = !!node.parent_id && globalNodeMap.has(node.parent_id);
             const hasSpouse = !!node.spouse_id && globalNodeMap.has(node.spouse_id);
+            const id = escapeHTML(node.id);
 
             return `
-                <div id="card-${node.id}" class="absolute-card pointer-events-auto bg-white px-3 py-2 w-max min-w-[140px] max-w-[200px] shadow-md border-t-[3px] border-leaf rounded-lg hover:-translate-y-1 z-20">
-                    <button onclick="deleteNode('${node.id}')" class="absolute -top-1.5 -left-1.5 text-red-300 hover:text-red-500 font-bold bg-white rounded-full w-4 h-4 flex items-center justify-center shadow z-30 transition text-[10px]">✕</button>
-                    ${!hasParent ? `<button onclick="addParent('${node.id}')" class="absolute -top-2.5 left-1/2 transform translate-x-1/2 bg-leaf-light text-white text-[8px] px-2 py-0.5 rounded-full hover:bg-leaf shadow z-30 transition">+ הורה</button>` : ''}
-                    ${!hasSpouse ? `<button onclick="addSpouse('${node.id}')" class="absolute -top-2.5 right-1 bg-pink-100 text-pink-700 text-[8px] px-2 py-0.5 rounded-full hover:bg-pink-200 shadow z-30 transition">♥ זוג</button>` : ''}
-                    
-                    <h2 contenteditable="true" data-id="${node.id}" data-field="name" class="font-script font-bold text-xl text-leaf-dark mt-1 mb-0.5 text-center break-words focus:bg-leaf-light/10 rounded min-h-[28px] leading-tight">${node.name || 'שם'}</h2>
-                    <p contenteditable="true" data-id="${node.id}" data-field="dates" class="text-center text-[9px] text-gray-500 mb-1 break-words focus:bg-leaf-light/10 rounded">${node.dates || 'תאריכים'}</p>
-                    <p contenteditable="true" data-id="${node.id}" data-field="description" class="text-[9px] text-gray-600 text-center break-words focus:bg-leaf-light/10 rounded leading-tight">${node.description || 'תיאור'}</p>
-                    
-                    <button onclick="addChild('${node.id}')" class="absolute -bottom-2.5 left-1/2 transform translate-x-1/2 bg-leaf text-white text-[8px] px-2 py-0.5 rounded-full hover:bg-leaf-dark shadow z-30 transition">+ ילד</button>
+                <div id="card-${id}" data-node-id="${id}"
+                     class="absolute-card pointer-events-auto bg-white px-3 py-2 w-max min-w-[140px] max-w-[200px] shadow-md border-t-[3px] border-leaf rounded-lg z-20">
+                    <button data-action="delete" data-id="${id}"
+                            class="absolute -top-1.5 -left-1.5 text-red-300 hover:text-red-500 font-bold bg-white rounded-full w-4 h-4 flex items-center justify-center shadow z-30 transition text-[10px]">✕</button>
+                    ${!hasParent ? `
+                        <button data-action="add-parent" data-id="${id}"
+                                class="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-leaf-light text-white text-[8px] px-2 py-0.5 rounded-full hover:bg-leaf shadow z-30 transition">+ הורה</button>
+                    ` : ''}
+                    ${!hasSpouse ? `
+                        <button data-action="add-spouse" data-id="${id}"
+                                class="absolute -top-2.5 right-1 bg-pink-100 text-pink-700 text-[8px] px-2 py-0.5 rounded-full hover:bg-pink-200 shadow z-30 transition">♥ זוג</button>
+                    ` : ''}
+
+                    <h2 contenteditable="true" data-id="${id}" data-field="name"
+                        class="font-script font-bold text-xl text-leaf-dark mt-1 mb-0.5 text-center break-words focus:bg-leaf-light/10 rounded min-h-[28px] leading-tight">${escapeHTML(node.name || 'שם')}</h2>
+                    <p contenteditable="true" data-id="${id}" data-field="dates"
+                       class="text-center text-[9px] text-gray-500 mb-1 break-words focus:bg-leaf-light/10 rounded">${escapeHTML(node.dates || 'תאריכים')}</p>
+                    <p contenteditable="true" data-id="${id}" data-field="description"
+                       class="text-[9px] text-gray-600 text-center break-words focus:bg-leaf-light/10 rounded leading-tight">${escapeHTML(node.description || 'תיאור')}</p>
+
+                    <button data-action="add-child" data-id="${id}"
+                            class="absolute -bottom-2.5 left-1/2 -translate-x-1/2 bg-leaf text-white text-[8px] px-2 py-0.5 rounded-full hover:bg-leaf-dark shadow z-30 transition">+ ילד</button>
                 </div>`;
         }
 
-        function syncAbsoluteCards() {
-            const layer = document.getElementById('cards-layer');
-            
-            globalNodes.forEach(n => {
-                if (!document.getElementById(`card-${n.id}`)) layer.insertAdjacentHTML('beforeend', createCardHTML(n));
+        function renderCards() {
+            cardsLayer.innerHTML = globalNodes.map(createCardHTML).join('');
+        }
+
+        function measureCards() {
+            globalNodes.forEach(node => {
+                const card = document.getElementById(`card-${node.id}`);
+                const rect = card?.getBoundingClientRect();
+                node.cardWidth = Math.max(1, rect?.width || CARD_FALLBACK_WIDTH);
+                node.cardHeight = Math.max(1, rect?.height || CARD_FALLBACK_HEIGHT);
+            });
+        }
+
+        // A spouse pair is an indivisible horizontal layout unit. No other person can
+        // ever be packed between the two spouses.
+        function buildFamilyUnits() {
+            globalUnits = [];
+            unitByNodeId = new Map();
+            const claimed = new Set();
+
+            const sorted = [...globalNodes].sort((a, b) => a.id.localeCompare(b.id));
+            for (const node of sorted) {
+                if (claimed.has(node.id)) continue;
+
+                const spouse = node.spouse_id ? globalNodeMap.get(node.spouse_id) : null;
+                let members = [node];
+
+                if (spouse && !claimed.has(spouse.id) && spouse.id !== node.id) {
+                    members = [node, spouse].sort((a, b) => a.id.localeCompare(b.id));
+                    claimed.add(spouse.id);
+                }
+
+                claimed.add(node.id);
+
+                const unit = {
+                    id: members.map(m => m.id).join('::'),
+                    members,
+                    parents: new Set(),
+                    children: new Set(),
+                    gen: 0,
+                    width: 0,
+                    height: 0,
+                    centerX: 0
+                };
+
+                globalUnits.push(unit);
+                members.forEach(member => unitByNodeId.set(member.id, unit));
+            }
+
+            for (const unit of globalUnits) {
+                for (const member of unit.members) {
+                    const parentId = member.parent_id;
+                    const parentUnit = parentId ? unitByNodeId.get(parentId) : null;
+                    if (parentUnit && parentUnit !== unit) {
+                        unit.parents.add(parentUnit);
+                        parentUnit.children.add(unit);
+                    }
+                }
+            }
+
+            for (const unit of globalUnits) {
+                if (unit.members.length === 2) {
+                    unit.width = unit.members[0].cardWidth + SPOUSE_EDGE_GAP + unit.members[1].cardWidth;
+                } else {
+                    unit.width = unit.members[0].cardWidth;
+                }
+                unit.height = Math.max(...unit.members.map(m => m.cardHeight));
+            }
+        }
+
+        // Assign strict generation bands to units. This is a longest-path pass over
+        // parent relationships, so every parent is above every child and spouses
+        // necessarily share one generation because they live in the same unit.
+        function assignGenerations() {
+            const indegree = new Map(globalUnits.map(unit => [unit, unit.parents.size]));
+            const queue = globalUnits
+                .filter(unit => indegree.get(unit) === 0)
+                .sort((a, b) => a.id.localeCompare(b.id));
+
+            let processed = 0;
+            while (queue.length) {
+                const unit = queue.shift();
+                processed++;
+
+                const children = [...unit.children].sort((a, b) => a.id.localeCompare(b.id));
+                for (const child of children) {
+                    child.gen = Math.max(child.gen, unit.gen + 1);
+                    indegree.set(child, indegree.get(child) - 1);
+                    if (indegree.get(child) === 0) queue.push(child);
+                }
+                queue.sort((a, b) => a.id.localeCompare(b.id));
+            }
+
+            if (processed !== globalUnits.length) {
+                console.warn('Family relationship cycle detected; using safe fallback generations.');
+                for (const unit of globalUnits) {
+                    if (indegree.get(unit) > 0) unit.gen = Math.max(unit.gen, 0);
+                }
+            }
+
+            globalUnits.forEach(unit => unit.members.forEach(member => member.gen = unit.gen));
+        }
+
+        function descendantsWidth(unit, visiting = new Set(), memo = new Map()) {
+            if (memo.has(unit)) return memo.get(unit);
+            if (visiting.has(unit)) return unit.width;
+            visiting.add(unit);
+
+            const children = [...unit.children];
+            let width = unit.width;
+            if (children.length) {
+                const childWidth = children.reduce((sum, child) =>
+                    sum + descendantsWidth(child, visiting, memo), 0) +
+                    UNIT_GAP * (children.length - 1);
+                width = Math.max(width, childWidth);
+            }
+
+            visiting.delete(unit);
+            memo.set(unit, width);
+            return width;
+        }
+
+        // Produce a stable family-first ordering. Descendants of the same family stay
+        // together, but a unit is emitted only once even when both spouses have parents.
+        function buildGenerationOrder() {
+            const byGen = new Map();
+            const emitted = new Set();
+            const roots = globalUnits
+                .filter(unit => unit.parents.size === 0)
+                .sort((a, b) => a.id.localeCompare(b.id));
+
+            function emit(unit) {
+                if (emitted.has(unit)) return;
+                emitted.add(unit);
+                if (!byGen.has(unit.gen)) byGen.set(unit.gen, []);
+                byGen.get(unit.gen).push(unit);
+
+                const children = [...unit.children].sort((a, b) => a.id.localeCompare(b.id));
+                children.forEach(emit);
+            }
+
+            roots.forEach(emit);
+            [...globalUnits].sort((a, b) => a.id.localeCompare(b.id)).forEach(emit);
+            return byGen;
+        }
+
+        function packGeneration(units, desiredCenter = null) {
+            if (!units.length) return;
+
+            // Keep current family order and pack exact measured rectangles with a hard gap.
+            let cursor = 0;
+            for (const unit of units) {
+                unit.centerX = cursor + unit.width / 2;
+                cursor += unit.width + UNIT_GAP;
+            }
+
+            const totalWidth = cursor - UNIT_GAP;
+            const target = desiredCenter ?? totalWidth / 2;
+            const shift = target - totalWidth / 2;
+            units.forEach(unit => unit.centerX += shift);
+        }
+
+        function layoutUnits() {
+            const byGen = buildGenerationOrder();
+            const gens = [...byGen.keys()].sort((a, b) => a - b);
+
+            // Initial exact packing.
+            gens.forEach(gen => packGeneration(byGen.get(gen)));
+
+            // Reorder within each generation using parent barycenters, then repack.
+            // This is deterministic and reduces crossings without ever violating spacing.
+            for (let pass = 0; pass < 5; pass++) {
+                for (const gen of gens) {
+                    const units = byGen.get(gen);
+                    if (gen === gens[0]) continue;
+
+                    const oldIndex = new Map(units.map((u, i) => [u, i]));
+                    units.sort((a, b) => {
+                        const aParents = [...a.parents].filter(p => p.centerX != null);
+                        const bParents = [...b.parents].filter(p => p.centerX != null);
+                        const ax = aParents.length ? aParents.reduce((s, p) => s + p.centerX, 0) / aParents.length : Infinity;
+                        const bx = bParents.length ? bParents.reduce((s, p) => s + p.centerX, 0) / bParents.length : Infinity;
+                        return ax - bx || oldIndex.get(a) - oldIndex.get(b) || a.id.localeCompare(b.id);
+                    });
+
+                    const parentCenters = units.flatMap(u => [...u.parents].map(p => p.centerX));
+                    const desired = parentCenters.length
+                        ? (Math.min(...parentCenters) + Math.max(...parentCenters)) / 2
+                        : null;
+                    packGeneration(units, desired);
+                }
+
+                // Pull parents toward the center of their children, then re-pack their
+                // complete generation so hard non-overlap remains guaranteed.
+                for (let gi = gens.length - 2; gi >= 0; gi--) {
+                    const gen = gens[gi];
+                    const units = byGen.get(gen);
+                    const targets = new Map();
+                    units.forEach(unit => {
+                        const children = [...unit.children];
+                        targets.set(unit, children.length
+                            ? children.reduce((s, c) => s + c.centerX, 0) / children.length
+                            : unit.centerX);
+                    });
+
+                    const oldIndex = new Map(units.map((u, i) => [u, i]));
+                    units.sort((a, b) =>
+                        targets.get(a) - targets.get(b) ||
+                        oldIndex.get(a) - oldIndex.get(b) ||
+                        a.id.localeCompare(b.id)
+                    );
+
+                    const desiredValues = [...targets.values()];
+                    const desired = desiredValues.length
+                        ? (Math.min(...desiredValues) + Math.max(...desiredValues)) / 2
+                        : null;
+                    packGeneration(units, desired);
+                }
+            }
+
+            // Translate everything to positive canvas coordinates.
+            const minLeft = Math.min(...globalUnits.map(u => u.centerX - u.width / 2));
+            const offsetX = CANVAS_PAD_X - minLeft;
+            globalUnits.forEach(unit => unit.centerX += offsetX);
+
+            return byGen;
+        }
+
+        function assignVerticalPositions(byGen) {
+            const gens = [...byGen.keys()].sort((a, b) => a - b);
+            let y = CANVAS_PAD_TOP;
+
+            for (const gen of gens) {
+                const units = byGen.get(gen);
+                const bandHeight = Math.max(...units.map(u => u.height), CARD_FALLBACK_HEIGHT);
+                units.forEach(unit => unit.members.forEach(member => member.targetY = y));
+                y += bandHeight + GENERATION_GAP;
+            }
+        }
+
+        function positionMembers() {
+            for (const unit of globalUnits) {
+                if (unit.members.length === 1) {
+                    unit.members[0].x = unit.centerX;
+                    continue;
+                }
+
+                const [left, right] = unit.members;
+                left.x = unit.centerX - (SPOUSE_EDGE_GAP / 2 + left.cardWidth / 2);
+                right.x = unit.centerX + (SPOUSE_EDGE_GAP / 2 + right.cardWidth / 2);
+            }
+        }
+
+        function updateCanvasBounds() {
+            const maxRight = Math.max(...globalNodes.map(n => n.x + n.cardWidth / 2));
+            const maxBottom = Math.max(...globalNodes.map(n => n.targetY + n.cardHeight));
+
+            const width = Math.max(viewport.clientWidth, Math.ceil(maxRight + CANVAS_PAD_X));
+            const height = Math.max(viewport.clientHeight, Math.ceil(maxBottom + CANVAS_PAD_BOTTOM));
+
+            canvas.style.width = `${width}px`;
+            canvas.style.height = `${height}px`;
+            svgLayer.setAttribute('width', width);
+            svgLayer.setAttribute('height', height);
+            svgLayer.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        }
+
+        function syncCardPositions() {
+            globalNodes.forEach(node => {
+                const card = document.getElementById(`card-${node.id}`);
+                if (!card) return;
+                card.style.left = `${node.x}px`;
+                card.style.top = `${node.targetY}px`;
+            });
+        }
+
+        function svgPath(d, width = 2) {
+            return `<path d="${d}" stroke="#a3b18a" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round" fill="none" />`;
+        }
+
+        function drawSVGLines() {
+            let svgHTML = '';
+
+            // Marriage lines connect the actual inner edges of the measured cards.
+            for (const unit of globalUnits) {
+                if (unit.members.length !== 2) continue;
+                const [left, right] = unit.members;
+                const y = left.targetY + Math.min(32, Math.min(left.cardHeight, right.cardHeight) / 2);
+                const x1 = left.x + left.cardWidth / 2;
+                const x2 = right.x - right.cardWidth / 2;
+                svgHTML += svgPath(`M ${x1} ${y} L ${x2} ${y}`, 2.5);
+            }
+
+            // One sibling bus per family unit. Children connected to either spouse
+            // share the same bus, so the visual grammar reads as one family.
+            for (const unit of globalUnits) {
+                const childNodes = globalNodes
+                    .filter(child => child.parent_id && unitByNodeId.get(child.parent_id) === unit)
+                    .sort((a, b) => a.x - b.x);
+
+                if (!childNodes.length) continue;
+
+                let startX, startY;
+                if (unit.members.length === 2) {
+                    const [left, right] = unit.members;
+                    startX = unit.centerX;
+                    startY = left.targetY + Math.min(32, Math.min(left.cardHeight, right.cardHeight) / 2);
+                } else {
+                    const parent = unit.members[0];
+                    startX = parent.x;
+                    startY = parent.targetY + parent.cardHeight;
+                }
+
+                const childTop = Math.min(...childNodes.map(child => child.targetY));
+                const midY = startY + Math.max(48, (childTop - startY) * 0.52);
+                const childXs = childNodes.map(child => child.x);
+                const minX = Math.min(startX, ...childXs);
+                const maxX = Math.max(startX, ...childXs);
+
+                svgHTML += svgPath(`M ${startX} ${startY} L ${startX} ${midY}`);
+                if (maxX > minX) svgHTML += svgPath(`M ${minX} ${midY} L ${maxX} ${midY}`);
+                childNodes.forEach(child => {
+                    svgHTML += svgPath(`M ${child.x} ${midY} L ${child.x} ${child.targetY}`);
+                });
+            }
+
+            svgLayer.innerHTML = svgHTML;
+        }
+
+        function assertLayout() {
+            // Development-time safety checks. They remain cheap at this tree size and
+            // make broken relationship/layout states visible in the console.
+            const byGen = new Map();
+            globalNodes.forEach(node => {
+                if (!byGen.has(node.gen)) byGen.set(node.gen, []);
+                byGen.get(node.gen).push(node);
             });
 
-            // Map absolute physics coordinates directly to the DOM
-            globalNodes.forEach(n => {
-                const card = document.getElementById(`card-${n.id}`);
-                if (card) {
-                    card.style.left = `${n.x}px`;
-                    card.style.top = `${n.targetY}px`;
+            for (const [gen, nodes] of byGen) {
+                for (let i = 0; i < nodes.length; i++) {
+                    const a = nodes[i];
+                    for (let j = i + 1; j < nodes.length; j++) {
+                        const b = nodes[j];
+                        const xOverlap = Math.abs(a.x - b.x) < (a.cardWidth + b.cardWidth) / 2 - 0.5;
+                        const yOverlap = Math.abs(a.targetY - b.targetY) < Math.min(a.cardHeight, b.cardHeight) - 0.5;
+                        if (xOverlap && yOverlap) {
+                            console.error(`Layout overlap in generation ${gen}:`, a.id, b.id);
+                        }
+                    }
+                }
+            }
+
+            globalNodes.forEach(child => {
+                if (!child.parent_id) return;
+                const parent = globalNodeMap.get(child.parent_id);
+                if (parent && child.gen <= parent.gen) {
+                    console.error('Invalid generation ordering:', parent.id, child.id);
                 }
             });
         }
 
-        function drawSVGLines() {
-            const svg = document.getElementById('svg-layer');
-            let svgHTML = '';
+        function layoutAndRender() {
+            if (!globalNodes.length) {
+                cardsLayer.innerHTML = '';
+                svgLayer.innerHTML = '';
+                return;
+            }
 
-            // Using our mathematical layout data for perfect lines (no DOM querying required!)
-            globalNodes.forEach(n => {
-                // 1. Marriage Lines (Fixed 24px drop)
-                if (n.spouse_id && n.id < n.spouse_id) { 
-                    const spouse = globalNodeMap.get(n.spouse_id);
-                    if (spouse) {
-                        const y = n.targetY + 24;
-                        svgHTML += `<path d="M ${n.x} ${y} L ${spouse.x} ${y}" stroke="#a3b18a" stroke-width="2.5" fill="none" class="transition-all duration-500" />`;
-                    }
-                }
+            measureCards();
+            buildFamilyUnits();
+            assignGenerations();
 
-                // 2. Pedigree Lines (Knee-Broken right angles)
-                if (n.parent_id) {
-                    const parent = globalNodeMap.get(n.parent_id);
-                    if (parent) {
-                        let startX = parent.x;
-                        let startY = parent.targetY + 110; // Bottom of a typical parent card
+            // Prime descendant widths; useful for diagnostics and future tuning while
+            // keeping the placement algorithm deterministic.
+            const memo = new Map();
+            globalUnits.forEach(unit => unit.subtreeWidth = descendantsWidth(unit, new Set(), memo));
 
-                        if (parent.spouse_id) {
-                            const pSpouse = globalNodeMap.get(parent.spouse_id);
-                            if (pSpouse) {
-                                startX = (parent.x + pSpouse.x) / 2; // Midpoint
-                                startY = parent.targetY + 24; // Trace directly down from marriage line
-                            }
-                        }
+            const byGen = layoutUnits();
+            assignVerticalPositions(byGen);
+            positionMembers();
+            updateCanvasBounds();
+            syncCardPositions();
 
-                        const midY = startY + ((n.targetY - startY) / 2);
-                        svgHTML += `<path d="M ${startX} ${startY} L ${startX} ${midY} L ${n.x} ${midY} L ${n.x} ${n.targetY}" stroke="#a3b18a" stroke-width="2" fill="none" class="transition-all duration-500" />`;
-                    }
-                }
+            requestAnimationFrame(() => {
+                drawSVGLines();
+                assertLayout();
             });
+        }
 
-            svg.innerHTML = svgHTML;
+        function centerInitialTree() {
+            if (!globalUnits.length) return;
+            const roots = globalUnits
+                .filter(unit => unit.parents.size === 0)
+                .sort((a, b) => a.centerX - b.centerX);
+
+            const focal = roots[Math.floor((roots.length - 1) / 2)] || globalUnits[0];
+            viewport.scrollLeft = Math.max(0, focal.centerX - viewport.clientWidth / 2);
+            const topY = Math.min(...focal.members.map(m => m.targetY));
+            viewport.scrollTop = Math.max(0, topY - 120);
         }
 
         async function saveEdit(element) {
             const id = element.getAttribute('data-id');
             const field = element.getAttribute('data-field');
             const value = element.innerText.trim();
+            const node = globalNodeMap.get(id);
+            if (node) node[field] = value;
+
             showStatus('שומר...');
-            await fetch(`/api/nodes/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [field]: value }) });
+            const res = await fetch(`/api/nodes/${encodeURIComponent(id)}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ [field]: value })
+            });
+
+            if (!res.ok) {
+                showStatus('שגיאה בשמירה');
+                return;
+            }
+
+            // Text can change card dimensions, so immediately remeasure and re-layout.
+            const anchor = captureAnchor(id);
+            layoutAndRender();
+            requestAnimationFrame(() => restoreAnchor(anchor));
             showStatus('נשמר בהצלחה');
         }
 
         async function addChild(parentId) {
-            const id = 'node_' + Math.random().toString(36).substr(2, 9);
-            await fetch('/api/nodes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, parent_id: parentId }) });
-            await loadTree();
+            const id = 'node_' + Math.random().toString(36).slice(2, 11);
+            showStatus('מוסיף ילד...');
+            const res = await fetch('/api/nodes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id, parent_id: parentId })
+            });
+            if (!res.ok) return showStatus('שגיאה בהוספה');
+            await loadTree(parentId, true);
+            showStatus('נשמר בהצלחה');
         }
 
         async function addParent(childId) {
-            const newParentId = 'node_' + Math.random().toString(36).substr(2, 9);
+            const newParentId = 'node_' + Math.random().toString(36).slice(2, 11);
             showStatus('מוסיף הורה...');
-            const postRes = await fetch('/api/nodes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: newParentId }) });
-            if (postRes.ok) await fetch(`/api/nodes/${childId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parent_id: newParentId }) });
-            await loadTree();
+
+            const postRes = await fetch('/api/nodes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: newParentId })
+            });
+
+            if (postRes.ok) {
+                await fetch(`/api/nodes/${encodeURIComponent(childId)}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ parent_id: newParentId })
+                });
+            }
+
+            await loadTree(childId, true);
+            showStatus('נשמר בהצלחה');
         }
 
         async function addSpouse(partnerId) {
-            const spouseId = 'node_' + Math.random().toString(36).substr(2, 9);
-            await fetch('/api/nodes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: spouseId, spouse_id: partnerId }) });
-            await fetch(`/api/nodes/${partnerId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spouse_id: spouseId }) });
-            await loadTree();
+            const spouseId = 'node_' + Math.random().toString(36).slice(2, 11);
+            showStatus('מוסיף בן/בת זוג...');
+
+            const postRes = await fetch('/api/nodes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: spouseId, spouse_id: partnerId })
+            });
+
+            if (postRes.ok) {
+                await fetch(`/api/nodes/${encodeURIComponent(partnerId)}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ spouse_id: spouseId })
+                });
+            }
+
+            await loadTree(partnerId, true);
+            showStatus('נשמר בהצלחה');
         }
 
         async function deleteNode(id) {
             if (!confirm('האם אתה בטוח שברצונך למחוק איש קשר זה?')) return;
+
+            const deleted = globalNodeMap.get(id);
+            const anchorId = deleted?.parent_id || deleted?.spouse_id || null;
             showStatus('מוחק...');
-            document.getElementById(`card-${id}`)?.remove();
-            await fetch(`/api/nodes/${id}`, { method: 'DELETE' });
-            await loadTree();
+
+            const res = await fetch(`/api/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            if (!res.ok) return showStatus('שגיאה במחיקה');
+
+            await loadTree(anchorId, true);
+            showStatus('נמחק');
         }
 
         function showStatus(msg) {
             const status = document.getElementById('status');
             status.innerText = msg;
             status.classList.remove('opacity-0');
-            setTimeout(() => status.classList.add('opacity-0'), 2000);
+            clearTimeout(showStatus.timer);
+            showStatus.timer = setTimeout(() => status.classList.add('opacity-0'), 1800);
         }
 
-        document.body.addEventListener('focusin', (e) => { if (e.target.hasAttribute('contenteditable')) isEditing = true; });
-        document.body.addEventListener('focusout', (e) => {
-            if (e.target.hasAttribute('contenteditable')) {
-                isEditing = false;
-                saveEdit(e.target);
+        cardsLayer.addEventListener('click', (e) => {
+            const button = e.target.closest('[data-action]');
+            if (!button) return;
+
+            const id = button.dataset.id;
+            switch (button.dataset.action) {
+                case 'add-child': addChild(id); break;
+                case 'add-parent': addParent(id); break;
+                case 'add-spouse': addSpouse(id); break;
+                case 'delete': deleteNode(id); break;
             }
         });
 
-        setInterval(() => { if (!isEditing) loadTree(); }, 5000);
-        loadTree();
+        document.body.addEventListener('focusin', (e) => {
+            if (e.target.hasAttribute('contenteditable')) isEditing = true;
+        });
+
+        document.body.addEventListener('focusout', (e) => {
+            if (!e.target.hasAttribute('contenteditable')) return;
+            isEditing = false;
+            saveEdit(e.target);
+        });
+
+        window.addEventListener('resize', () => {
+            if (!globalNodes.length) return;
+            const anchor = captureAnchor();
+            layoutAndRender();
+            requestAnimationFrame(() => restoreAnchor(anchor));
+        });
+
+        // Polling remains useful for multi-client updates, but unchanged data no longer
+        // causes a five-second relayout/jump.
+        setInterval(() => {
+            if (!isEditing) loadTree(null, false);
+        }, 5000);
+
+        loadTree(null, true);
     </script>
 </body>
 </html>
