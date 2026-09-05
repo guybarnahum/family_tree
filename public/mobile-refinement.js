@@ -138,8 +138,9 @@
                 display: none !important;
             }
 
-            /* Higher specificity intentionally wins over the later presentation layer.
-               A selected person on touch is a complete, roomy desktop-like card. */
+            /* The selected person becomes a complete desktop-like card. Its transform is
+               lifted by half of its extra height so selection expands around the prior
+               card center instead of growing only downward. */
             #cards-layer .absolute-card.graph-root {
                 min-width: min(228px, calc(100vw - 46px)) !important;
                 width: min(264px, calc(100vw - 40px)) !important;
@@ -151,6 +152,9 @@
                 outline-offset: 3px !important;
                 box-shadow: 0 12px 28px rgba(52, 78, 65, 0.24) !important;
                 overflow: visible !important;
+                transform: translate(-50%, calc(-1 * var(--mobile-root-lift, 0px))) !important;
+                transform-origin: center center !important;
+                background: #fff !important;
             }
 
             #cards-layer .absolute-card.graph-root h2[data-field="name"] {
@@ -174,88 +178,107 @@
                 text-align: center !important;
             }
 
-            /* Empty fields should still look editable on the selected/full card. */
             #cards-layer .absolute-card.graph-root .default-node-text {
                 opacity: 0.58 !important;
             }
 
-            /* On touch, actions belong to the selected/full card only. */
+            /* Touch actions belong to the selected/full card only. */
             .absolute-card [data-action] {
                 opacity: 0 !important;
                 pointer-events: none !important;
             }
 
-            .absolute-card.graph-root [data-action] {
+            #cards-layer .absolute-card.graph-root [data-action] {
                 opacity: 1 !important;
                 pointer-events: auto !important;
                 z-index: 60 !important;
                 box-shadow: 0 3px 9px rgba(52, 78, 65, 0.16) !important;
                 touch-action: manipulation;
+                box-sizing: border-box !important;
             }
 
-            .absolute-card.graph-root [data-action="delete"] {
-                top: -14px !important;
-                left: -14px !important;
+            #cards-layer .absolute-card.graph-root [data-action="delete"] {
+                top: -17px !important;
+                left: -17px !important;
                 width: 34px !important;
                 height: 34px !important;
                 padding: 0 !important;
                 border: 1px solid rgba(220, 38, 38, 0.16) !important;
                 border-radius: 999px !important;
-                background: rgba(255, 255, 255, 0.98) !important;
+                background: #fff !important;
+                color: #ef8f8f !important;
                 font-size: 13px !important;
-                line-height: 32px !important;
+                line-height: 1 !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
             }
 
-            .absolute-card.graph-root [data-action="add-parent"] {
+            #cards-layer .absolute-card.graph-root [data-action="add-parent"],
+            #cards-layer .absolute-card.graph-root [data-action="add-spouse"],
+            #cards-layer .absolute-card.graph-root [data-action="add-child"] {
+                height: 34px !important;
+                min-height: 34px !important;
+                padding: 0 12px !important;
+                border-radius: 999px !important;
+                font-size: 11px !important;
+                line-height: 1 !important;
+                white-space: nowrap;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+            }
+
+            #cards-layer .absolute-card.graph-root [data-action="add-parent"] {
                 top: -17px !important;
                 left: 50% !important;
                 right: auto !important;
                 transform: translateX(-50%) !important;
+                background: #a3b18a !important;
+                border: 1px solid #8fa178 !important;
+                color: #fff !important;
             }
 
-            .absolute-card.graph-root [data-action="add-spouse"] {
+            #cards-layer .absolute-card.graph-root [data-action="add-spouse"] {
                 top: -17px !important;
                 right: 8px !important;
                 left: auto !important;
                 transform: none !important;
+                background: #fce7f3 !important;
+                border: 1px solid #f5bfd8 !important;
+                color: #be185d !important;
             }
 
-            .absolute-card.graph-root [data-action="add-child"] {
+            #cards-layer .absolute-card.graph-root [data-action="add-child"] {
                 bottom: -17px !important;
                 left: 50% !important;
                 right: auto !important;
                 transform: translateX(-50%) !important;
+                background: #588157 !important;
+                border: 1px solid #476d48 !important;
+                color: #fff !important;
             }
 
-            .absolute-card.graph-root [data-action="add-parent"],
-            .absolute-card.graph-root [data-action="add-spouse"],
-            .absolute-card.graph-root [data-action="add-child"] {
-                min-height: 34px !important;
-                padding: 7px 12px !important;
-                border-radius: 999px !important;
-                font-size: 11px !important;
-                line-height: 18px !important;
-                white-space: nowrap;
-            }
-
-            /* Selected-card marker mirrors desktop, but is informational on touch. */
-            .absolute-card.graph-root .graph-select-zone {
+            /* Match the desktop selected-card footer rather than using a mobile-only
+               transparent approximation. */
+            #cards-layer .absolute-card.graph-root .graph-select-zone {
                 display: block !important;
-                left: 16px !important;
-                right: 16px !important;
-                bottom: 7px !important;
-                height: 23px !important;
-                opacity: 0.78 !important;
+                left: 8px !important;
+                right: 8px !important;
+                bottom: 5px !important;
+                height: 21px !important;
+                opacity: 1 !important;
                 pointer-events: none !important;
                 transform: none !important;
-                background: transparent !important;
-                border-top: 1px solid rgba(88, 129, 87, 0.14) !important;
-                color: #526b58 !important;
+                background: rgba(163, 177, 138, 0.20) !important;
+                border: 0 !important;
+                border-top: 1px solid rgba(88, 129, 87, 0.16) !important;
+                border-radius: 0 0 8px 8px !important;
+                color: #344e41 !important;
                 font-size: 9px !important;
-                line-height: 22px !important;
+                line-height: 20px !important;
             }
 
-            /* Expansion markers sit outside the card without competing with CRUD pills. */
             .graph-frontier {
                 min-width: 34px !important;
                 height: 34px !important;
@@ -340,12 +363,135 @@
         catch (_) { return null; }
     }
 
+    function updateRootLift() {
+        const root = cardsLayer.querySelector('.absolute-card.graph-root');
+        if (!root) return;
+
+        const contextHeights = [...cardsLayer.querySelectorAll('.absolute-card:not(.graph-root)')]
+            .map(card => card.offsetHeight)
+            .filter(height => height > 0)
+            .sort((a, b) => a - b);
+        const normalHeight = contextHeights.length
+            ? contextHeights[Math.floor(contextHeights.length / 2)]
+            : 100;
+        const extraHeight = Math.max(0, root.offsetHeight - normalHeight);
+        const lift = Math.min(56, extraHeight / 2);
+        root.style.setProperty('--mobile-root-lift', `${lift}px`);
+    }
+
+    function cardBounds(node) {
+        const card = document.getElementById(`card-${node.id}`);
+        if (!card) {
+            return {
+                left: node.x - node.cardWidth / 2,
+                right: node.x + node.cardWidth / 2,
+                top: node.targetY,
+                bottom: node.targetY + node.cardHeight,
+                width: node.cardWidth,
+                height: node.cardHeight,
+                centerX: node.x,
+                centerY: node.targetY + node.cardHeight / 2
+            };
+        }
+
+        const canvasRect = canvas.getBoundingClientRect();
+        const rect = card.getBoundingClientRect();
+        const left = rect.left - canvasRect.left;
+        const top = rect.top - canvasRect.top;
+        return {
+            left,
+            right: left + rect.width,
+            top,
+            bottom: top + rect.height,
+            width: rect.width,
+            height: rect.height,
+            centerX: left + rect.width / 2,
+            centerY: top + rect.height / 2
+        };
+    }
+
+    function coupleLineY(left, right) {
+        const leftBox = cardBounds(left);
+        const rightBox = cardBounds(right);
+        const overlapTop = Math.max(leftBox.top, rightBox.top);
+        const overlapBottom = Math.min(leftBox.bottom, rightBox.bottom);
+        const preferred = overlapTop + Math.min(32, Math.min(leftBox.height, rightBox.height) / 2);
+        return Math.max(overlapTop + 8, Math.min(preferred, overlapBottom - 8));
+    }
+
+    // Use the visible card rectangles for connector endpoints on touch. This matters because
+    // the selected card is deliberately lifted around its center; SVG stems now stop exactly
+    // at the visible border and remain hidden beneath the opaque card body.
+    const desktopDrawSVGLines = drawSVGLines;
+    drawSVGLines = function mobileAwareDrawSVGLines() {
+        if (!mobileQuery.matches) return desktopDrawSVGLines();
+
+        updateRootLift();
+        let svgHTML = '';
+
+        for (const unit of globalUnits) {
+            if (unit.members.length !== 2) continue;
+            const [left, right] = unit.members;
+            const leftBox = cardBounds(left);
+            const rightBox = cardBounds(right);
+            const y = coupleLineY(left, right);
+            svgHTML += svgPath(`M ${leftBox.right} ${y} L ${rightBox.left} ${y}`, 2.5);
+        }
+
+        for (const unit of globalUnits) {
+            const childNodes = globalNodes
+                .filter(child => {
+                    if (!child.parent_id) return false;
+                    const parentUnit = unitByNodeId.get(child.parent_id);
+                    return parentUnit === unit && child.gen === unit.gen + 1;
+                })
+                .sort((a, b) => a.x - b.x);
+
+            if (!childNodes.length) continue;
+
+            let startX, startY;
+            if (unit.members.length === 2) {
+                const [left, right] = unit.members;
+                startX = unit.centerX;
+                startY = coupleLineY(left, right);
+            } else {
+                const parentBox = cardBounds(unit.members[0]);
+                startX = parentBox.centerX;
+                startY = parentBox.bottom;
+            }
+
+            const childBoxes = new Map(childNodes.map(child => [child.id, cardBounds(child)]));
+            const childTop = Math.min(...childNodes.map(child => childBoxes.get(child.id).top));
+            const midY = startY + Math.max(48, (childTop - startY) * 0.52);
+
+            childNodes.forEach(child => {
+                const childBox = childBoxes.get(child.id);
+                const childX = childBox.centerX;
+                const childY = childBox.top;
+
+                if (Math.abs(childX - startX) < 0.5) {
+                    svgHTML += svgPath(`M ${startX} ${startY} L ${childX} ${childY}`);
+                    return;
+                }
+
+                svgHTML += svgPath(roundedOrthogonalPath([
+                    [startX, startY],
+                    [startX, midY],
+                    [childX, midY],
+                    [childX, childY]
+                ]));
+            });
+        }
+
+        svgLayer.innerHTML = svgHTML;
+    };
+
     // First tap on editable text in a non-root card selects it. Once selected, the same
     // text behaves as a normal editor, matching the desktop selected-card model.
     let redispatching = false;
     cardsLayer.addEventListener('click', event => {
         if (redispatching) return;
-        if (event.target.closest('[data-action], [data-graph-expand], .graph-frontier')) return;
+        if (event.target.closest('[data-action], [data-graph-expand], [data-graph-collapse], .graph-frontier')) return;
 
         const editable = event.target.closest('[contenteditable="true"]');
         if (!editable) return;
@@ -370,7 +516,9 @@
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             try {
+                updateRootLift();
                 layoutAndRender();
+                requestAnimationFrame(() => drawSVGLines());
                 const root = globalNodeMap.get(rootId());
                 if (root?.x != null && root?.targetY != null) {
                     viewport.scrollLeft = Math.max(0, root.x - viewport.clientWidth / 2);
