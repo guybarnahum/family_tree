@@ -65,6 +65,7 @@
     function bestInsertionOrder(items, costFn, options = {}) {
         let order = [...(items || [])];
         let bestCost = costFn(order);
+        if (bestCost === 0) return { order, cost: 0 };
         const maxPasses = options.maxPasses || Math.max(2, order.length * 2);
 
         for (let pass = 0; pass < maxPasses; pass++) {
@@ -82,6 +83,7 @@
                     if (cost < localCost) {
                         localBest = candidate;
                         localCost = cost;
+                        if (localCost === 0) break;
                     }
                 }
 
@@ -89,6 +91,7 @@
                     order = localBest;
                     bestCost = localCost;
                     changed = true;
+                    if (bestCost === 0) return { order, cost: 0 };
                 }
             }
             if (!changed) break;
@@ -103,8 +106,10 @@
 
         let best = [...source];
         let bestCost = costFn(best);
+        if (bestCost === 0) return { order: best, cost: 0 };
 
         function visit(prefix, remaining) {
+            if (bestCost === 0) return;
             if (!remaining.length) {
                 const cost = costFn(prefix);
                 if (cost < bestCost) {
@@ -115,6 +120,7 @@
             }
             const sorted = [...remaining].sort(lexicographicCompare);
             for (const item of sorted) {
+                if (bestCost === 0) break;
                 const next = remaining.filter(value => value !== item);
                 visit([...prefix, item], next);
             }
