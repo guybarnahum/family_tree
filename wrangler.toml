@@ -8,6 +8,10 @@ directory = "./public"
 binding = "ASSETS"
 run_worker_first = true
 
+[[routes]]
+pattern = "family.barnahum.com"
+custom_domain = true
+
 [[d1_databases]]
 binding = "DB"
 database_name = "family_tree_db"
