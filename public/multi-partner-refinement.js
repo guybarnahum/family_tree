@@ -122,12 +122,60 @@
         return values.length ? average(values) : null;
     }
 
+    function componentNeighbors(id, allowed) {
+        return spouseIds(id, { visibleOnly: true })
+            .filter(other => allowed.has(other));
+    }
+
+    // If the spouse component is a simple chain, lay it out in graph order. This keeps
+    // every spouse edge adjacent and straight. If the selected person is an endpoint,
+    // put that endpoint at the outside of the row rather than forcing it into the middle.
+    function simplePathOrder(ids) {
+        const allowed = new Set(ids);
+        const degree = new Map(ids.map(id => [id, componentNeighbors(id, allowed).length]));
+        const edgeCount = [...degree.values()].reduce((sum, value) => sum + value, 0) / 2;
+        if (edgeCount !== ids.length - 1 || [...degree.values()].some(value => value > 2)) return null;
+
+        const endpoints = ids.filter(id => degree.get(id) <= 1);
+        if (ids.length > 1 && endpoints.length !== 2) return null;
+        if (ids.length === 1) return ids.map(id => globalNodeMap.get(id)).filter(Boolean);
+
+        const rootId = currentRootId();
+        let startId;
+        if (endpoints.includes(rootId)) {
+            startId = endpoints.find(id => id !== rootId);
+        } else {
+            startId = [...endpoints].sort((a, b) => {
+                const ax = childHint(a);
+                const bx = childHint(b);
+                if (Number.isFinite(ax) && Number.isFinite(bx) && Math.abs(ax - bx) > 1) return ax - bx;
+                return a.localeCompare(b);
+            })[0];
+        }
+
+        const ordered = [];
+        let previous = null;
+        let current = startId;
+        while (current) {
+            ordered.push(current);
+            const next = componentNeighbors(current, allowed)
+                .filter(id => id !== previous && !ordered.includes(id))[0] || null;
+            previous = current;
+            current = next;
+        }
+
+        if (ordered.length !== ids.length) return null;
+        return ordered.map(id => globalNodeMap.get(id)).filter(Boolean);
+    }
+
+    // For true branching spouse graphs, structural degree wins over selection. The root
+    // is only a tie-breaker among equally useful hubs; this minimizes the number/length of
+    // routed relationship lanes while the viewport can still center the selected card.
     function chooseHub(ids) {
         const rootId = currentRootId();
+        const allowed = new Set(ids);
         return [...ids].sort((a, b) => {
-            const score = id =>
-                (id === rootId ? 10000 : 0) +
-                spouseIds(id, { visibleOnly: true }).filter(other => ids.includes(other)).length * 100;
+            const score = id => componentNeighbors(id, allowed).length * 10000 + (id === rootId ? 1000 : 0);
             return score(b) - score(a) || a.localeCompare(b);
         })[0];
     }
@@ -137,6 +185,9 @@
             return ids.map(id => globalNodeMap.get(id)).filter(Boolean)
                 .sort((a, b) => a.id.localeCompare(b.id));
         }
+
+        const pathOrder = simplePathOrder(ids);
+        if (pathOrder) return pathOrder;
 
         const hubId = chooseHub(ids);
         const hub = globalNodeMap.get(hubId);
