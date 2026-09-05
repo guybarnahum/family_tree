@@ -182,6 +182,10 @@
         return result;
     }
 
+    function setTextIfChanged(element, value) {
+        if (element.textContent !== value) element.textContent = value;
+    }
+
     function ensureSelectZone(card) {
         let zone = card.querySelector('.graph-select-zone');
         if (!zone) {
@@ -193,8 +197,9 @@
         }
 
         const isRoot = card.classList.contains('graph-root');
-        zone.textContent = isRoot ? '● מרכז נוכחי' : '◎ מרכז כאן';
-        zone.title = isRoot ? 'Current center person' : 'Center family view on this person';
+        setTextIfChanged(zone, isRoot ? '● מרכז נוכחי' : '◎ מרכז כאן');
+        const nextTitle = isRoot ? 'Current center person' : 'Center family view on this person';
+        if (zone.title !== nextTitle) zone.title = nextTitle;
     }
 
     async function decorate() {
@@ -213,7 +218,7 @@
             const zone = card.querySelector('.graph-select-zone');
             if (zone) {
                 const isRoot = id === rootId || card.classList.contains('graph-root');
-                zone.textContent = isRoot ? '● מרכז נוכחי' : '◎ מרכז כאן';
+                setTextIfChanged(zone, isRoot ? '● מרכז נוכחי' : '◎ מרכז כאן');
             }
         });
 
@@ -240,8 +245,10 @@
         });
     }
 
+    // Watch only direct card replacement in cards-layer. Watching the whole subtree
+    // caused our own select-zone text/button mutations to trigger decorate() forever.
     const observer = new MutationObserver(() => queueDecorate());
-    observer.observe(cardsLayerEl, { childList: true, subtree: true });
+    observer.observe(cardsLayerEl, { childList: true });
 
     // Root changes update the ?person= URL. Wrap History after the persistence layer so
     // selection styling and spouse-context styling follow search and card clicks.
