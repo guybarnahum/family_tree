@@ -285,4 +285,14 @@
     });
 
     queueDecorate({ refreshGraph: true });
+
+    // Load responsive behavior after desktop interaction hooks are installed. The same
+    // build token cache-busts mobile changes on every deploy.
+    if (!document.querySelector('script[data-family-mobile]')) {
+        const mobile = document.createElement('script');
+        const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
+        mobile.src = `/mobile-refinement.js?v=${encodeURIComponent(build)}`;
+        mobile.dataset.familyMobile = 'true';
+        document.body.appendChild(mobile);
+    }
 })();
