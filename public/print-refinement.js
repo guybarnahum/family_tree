@@ -9,13 +9,17 @@
     const canvas = document.getElementById('canvas');
     const cardsLayer = document.getElementById('cards-layer');
     const svgLayer = document.getElementById('svg-layer');
+    const pageHeading = document.querySelector('h1');
     if (!controls || !canvas || !cardsLayer || !svgLayer) return;
 
     const PAGE_WIDTH = 11 * 96;
     const PAGE_HEIGHT = 8.5 * 96;
     const PAGE_MARGIN = 0.28 * 96;
+    const TITLE_HEIGHT = 44;
+    const TITLE_GAP = 12;
+    const TITLE_BLOCK = TITLE_HEIGHT + TITLE_GAP;
     const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
-    const CONTENT_HEIGHT = PAGE_HEIGHT - PAGE_MARGIN * 2;
+    const CONTENT_HEIGHT = PAGE_HEIGHT - PAGE_MARGIN * 2 - TITLE_BLOCK;
     const GRAPH_PADDING = 22;
     const EMPTY_FIELD_PLACEHOLDERS = new Set(['', 'שם', 'תאריכים', 'תיאור']);
 
@@ -62,6 +66,20 @@
                 -webkit-print-color-adjust: exact;
             }
 
+            .family-print-title {
+                position: absolute !important;
+                left: ${PAGE_MARGIN}px !important;
+                top: ${PAGE_MARGIN}px !important;
+                width: ${CONTENT_WIDTH}px !important;
+                height: ${TITLE_HEIGHT}px !important;
+                margin: 0 !important;
+                color: #344e41 !important;
+                font: 700 24px/${TITLE_HEIGHT}px Inter, Arial, sans-serif !important;
+                text-align: center !important;
+                direction: rtl !important;
+                white-space: nowrap !important;
+            }
+
             .family-print-graph {
                 position: absolute !important;
                 transform-origin: 0 0 !important;
@@ -104,6 +122,47 @@
         }
     `;
     document.head.appendChild(style);
+
+    function centerName() {
+        const rootCard = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
+        const nameField = rootCard?.querySelector('[data-field="name"]');
+        const value = nameField?.textContent?.trim() || '';
+        if (!value || nameField?.classList.contains('default-node-text') || EMPTY_FIELD_PLACEHOLDERS.has(value)) {
+            return '';
+        }
+        return value;
+    }
+
+    function familyTreeTitle() {
+        const name = centerName();
+        return name ? `עץ המשפחה של ${name}` : 'עץ המשפחה';
+    }
+
+    function syncOnlineTitle() {
+        const value = familyTreeTitle();
+        if (pageHeading && pageHeading.textContent !== value) pageHeading.textContent = value;
+        if (document.title !== value) document.title = value;
+    }
+
+    let titleSyncQueued = false;
+    function queueTitleSync() {
+        if (titleSyncQueued) return;
+        titleSyncQueued = true;
+        requestAnimationFrame(() => {
+            titleSyncQueued = false;
+            syncOnlineTitle();
+        });
+    }
+
+    const titleObserver = new MutationObserver(queueTitleSync);
+    titleObserver.observe(cardsLayer, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['class']
+    });
+    syncOnlineTitle();
 
     function addPrintButton() {
         let button = controls.querySelector('[data-tree-action="print"]');
@@ -232,11 +291,16 @@
         const renderedWidth = graphWidth * scale;
         const renderedHeight = graphHeight * scale;
         const left = PAGE_MARGIN + (CONTENT_WIDTH - renderedWidth) / 2;
-        const top = PAGE_MARGIN + (CONTENT_HEIGHT - renderedHeight) / 2;
+        const top = PAGE_MARGIN + TITLE_BLOCK + (CONTENT_HEIGHT - renderedHeight) / 2;
 
         const sheet = document.createElement('div');
         sheet.className = 'family-print-sheet';
         sheet.setAttribute('aria-hidden', 'true');
+
+        const title = document.createElement('h1');
+        title.className = 'family-print-title';
+        title.textContent = familyTreeTitle();
+        sheet.appendChild(title);
 
         const graph = document.createElement('div');
         graph.className = 'family-print-graph';
