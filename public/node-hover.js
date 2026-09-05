@@ -119,10 +119,10 @@
     });
     window.addEventListener('pagehide', persistCurrentRoot);
 
-    // Print controls depend on the title import/export strip, which is installed later in
-    // the injected script sequence. Load print-only geometry/style corrections alongside
-    // the print engine after the page is complete.
-    function loadPrintRefinement() {
+    // Late refinements depend on controls/layout layers injected after this script. Load
+    // them once the page is complete; the planar layer waits for multi-partner initialization
+    // before wrapping the final layout function.
+    function loadLateRefinements() {
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
 
         if (!document.querySelector('script[data-family-print-polish]')) {
@@ -140,8 +140,24 @@
             print.async = false;
             document.body.appendChild(print);
         }
+
+        if (!document.querySelector('script[data-family-planar-core]')) {
+            const core = document.createElement('script');
+            core.src = `/planar-core.js?v=${encodeURIComponent(build)}`;
+            core.dataset.familyPlanarCore = 'true';
+            core.async = false;
+            document.body.appendChild(core);
+        }
+
+        if (!document.querySelector('script[data-family-planar-layout]')) {
+            const planar = document.createElement('script');
+            planar.src = `/planar-layout.js?v=${encodeURIComponent(build)}`;
+            planar.dataset.familyPlanarLayout = 'true';
+            planar.async = false;
+            document.body.appendChild(planar);
+        }
     }
 
-    if (document.readyState === 'complete') loadPrintRefinement();
-    else window.addEventListener('load', loadPrintRefinement, { once: true });
+    if (document.readyState === 'complete') loadLateRefinements();
+    else window.addEventListener('load', loadLateRefinements, { once: true });
 })();
