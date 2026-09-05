@@ -17,6 +17,7 @@
     const CONTENT_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
     const CONTENT_HEIGHT = PAGE_HEIGHT - PAGE_MARGIN * 2;
     const GRAPH_PADDING = 22;
+    const EMPTY_FIELD_PLACEHOLDERS = new Set(['', 'שם', 'תאריכים', 'תיאור']);
 
     const style = document.createElement('style');
     style.textContent = `
@@ -177,6 +178,15 @@
         };
     }
 
+    function removeEmptyFields(clone) {
+        clone.querySelectorAll('[data-field]').forEach(element => {
+            const value = element.textContent.trim();
+            if (element.classList.contains('default-node-text') || EMPTY_FIELD_PLACEHOLDERS.has(value)) {
+                element.remove();
+            }
+        });
+    }
+
     function cloneCards(bounds, graph) {
         for (const original of cardsLayer.querySelectorAll('.absolute-card[data-node-id]')) {
             const clone = original.cloneNode(true);
@@ -184,6 +194,7 @@
             clone.querySelectorAll('[id]').forEach(element => element.removeAttribute('id'));
             clone.querySelectorAll('[contenteditable]').forEach(element => element.setAttribute('contenteditable', 'false'));
             clone.querySelectorAll('[data-action], .graph-frontier, .graph-select-zone').forEach(element => element.remove());
+            removeEmptyFields(clone);
 
             const left = Number.parseFloat(original.style.left);
             const top = Number.parseFloat(original.style.top);
