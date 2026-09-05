@@ -227,4 +227,14 @@
         const file = fileInput.files?.[0];
         if (file) importFile(file);
     });
+
+    // Load interaction-only behavior after the graph and persistence layers exist.
+    // The build token keeps the dynamically loaded asset in lock-step with the Worker.
+    if (!document.querySelector('script[data-family-interaction]')) {
+        const interaction = document.createElement('script');
+        const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
+        interaction.src = `/interaction-refinement.js?v=${encodeURIComponent(build)}`;
+        interaction.dataset.familyInteraction = 'true';
+        document.body.appendChild(interaction);
+    }
 })();
