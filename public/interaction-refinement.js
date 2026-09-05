@@ -88,6 +88,7 @@
 
     let graphCache = null;
     let graphFetchPromise = null;
+    let initialRelayoutDone = false;
 
     function currentRootId() {
         return new URL(window.location.href).searchParams.get('person') ||
@@ -215,6 +216,17 @@
                 zone.textContent = isRoot ? '● מרכז נוכחי' : '◎ מרכז כאן';
             }
         });
+
+        // The first time this script arrives, the original layout may already have
+        // measured the cards. Re-measure once so connector endpoints include the footer.
+        if (!initialRelayoutDone && cardsLayerEl.querySelector('.graph-select-zone')) {
+            initialRelayoutDone = true;
+            requestAnimationFrame(() => {
+                try { layoutAndRender(); } catch (error) {
+                    console.warn('Unable to re-measure selection zones:', error);
+                }
+            });
+        }
     }
 
     let decorateQueued = false;
