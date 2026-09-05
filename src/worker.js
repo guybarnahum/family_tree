@@ -228,14 +228,17 @@ async function handleAsset(request, env) {
   }
 
   const html = await assetResponse.text();
-  const refinementScripts = [
-    '<script src="/layout-refinement.js"></script>',
-    '<script src="/node-hover.js"></script>',
-    '<script src="/import-export.js"></script>'
+  const refinementScriptPaths = [
+    '/layout-refinement.js',
+    '/node-hover.js',
+    '/import-export.js'
   ];
 
-  const missingScripts = refinementScripts
-    .filter(scriptTag => !html.includes(scriptTag))
+  // Version the injected frontend URLs with the deployed Git SHA. This makes a browser
+  // request a new script URL after every deploy while still resolving the same asset.
+  const missingScripts = refinementScriptPaths
+    .filter(path => !html.includes(`src="${path}`))
+    .map(path => `<script src="${path}?v=${encodeURIComponent(build.short)}"></script>`)
     .join('\n');
 
   const buildMeta = `<meta name="family-tree-build" content="${escapeHtml(build.short)}">`;
