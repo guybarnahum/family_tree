@@ -1,9 +1,6 @@
 // Multi-partner relationship/layout extension.
-//
-// Ordinary single people and one-couple units intentionally keep the existing layout.
-// Only visible spouse components with 3+ people use the extended member ordering and
-// routed union geometry. Relationship edits go through family-graph v2 so adding another
-// spouse/parent never deletes an existing relationship.
+// Ordinary people and one-couple units intentionally retain the existing visual behavior.
+// Only visible spouse components with 3+ people activate the extended union layout.
 (() => {
     if (window.__familyMultiPartnerRefinement) return;
     window.__familyMultiPartnerRefinement = true;
@@ -22,29 +19,27 @@
     let childrenMap = new Map();
 
     const baseBuildFamilyUnits = buildFamilyUnits;
-    const basePositionMembers = positionMembers;
     const baseOrientCouples = orientCouples;
     const baseDrawSVGLines = drawSVGLines;
     const baseCreateCardHTML = createCardHTML;
     const baseLoadTree = loadTree;
 
-    function addMapSet(map, key, value) {
+    function addSet(map, key, value) {
         if (!map.has(key)) map.set(key, new Set());
         map.get(key).add(value);
     }
 
-    function rebuildRelationshipIndexes() {
+    function rebuildIndexes() {
         spouseMap = new Map();
         parentsMap = new Map();
         childrenMap = new Map();
-
         for (const relation of graphCache?.relationships || []) {
             if (relation.type === 'spouse') {
-                addMapSet(spouseMap, relation.person1Id, relation.person2Id);
-                addMapSet(spouseMap, relation.person2Id, relation.person1Id);
+                addSet(spouseMap, relation.person1Id, relation.person2Id);
+                addSet(spouseMap, relation.person2Id, relation.person1Id);
             } else if (relation.type === 'parent') {
-                addMapSet(parentsMap, relation.person2Id, relation.person1Id);
-                addMapSet(childrenMap, relation.person1Id, relation.person2Id);
+                addSet(parentsMap, relation.person2Id, relation.person1Id);
+                addSet(childrenMap, relation.person1Id, relation.person2Id);
             }
         }
     }
@@ -52,7 +47,6 @@
     async function loadGraphDocument(force = false) {
         if (graphCache && !force) return graphCache;
         if (graphFetchPromise && !force) return graphFetchPromise;
-
         graphFetchPromise = fetch('/api/graph', { cache: 'no-store' })
             .then(async response => {
                 if (!response.ok) throw new Error(await response.text());
@@ -60,35 +54,39 @@
             })
             .then(documentValue => {
                 graphCache = documentValue;
-                rebuildRelationshipIndexes();
+                rebuildIndexes();
                 return graphCache;
             })
             .finally(() => { graphFetchPromise = null; });
-
         return graphFetchPromise;
     }
 
     function currentRootId() {
-        return new URL(window.location.href).searchParams.get('person') ||
-            (() => {
-                try { return localStorage.getItem('family-tree.anchor-person'); }
-                catch (_) { return null; }
-            })();
+        return new URL(window.location.href).searchParams.get('person') || (() => {
+            try { return localStorage.getItem('family-tree.anchor-person'); }
+            catch (_) { return null; }
+        })();
     }
 
-    function visibleSpouseIds(personId) {
-        const result = new Set();
-        for (const spouseId of spouseMap.get(personId) || []) {
-            if (globalNodeMap.has(spouseId)) result.add(spouseId);
+    function spouseIds(personId, { visibleOnly = false } = {}) {
+        const result = [...(spouseMap.get(personId) || [])];
+        return visibleOnly ? result.filter(id => globalNodeMap.has(id)) : result;
+    }
+
+    // Preserve the existing legacy compatibility rule: when a child has exactly one
+    // explicit parent and that parent has exactly one spouse, treat that spouse as the
+    // second parent for projection/layout. Never infer a co-parent with multiple spouses.
+    function parentIds(personId, { visibleOnly = false } = {}) {
+        let explicit = [...(parentsMap.get(personId) || [])];
+        if (explicit.length === 1) {
+            const partners = spouseIds(explicit[0]);
+            if (partners.length === 1) explicit = [...explicit, partners[0]];
         }
-        return result;
-    }
-
-    function visibleParentIds(personId) {
-        const explicit = [...(parentsMap.get(personId) || [])].filter(id => globalNodeMap.has(id));
-        if (explicit.length) return explicit;
-        const legacy = globalNodeMap.get(personId)?.parent_id;
-        return legacy && globalNodeMap.has(legacy) ? [legacy] : [];
+        if (!explicit.length) {
+            const legacy = globalNodeMap.get(personId)?.parent_id;
+            if (legacy) explicit = [legacy];
+        }
+        return visibleOnly ? explicit.filter(id => globalNodeMap.has(id)) : explicit;
     }
 
     function spouseEdge(a, b) {
@@ -99,89 +97,78 @@
         return a < b ? `${a}|${b}` : `${b}|${a}`;
     }
 
-    function connectedSpouseComponent(seedId, available) {
-        const component = [];
+    function spouseComponent(seedId, available) {
         const queue = [seedId];
         const walked = new Set();
-
+        const ids = [];
         while (queue.length) {
             const id = queue.shift();
             if (walked.has(id) || !available.has(id)) continue;
             walked.add(id);
-            component.push(id);
-            for (const spouseId of visibleSpouseIds(id)) {
-                if (!walked.has(spouseId) && available.has(spouseId)) queue.push(spouseId);
+            ids.push(id);
+            for (const spouseId of spouseIds(id, { visibleOnly: true })) {
+                if (!walked.has(spouseId)) queue.push(spouseId);
             }
         }
-        return component;
+        return ids;
     }
 
-    function childCenterHint(personId) {
-        const centers = [...(childrenMap.get(personId) || [])]
+    function childHint(personId) {
+        const values = [...(childrenMap.get(personId) || [])]
             .map(id => globalNodeMap.get(id))
-            .filter(node => node && Number.isFinite(node.x))
+            .filter(node => Number.isFinite(node?.x))
             .map(node => node.x);
-        return centers.length ? average(centers) : null;
+        return values.length ? average(values) : null;
     }
 
-    function chooseHub(component) {
+    function chooseHub(ids) {
         const rootId = currentRootId();
-        return [...component].sort((a, b) => {
-            const score = id => {
-                const degree = [...visibleSpouseIds(id)].filter(other => component.includes(other)).length;
-                return (id === rootId ? 10000 : 0) + degree * 100;
-            };
+        return [...ids].sort((a, b) => {
+            const score = id =>
+                (id === rootId ? 10000 : 0) +
+                spouseIds(id, { visibleOnly: true }).filter(other => ids.includes(other)).length * 100;
             return score(b) - score(a) || a.localeCompare(b);
         })[0];
     }
 
-    function orderMultiMembers(component) {
-        if (component.length <= 2) {
-            return component
-                .map(id => globalNodeMap.get(id))
-                .filter(Boolean)
+    function orderMembers(ids) {
+        if (ids.length <= 2) {
+            return ids.map(id => globalNodeMap.get(id)).filter(Boolean)
                 .sort((a, b) => a.id.localeCompare(b.id));
         }
 
-        const hubId = chooseHub(component);
+        const hubId = chooseHub(ids);
         const hub = globalNodeMap.get(hubId);
-        const partners = component
-            .filter(id => id !== hubId)
-            .map(id => globalNodeMap.get(id))
-            .filter(Boolean)
+        const partners = ids.filter(id => id !== hubId)
+            .map(id => globalNodeMap.get(id)).filter(Boolean)
             .sort((a, b) => {
-                const ax = childCenterHint(a.id);
-                const bx = childCenterHint(b.id);
+                const ax = childHint(a.id);
+                const bx = childHint(b.id);
                 if (Number.isFinite(ax) && Number.isFinite(bx) && Math.abs(ax - bx) > 1) return ax - bx;
                 return a.id.localeCompare(b.id);
             });
 
         const left = [];
         const right = [];
-        partners.forEach((partner, index) => {
-            if (index % 2 === 0) left.push(partner);
-            else right.push(partner);
-        });
-
+        partners.forEach((partner, index) => (index % 2 === 0 ? left : right).push(partner));
         return [...left.reverse(), hub, ...right];
     }
 
-    function gapBetween(a, b) {
+    function memberGap(a, b) {
         return spouseEdge(a.id, b.id) ? SPOUSE_EDGE_GAP : EXTRA_MEMBER_GAP;
     }
 
-    function computeUnitGeometry(unit) {
+    function sizeUnit(unit) {
         unit.memberGaps = [];
-        let width = 0;
+        unit.width = 0;
         unit.members.forEach((member, index) => {
-            width += member.cardWidth;
+            unit.width += member.cardWidth;
             if (index < unit.members.length - 1) {
-                const gap = gapBetween(member, unit.members[index + 1]);
+                const gap = memberGap(member, unit.members[index + 1]);
                 unit.memberGaps.push(gap);
-                width += gap;
+                unit.width += gap;
             }
         });
-        unit.width = width;
         unit.height = Math.max(...unit.members.map(member => member.cardHeight));
     }
 
@@ -192,21 +179,14 @@
         unitByNodeId = new Map();
         const available = new Set(globalNodes.map(node => node.id));
         const claimed = new Set();
-        const sortedIds = [...available].sort((a, b) => a.localeCompare(b));
 
-        for (const seedId of sortedIds) {
+        for (const seedId of [...available].sort((a, b) => a.localeCompare(b))) {
             if (claimed.has(seedId)) continue;
-
-            const component = connectedSpouseComponent(seedId, available);
-            const memberIds = component.length ? component : [seedId];
-            memberIds.forEach(id => claimed.add(id));
-
-            let members = orderMultiMembers(memberIds);
-            if (!members.length) {
-                const node = globalNodeMap.get(seedId);
-                if (!node) continue;
-                members = [node];
-            }
+            const component = spouseComponent(seedId, available);
+            const ids = component.length ? component : [seedId];
+            ids.forEach(id => claimed.add(id));
+            const members = orderMembers(ids);
+            if (!members.length) continue;
 
             const unit = {
                 id: members.map(member => member.id).sort().join('::'),
@@ -221,15 +201,14 @@
                 multiPartner: members.length > 2,
                 memberGaps: []
             };
-
-            computeUnitGeometry(unit);
+            sizeUnit(unit);
             globalUnits.push(unit);
             members.forEach(member => unitByNodeId.set(member.id, unit));
         }
 
         for (const unit of globalUnits) {
             for (const member of unit.members) {
-                for (const parentId of visibleParentIds(member.id)) {
+                for (const parentId of parentIds(member.id, { visibleOnly: true })) {
                     const parentUnit = unitByNodeId.get(parentId);
                     if (parentUnit && parentUnit !== unit) {
                         unit.parents.add(parentUnit);
@@ -241,7 +220,6 @@
     };
 
     positionMembers = function relationshipAwarePositionMembers() {
-        // Preserve the exact old orientation rule for ordinary two-person couples.
         try { baseOrientCouples(); } catch (_) {}
 
         for (const unit of globalUnits) {
@@ -249,7 +227,6 @@
                 unit.members[0].x = unit.centerX;
                 continue;
             }
-
             if (unit.members.length === 2 && !unit.multiPartner) {
                 const [left, right] = unit.members;
                 left.x = unit.centerX - (SPOUSE_EDGE_GAP / 2 + left.cardWidth / 2);
@@ -258,7 +235,7 @@
                 continue;
             }
 
-            computeUnitGeometry(unit);
+            sizeUnit(unit);
             let cursor = unit.centerX - unit.width / 2;
             unit.members.forEach((member, index) => {
                 member.x = cursor + member.cardWidth / 2;
@@ -268,99 +245,79 @@
         }
     };
 
-    function generationLineY(unit) {
+    function generationY(unit) {
         if (Number.isFinite(unit?.generationCenterY)) return unit.generationCenterY;
         const member = unit?.members?.[0];
         return member ? member.targetY + member.cardHeight / 2 : 0;
     }
 
-    function cardLeft(node) { return node.x - node.cardWidth / 2; }
-    function cardRight(node) { return node.x + node.cardWidth / 2; }
-    function cardTop(node) { return node.targetY; }
-    function cardBottom(node) { return node.targetY + node.cardHeight; }
+    const leftEdge = node => node.x - node.cardWidth / 2;
+    const rightEdge = node => node.x + node.cardWidth / 2;
+    const topEdge = node => node.targetY;
+    const bottomEdge = node => node.targetY + node.cardHeight;
 
-    function orderedPairNodes(a, b) {
-        return a.x <= b.x ? [a, b] : [b, a];
-    }
-
-    function multiRelationshipGeometry(unit) {
+    function unionGeometry(unit) {
         const result = new Map();
-        const centerY = generationLineY(unit);
-        const indexById = new Map(unit.members.map((member, index) => [member.id, index]));
+        const centerY = generationY(unit);
+        const index = new Map(unit.members.map((member, i) => [member.id, i]));
         const pairs = [];
 
         for (const member of unit.members) {
-            for (const spouseId of visibleSpouseIds(member.id)) {
+            for (const spouseId of spouseIds(member.id, { visibleOnly: true })) {
                 const spouse = globalNodeMap.get(spouseId);
                 if (!spouse || unitByNodeId.get(spouseId) !== unit || member.id >= spouseId) continue;
                 pairs.push([member, spouse]);
             }
         }
 
-        const routed = pairs
-            .filter(([a, b]) => Math.abs(indexById.get(a.id) - indexById.get(b.id)) > 1)
-            .sort((left, right) => {
-                const ld = Math.abs(indexById.get(left[0].id) - indexById.get(left[1].id));
-                const rd = Math.abs(indexById.get(right[0].id) - indexById.get(right[1].id));
-                return ld - rd || pairKey(left[0].id, left[1].id).localeCompare(pairKey(right[0].id, right[1].id));
-            });
-        const laneIndex = new Map(routed.map((pair, index) => [pairKey(pair[0].id, pair[1].id), index]));
-        const maxBottom = Math.max(...unit.members.map(cardBottom));
+        const routed = pairs.filter(([a, b]) => Math.abs(index.get(a.id) - index.get(b.id)) > 1)
+            .sort((a, b) => pairKey(a[0].id, a[1].id).localeCompare(pairKey(b[0].id, b[1].id)));
+        const laneByPair = new Map(routed.map((pair, i) => [pairKey(pair[0].id, pair[1].id), i]));
+        const maxBottom = Math.max(...unit.members.map(bottomEdge));
 
         for (const [a, b] of pairs) {
-            const [left, right] = orderedPairNodes(a, b);
+            const left = a.x <= b.x ? a : b;
+            const right = left === a ? b : a;
             const key = pairKey(a.id, b.id);
-            const adjacent = Math.abs(indexById.get(a.id) - indexById.get(b.id)) === 1;
+            const adjacent = Math.abs(index.get(a.id) - index.get(b.id)) === 1;
 
             if (adjacent) {
-                const x1 = cardRight(left);
-                const x2 = cardLeft(right);
+                const x1 = rightEdge(left);
+                const x2 = leftEdge(right);
                 result.set(key, {
                     path: `M ${x1} ${centerY} L ${x2} ${centerY}`,
-                    anchorX: (x1 + x2) / 2,
-                    anchorY: centerY,
+                    x: (x1 + x2) / 2,
+                    y: centerY,
                     width: 2.5
                 });
                 continue;
             }
 
-            const lane = laneIndex.get(key) || 0;
-            const laneY = maxBottom + UNION_LANE_CLEARANCE + lane * UNION_LANE_STEP;
-            const exitsRight = left.id === a.id ? cardRight(left) : cardRight(left);
-            const entersLeft = cardLeft(right);
-            const startX = exitsRight;
-            const endX = entersLeft;
-            const horizontalInset = Math.min(14, Math.max(8, (endX - startX) * 0.08));
-            const anchorX = (startX + endX) / 2;
-
+            const laneY = maxBottom + UNION_LANE_CLEARANCE + (laneByPair.get(key) || 0) * UNION_LANE_STEP;
+            const x1 = rightEdge(left);
+            const x2 = leftEdge(right);
+            const inset = Math.min(14, Math.max(8, (x2 - x1) * 0.08));
             result.set(key, {
                 path: roundedOrthogonalPath([
-                    [startX, centerY],
-                    [startX + horizontalInset, centerY],
-                    [startX + horizontalInset, laneY],
-                    [endX - horizontalInset, laneY],
-                    [endX - horizontalInset, centerY],
-                    [endX, centerY]
+                    [x1, centerY], [x1 + inset, centerY], [x1 + inset, laneY],
+                    [x2 - inset, laneY], [x2 - inset, centerY], [x2, centerY]
                 ], CONNECTOR_KNEE_RADIUS),
-                anchorX,
-                anchorY: laneY,
+                x: (x1 + x2) / 2,
+                y: laneY,
                 width: 2.3
             });
         }
-
         return result;
     }
 
-    function explicitVisibleParents(child) {
-        const ids = visibleParentIds(child.id);
-        return ids.map(id => globalNodeMap.get(id)).filter(Boolean);
+    function visibleParents(child) {
+        return parentIds(child.id, { visibleOnly: true })
+            .map(id => globalNodeMap.get(id)).filter(Boolean);
     }
 
-    function parentPairForChild(child, unit) {
-        const parents = explicitVisibleParents(child)
-            .filter(parent => unitByNodeId.get(parent.id) === unit);
+    function childParentPair(child, unit) {
+        const parents = visibleParents(child).filter(parent => unitByNodeId.get(parent.id) === unit);
         if (parents.length < 2) return null;
-
         for (let i = 0; i < parents.length; i++) {
             for (let j = i + 1; j < parents.length; j++) {
                 if (spouseEdge(parents[i].id, parents[j].id)) return [parents[i], parents[j]];
@@ -369,81 +326,59 @@
         return [parents[0], parents[1]];
     }
 
-    function childSourceFor(unit, child, unionGeometry) {
-        const pair = parentPairForChild(child, unit);
+    function childSource(unit, child, geometry) {
+        const pair = childParentPair(child, unit);
         if (pair) {
-            const geometry = unionGeometry.get(pairKey(pair[0].id, pair[1].id));
-            if (geometry) return { x: geometry.anchorX, y: geometry.anchorY };
-            return { x: average(pair.map(parent => parent.x)), y: generationLineY(unit) };
+            const union = geometry.get(pairKey(pair[0].id, pair[1].id));
+            if (union) return { x: union.x, y: union.y };
+            return { x: average(pair.map(parent => parent.x)), y: generationY(unit) };
         }
 
-        const parent = explicitVisibleParents(child)
-            .find(candidate => unitByNodeId.get(candidate.id) === unit);
-        if (parent) return { x: parent.x, y: cardBottom(parent) };
-
-        if (unit.members.length === 2) return { x: unit.centerX, y: generationLineY(unit) };
-        const fallback = unit.members[0];
-        return { x: fallback.x, y: cardBottom(fallback) };
+        const parent = visibleParents(child).find(candidate => unitByNodeId.get(candidate.id) === unit);
+        if (parent) return { x: parent.x, y: bottomEdge(parent) };
+        if (unit.members.length === 2) return { x: unit.centerX, y: generationY(unit) };
+        return { x: unit.members[0].x, y: bottomEdge(unit.members[0]) };
     }
 
     drawSVGLines = function relationshipAwareDrawSVGLines() {
         if (!graphCache) return baseDrawSVGLines();
 
-        let svgHTML = '';
+        let svg = '';
         const geometryByUnit = new Map();
+        for (const unit of globalUnits) {
+            const geometry = unionGeometry(unit);
+            geometryByUnit.set(unit, geometry);
+            for (const union of geometry.values()) svg += svgPath(union.path, union.width);
+        }
 
         for (const unit of globalUnits) {
-            const geometry = multiRelationshipGeometry(unit);
-            geometryByUnit.set(unit, geometry);
-            for (const relation of geometry.values()) {
-                svgHTML += svgPath(relation.path, relation.width);
+            const children = globalNodes.filter(child =>
+                child.gen === unit.gen + 1 &&
+                visibleParents(child).some(parent => unitByNodeId.get(parent.id) === unit)
+            ).sort((a, b) => a.x - b.x);
+
+            const geometry = geometryByUnit.get(unit) || new Map();
+            for (const child of children) {
+                const source = childSource(unit, child, geometry);
+                const targetX = child.x;
+                const targetY = topEdge(child);
+                const midY = source.y + Math.max(48, (targetY - source.y) * 0.52);
+                svg += Math.abs(targetX - source.x) < 0.5
+                    ? svgPath(`M ${source.x} ${source.y} L ${targetX} ${targetY}`)
+                    : svgPath(roundedOrthogonalPath([
+                        [source.x, source.y], [source.x, midY],
+                        [targetX, midY], [targetX, targetY]
+                    ], CONNECTOR_KNEE_RADIUS));
             }
         }
-
-        for (const unit of globalUnits) {
-            const childNodes = globalNodes
-                .filter(child => {
-                    if (child.gen !== unit.gen + 1) return false;
-                    return explicitVisibleParents(child)
-                        .some(parent => unitByNodeId.get(parent.id) === unit);
-                })
-                .sort((a, b) => a.x - b.x);
-
-            if (!childNodes.length) continue;
-            const unionGeometry = geometryByUnit.get(unit) || new Map();
-
-            childNodes.forEach(child => {
-                const source = childSourceFor(unit, child, unionGeometry);
-                const childX = child.x;
-                const childY = cardTop(child);
-                const midY = source.y + Math.max(48, (childY - source.y) * 0.52);
-
-                if (Math.abs(childX - source.x) < 0.5) {
-                    svgHTML += svgPath(`M ${source.x} ${source.y} L ${childX} ${childY}`);
-                } else {
-                    svgHTML += svgPath(roundedOrthogonalPath([
-                        [source.x, source.y],
-                        [source.x, midY],
-                        [childX, midY],
-                        [childX, childY]
-                    ], CONNECTOR_KNEE_RADIUS));
-                }
-            });
-        }
-
-        svgLayer.innerHTML = svgHTML;
+        svgLayer.innerHTML = svg;
     };
 
-    // The spouse control is an affordance, not a status indicator. Keep it available even
-    // when one or more spouse relationships already exist.
+    // The spouse pill is always an available action, never a status indicator.
     createCardHTML = function relationshipAwareCreateCardHTML(node) {
         let html = baseCreateCardHTML(node);
         const label = '+ הוסף בן/בת זוג';
-
-        if (html.includes('data-action="add-spouse"')) {
-            html = html.replace('♥ זוג', label);
-            return html;
-        }
+        if (html.includes('data-action="add-spouse"')) return html.replace('♥ זוג', label);
 
         const id = escapeHTML(node.id);
         const button = `
@@ -464,42 +399,21 @@
         await loadGraphDocument(true);
     }
 
-    async function addGraphRelationship(type, person1Id, person2Id) {
-        const documentValue = await loadGraphDocument(true);
-        const exists = (documentValue.relationships || []).some(relation => {
-            if (relation.type !== type) return false;
-            if (type === 'spouse') {
-                return (relation.person1Id === person1Id && relation.person2Id === person2Id) ||
-                    (relation.person1Id === person2Id && relation.person2Id === person1Id);
-            }
-            return relation.person1Id === person1Id && relation.person2Id === person2Id;
-        });
-        if (exists) return;
-
-        documentValue.relationships = [...(documentValue.relationships || []), {
-            type,
-            person1Id,
-            person2Id
-        }];
-        await putGraph(documentValue);
+    function sameRelationship(a, b) {
+        if (a.type !== b.type) return false;
+        if (a.type === 'spouse') {
+            return (a.person1Id === b.person1Id && a.person2Id === b.person2Id) ||
+                (a.person1Id === b.person2Id && a.person2Id === b.person1Id);
+        }
+        return a.person1Id === b.person1Id && a.person2Id === b.person2Id;
     }
 
-    async function addGraphRelationships(relations) {
+    async function addRelationships(relations) {
         const documentValue = await loadGraphDocument(true);
         const next = [...(documentValue.relationships || [])];
-
         for (const relation of relations) {
-            const exists = next.some(existing => {
-                if (existing.type !== relation.type) return false;
-                if (relation.type === 'spouse') {
-                    return (existing.person1Id === relation.person1Id && existing.person2Id === relation.person2Id) ||
-                        (existing.person1Id === relation.person2Id && existing.person2Id === relation.person1Id);
-                }
-                return existing.person1Id === relation.person1Id && existing.person2Id === relation.person2Id;
-            });
-            if (!exists) next.push(relation);
+            if (!next.some(existing => sameRelationship(existing, relation))) next.push(relation);
         }
-
         documentValue.relationships = next;
         await putGraph(documentValue);
     }
@@ -507,20 +421,17 @@
     addSpouse = async function relationshipAwareAddSpouse(partnerId) {
         const spouseId = 'node_' + Math.random().toString(36).slice(2, 11);
         showStatus('מוסיף בן/בת זוג...');
-
         try {
-            const postResponse = await fetch('/api/nodes', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+            const response = await fetch('/api/nodes', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: spouseId })
             });
-            if (!postResponse.ok) throw new Error(await postResponse.text());
-
-            await addGraphRelationship('spouse', partnerId, spouseId);
+            if (!response.ok) throw new Error(await response.text());
+            await addRelationships([{ type: 'spouse', person1Id: partnerId, person2Id: spouseId }]);
             await loadTree(partnerId, true);
             showStatus('נשמר בהצלחה');
         } catch (error) {
-            console.error('Unable to add spouse relationship:', error);
+            console.error('Unable to add spouse:', error);
             showStatus('שגיאה בהוספה');
         }
     };
@@ -528,20 +439,17 @@
     addParent = async function relationshipAwareAddParent(childId) {
         const parentId = 'node_' + Math.random().toString(36).slice(2, 11);
         showStatus('מוסיף הורה...');
-
         try {
-            const postResponse = await fetch('/api/nodes', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+            const response = await fetch('/api/nodes', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: parentId })
             });
-            if (!postResponse.ok) throw new Error(await postResponse.text());
-
-            await addGraphRelationship('parent', parentId, childId);
+            if (!response.ok) throw new Error(await response.text());
+            await addRelationships([{ type: 'parent', person1Id: parentId, person2Id: childId }]);
             await loadTree(childId, true);
             showStatus('נשמר בהצלחה');
         } catch (error) {
-            console.error('Unable to add parent relationship:', error);
+            console.error('Unable to add parent:', error);
             showStatus('שגיאה בהוספה');
         }
     };
@@ -549,42 +457,28 @@
     addChild = async function relationshipAwareAddChild(parentId) {
         const childId = 'node_' + Math.random().toString(36).slice(2, 11);
         showStatus('מוסיף ילד...');
-
         try {
-            const postResponse = await fetch('/api/nodes', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+            const response = await fetch('/api/nodes', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: childId })
             });
-            if (!postResponse.ok) throw new Error(await postResponse.text());
+            if (!response.ok) throw new Error(await response.text());
 
-            const documentValue = await loadGraphDocument(true);
-            const partnerIds = new Set();
-            for (const relation of documentValue.relationships || []) {
-                if (relation.type !== 'spouse') continue;
-                if (relation.person1Id === parentId) partnerIds.add(relation.person2Id);
-                if (relation.person2Id === parentId) partnerIds.add(relation.person1Id);
-            }
-
+            await loadGraphDocument(true);
+            const partners = spouseIds(parentId);
             const relations = [{ type: 'parent', person1Id: parentId, person2Id: childId }];
-            if (partnerIds.size === 1) {
-                relations.push({
-                    type: 'parent',
-                    person1Id: [...partnerIds][0],
-                    person2Id: childId
-                });
+            if (partners.length === 1) {
+                relations.push({ type: 'parent', person1Id: partners[0], person2Id: childId });
             }
-
-            await addGraphRelationships(relations);
+            await addRelationships(relations);
             await loadTree(parentId, true);
             showStatus('נשמר בהצלחה');
         } catch (error) {
-            console.error('Unable to add child relationship:', error);
+            console.error('Unable to add child:', error);
             showStatus('שגיאה בהוספה');
         }
     };
 
-    // Ensure graph-aware layout data stays current after imports, deletes, or remote edits.
     loadTree = async function relationshipAwareLoadTree(...args) {
         try { await loadGraphDocument(true); }
         catch (error) { console.warn('Unable to refresh relationship graph:', error); }
@@ -592,18 +486,12 @@
     };
 
     const style = document.createElement('style');
-    style.textContent = `
-        .absolute-card [data-action="add-spouse"] {
-            white-space: nowrap;
-        }
-    `;
+    style.textContent = `.absolute-card [data-action="add-spouse"] { white-space: nowrap; }`;
     document.head.appendChild(style);
 
-    loadGraphDocument(true)
-        .then(() => {
-            if (!globalNodes?.length) return;
-            renderCards();
-            requestAnimationFrame(() => layoutAndRender());
-        })
-        .catch(error => console.warn('Unable to initialize multi-partner layout:', error));
+    loadGraphDocument(true).then(() => {
+        if (!globalNodes?.length) return;
+        renderCards();
+        requestAnimationFrame(() => layoutAndRender());
+    }).catch(error => console.warn('Unable to initialize multi-partner layout:', error));
 })();
