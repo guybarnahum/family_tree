@@ -118,6 +118,7 @@
         const CARD_FALLBACK_HEIGHT = 100;
         const ORDER_SWEEPS = 8;
         const POSITION_SWEEPS = 10;
+        const CONNECTOR_KNEE_RADIUS = 10;
 
         const viewport = document.getElementById('scroll-viewport');
         const canvas = document.getElementById('canvas');
@@ -719,6 +720,49 @@
             return `<path d="${d}" stroke="#a3b18a" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round" fill="none" />`;
         }
 
+        function roundedOrthogonalPath(points, radius = CONNECTOR_KNEE_RADIUS) {
+            if (!points?.length) return '';
+            if (points.length === 1) return `M ${points[0][0]} ${points[0][1]}`;
+
+            let d = `M ${points[0][0]} ${points[0][1]}`;
+            for (let i = 1; i < points.length; i++) {
+                const [x0, y0] = points[i - 1];
+                const [x1, y1] = points[i];
+
+                if (i === points.length - 1) {
+                    d += ` L ${x1} ${y1}`;
+                    continue;
+                }
+
+                const [x2, y2] = points[i + 1];
+                const firstHorizontal = Math.abs(y1 - y0) < 0.5;
+                const firstVertical = Math.abs(x1 - x0) < 0.5;
+                const secondHorizontal = Math.abs(y2 - y1) < 0.5;
+                const secondVertical = Math.abs(x2 - x1) < 0.5;
+                const isElbow =
+                    (firstHorizontal && secondVertical) ||
+                    (firstVertical && secondHorizontal);
+
+                if (!isElbow) {
+                    d += ` L ${x1} ${y1}`;
+                    continue;
+                }
+
+                const segment1 = Math.hypot(x1 - x0, y1 - y0);
+                const segment2 = Math.hypot(x2 - x1, y2 - y1);
+                const r = Math.min(radius, segment1 / 2, segment2 / 2);
+
+                const dx1 = Math.sign(x1 - x0);
+                const dy1 = Math.sign(y1 - y0);
+                const dx2 = Math.sign(x2 - x1);
+                const dy2 = Math.sign(y2 - y1);
+
+                d += ` L ${x1 - dx1 * r} ${y1 - dy1 * r}`;
+                d += ` Q ${x1} ${y1} ${x1 + dx2 * r} ${y1 + dy2 * r}`;
+            }
+            return d;
+        }
+
         function drawSVGLines() {
             let svgHTML = '';
 
@@ -764,10 +808,21 @@
                 const minX = Math.min(startX, ...childXs);
                 const maxX = Math.max(startX, ...childXs);
 
-                svgHTML += svgPath(`M ${startX} ${startY} L ${startX} ${midY}`);
-                if (maxX > minX) svgHTML += svgPath(`M ${minX} ${midY} L ${maxX} ${midY}`);
+                // Draw each parent→child route as one orthogonal path with softly rounded
+                // knees. Shared trunk/bus segments overlap exactly, preserving the familiar
+                // family-tree structure without hard 90-degree elbows.
                 childNodes.forEach(child => {
-                    svgHTML += svgPath(`M ${child.x} ${midY} L ${child.x} ${child.targetY}`);
+                    if (Math.abs(child.x - startX) < 0.5) {
+                        svgHTML += svgPath(`M ${startX} ${startY} L ${child.x} ${child.targetY}`);
+                        return;
+                    }
+
+                    svgHTML += svgPath(roundedOrthogonalPath([
+                        [startX, startY],
+                        [startX, midY],
+                        [child.x, midY],
+                        [child.x, child.targetY]
+                    ]));
                 });
             }
 
