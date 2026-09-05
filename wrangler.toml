@@ -1,0 +1,14 @@
+name = "family-tree-app"
+main = "src/worker.js"
+compatibility_date = "2024-03-20"
+
+# Modern native static asset hosting
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "family_tree_db"
+database_id = "c4788911-1449-441b-bb6b-515ef9d08026"
+

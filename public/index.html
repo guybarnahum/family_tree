@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>עץ משפחה</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@300;400;700;900&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { script: ['"Frank Ruhl Libre"', 'serif'], sans: ['Inter', 'sans-serif'] },
+                    colors: { parchment: '#fdfbf7', leaf: { light: '#a3b18a', DEFAULT: '#588157', dark: '#344e41' } }
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        html, body { overflow: hidden; width: 100vw; height: 100vh; background-color: #fdfbf7; margin: 0; }
+        [contenteditable="true"] { transition: all 0.2s ease; outline: none; }
+        
+        #scroll-viewport { width: 100vw; height: 100vh; overflow: auto; cursor: grab; position: relative; }
+        #scroll-viewport:active { cursor: grabbing; }
+        
+        #canvas { position: relative; min-width: 100vw; min-height: 100vh; width: max-content; height: max-content; padding: 250px; }
+        
+        /* Cards are positioned directly by their mathematical center */
+        .absolute-card { 
+            position: absolute; 
+            transform: translateX(50%); /* RTL correction for -50% */
+            transition: left 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), top 0.6s ease-out; 
+        }
+        
+        .sync-status { position: fixed; bottom: 10px; left: 10px; font-size: 0.8rem; color: #888; transition: opacity 0.3s; z-index: 50; }
+    </style>
+</head>
+<body class="text-gray-800 font-sans antialiased selection:bg-leaf-light selection:text-white">
+    
+    <div class="fixed top-0 left-0 w-full p-4 pointer-events-none z-50 flex justify-between items-start">
+        <div class="pointer-events-auto bg-white/80 backdrop-blur px-5 py-3 rounded-lg shadow-sm border border-leaf-light/30">
+            <h1 class="font-script text-3xl text-leaf-dark mb-0.5">עץ המשפחה שלנו</h1>
+            <p class="text-gray-500 font-light tracking-widest text-[9px]">דורות של אהבה • גרור כדי לנווט</p>
+        </div>
+    </div>
+    
+    <div id="status" class="sync-status opacity-0 bg-white/90 px-3 py-1 rounded shadow">נשמר...</div>
+
+    <div id="scroll-viewport">
+        <div id="canvas">
+            <svg id="svg-layer" class="absolute top-0 left-0 w-full h-full pointer-events-none z-0"></svg>
+            <div id="cards-layer" class="absolute top-0 left-0 w-full h-full pointer-events-none z-10"></div>
+        </div>
+    </div>
+
+    <script>
+        let isEditing = false;
+        let globalNodes = [];
+        let globalNodeMap = new Map();
+        
+        const Y_SPACING = 240; 
+        const SPOUSE_GAP = 240; // Fixed pixels center-to-center for married couples
+        const MIN_NODE_GAP = 320; // Absolute minimum clearance between unrelated branches
+
+        // Drag to Pan
+        const viewport = document.getElementById('scroll-viewport');
+        let isDragging = false, startX, startY, scrollLeft, scrollTop;
+        viewport.addEventListener('mousedown', (e) => {
+            if (e.target.closest('.absolute-card')) return;
+            isDragging = true;
+            startX = e.pageX - viewport.offsetLeft;
+            startY = e.pageY - viewport.offsetTop;
+            scrollLeft = viewport.scrollLeft;
+            scrollTop = viewport.scrollTop;
+        });
+        window.addEventListener('mouseup', () => isDragging = false);
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            e.preventDefault();
+            viewport.scrollLeft = scrollLeft - ((e.pageX - viewport.offsetLeft) - startX);
+            viewport.scrollTop = scrollTop - ((e.pageY - viewport.offsetTop) - startY);
+        });
+
+        async function loadTree() {
+            try {
+                const res = await fetch('/api/nodes');
+                if (!res.ok) throw new Error(await res.text());
+                globalNodes = await res.json();
+                
+                globalNodes.forEach(n => {
+                    if (n.parent_id === 'null' || n.parent_id === 'undefined') n.parent_id = null;
+                    if (n.spouse_id === 'null' || n.spouse_id === 'undefined') n.spouse_id = null;
+                });
+                
+                globalNodeMap = new Map(globalNodes.map(n => [n.id, n]));
+                
+                calculatePhysicsLayout();
+                
+                requestAnimationFrame(() => {
+                    syncAbsoluteCards();
+                    drawSVGLines();
+                });
+            } catch (err) { console.error(err); }
+        }
+
+        // Iterative Constraint Solver (Force-Directed Engine)
+        function calculatePhysicsLayout() {
+            if (globalNodes.length === 0) return;
+
+            // 1. Calculate strict Y-axis generations
+            const gens = new Map();
+            const processing = new Set();
+            
+            function assignGen(id, gen) {
+                if (gens.has(id) || processing.has(id)) return;
+                processing.add(id);
+                gens.set(id, gen);
+                
+                const n = globalNodeMap.get(id);
+                if (!n) return;
+                
+                if (n.parent_id) assignGen(n.parent_id, gen - 1);
+                if (n.spouse_id) assignGen(n.spouse_id, gen);
+                globalNodes.forEach(child => {
+                    if (child.parent_id === id || child.parent_id === n.spouse_id) assignGen(child.id, gen + 1);
+                });
+                processing.delete(id);
+            }
+            
+            globalNodes.forEach(n => { if (!gens.has(n.id)) assignGen(n.id, 0); });
+            const minGen = Math.min(...Array.from(gens.values()));
+            
+            let genMap = {};
+            globalNodes.forEach(n => {
+                n.gen = gens.get(n.id) - minGen;
+                n.targetY = (n.gen * Y_SPACING) + 200;
+                
+                if (!genMap[n.gen]) genMap[n.gen] = [];
+                genMap[n.gen].push(n);
+            });
+
+            // 2. Initialize rough X coordinates
+            Object.values(genMap).forEach(nodes => {
+                nodes.sort((a, b) => a.id.localeCompare(b.id)); // Stable sort
+                nodes.forEach((n, i) => n.x = i * MIN_NODE_GAP);
+            });
+
+            // 3. Mathematical Relaxation Loop (200 Iterations)
+            for (let iter = 0; iter < 200; iter++) {
+                
+                // Attraction: Pull children and parents into straight vertical alignment
+                globalNodes.forEach(c => {
+                    if (c.parent_id) {
+                        const p1 = globalNodeMap.get(c.parent_id);
+                        if (p1) {
+                            let pX = p1.x;
+                            if (p1.spouse_id) {
+                                const p2 = globalNodeMap.get(p1.spouse_id);
+                                if (p2) pX = (p1.x + p2.x) / 2;
+                            }
+                            const dx = pX - c.x;
+                            c.x += dx * 0.05;
+                            p1.x -= dx * 0.05;
+                            if (p1.spouse_id) {
+                                const p2 = globalNodeMap.get(p1.spouse_id);
+                                if(p2) p2.x -= dx * 0.05;
+                            }
+                        }
+                    }
+                });
+
+                // Constraint: Lock married couples to an exact distance
+                globalNodes.forEach(n => {
+                    if (n.spouse_id && n.id < n.spouse_id) {
+                        const spouse = globalNodeMap.get(n.spouse_id);
+                        if (spouse) {
+                            const cx = (n.x + spouse.x) / 2;
+                            n.x = cx - (SPOUSE_GAP / 2);
+                            spouse.x = cx + (SPOUSE_GAP / 2);
+                        }
+                    }
+                });
+
+                // Repulsion: Sweep each generation and physically push overlapping bounds apart
+                Object.values(genMap).forEach(nodes => {
+                    nodes.sort((a, b) => a.x - b.x);
+                    for (let i = 0; i < nodes.length - 1; i++) {
+                        const left = nodes[i];
+                        const right = nodes[i+1];
+                        
+                        const isSpouse = left.spouse_id === right.id || right.spouse_id === left.id;
+                        const requiredDist = isSpouse ? SPOUSE_GAP : MIN_NODE_GAP;
+                        const currentDist = right.x - left.x;
+                        
+                        if (currentDist < requiredDist) {
+                            const push = (requiredDist - currentDist) / 2;
+                            left.x -= push;
+                            right.x += push;
+                        }
+                    }
+                });
+            }
+
+            // 4. Anchor tree back to the positive canvas viewport
+            const minX = Math.min(...globalNodes.map(n => n.x));
+            globalNodes.forEach(n => { n.x = (n.x - minX) + 400; });
+            
+            // Auto-expand canvas to fit calculated bounds
+            const maxX = Math.max(...globalNodes.map(n => n.x));
+            const maxY = Math.max(...globalNodes.map(n => n.targetY));
+            const svgCanvas = document.getElementById('svg-layer');
+            svgCanvas.style.minWidth = `${maxX + 400}px`;
+            svgCanvas.style.minHeight = `${maxY + 400}px`;
+        }
+
+        function createCardHTML(node) {
+            const hasParent = !!node.parent_id && globalNodeMap.has(node.parent_id);
+            const hasSpouse = !!node.spouse_id && globalNodeMap.has(node.spouse_id);
+
+            return `
+                <div id="card-${node.id}" class="absolute-card pointer-events-auto bg-white px-3 py-2 w-max min-w-[140px] max-w-[200px] shadow-md border-t-[3px] border-leaf rounded-lg hover:-translate-y-1 z-20">
+                    <button onclick="deleteNode('${node.id}')" class="absolute -top-1.5 -left-1.5 text-red-300 hover:text-red-500 font-bold bg-white rounded-full w-4 h-4 flex items-center justify-center shadow z-30 transition text-[10px]">✕</button>
+                    ${!hasParent ? `<button onclick="addParent('${node.id}')" class="absolute -top-2.5 left-1/2 transform translate-x-1/2 bg-leaf-light text-white text-[8px] px-2 py-0.5 rounded-full hover:bg-leaf shadow z-30 transition">+ הורה</button>` : ''}
+                    ${!hasSpouse ? `<button onclick="addSpouse('${node.id}')" class="absolute -top-2.5 right-1 bg-pink-100 text-pink-700 text-[8px] px-2 py-0.5 rounded-full hover:bg-pink-200 shadow z-30 transition">♥ זוג</button>` : ''}
+                    
+                    <h2 contenteditable="true" data-id="${node.id}" data-field="name" class="font-script font-bold text-xl text-leaf-dark mt-1 mb-0.5 text-center break-words focus:bg-leaf-light/10 rounded min-h-[28px] leading-tight">${node.name || 'שם'}</h2>
+                    <p contenteditable="true" data-id="${node.id}" data-field="dates" class="text-center text-[9px] text-gray-500 mb-1 break-words focus:bg-leaf-light/10 rounded">${node.dates || 'תאריכים'}</p>
+                    <p contenteditable="true" data-id="${node.id}" data-field="description" class="text-[9px] text-gray-600 text-center break-words focus:bg-leaf-light/10 rounded leading-tight">${node.description || 'תיאור'}</p>
+                    
+                    <button onclick="addChild('${node.id}')" class="absolute -bottom-2.5 left-1/2 transform translate-x-1/2 bg-leaf text-white text-[8px] px-2 py-0.5 rounded-full hover:bg-leaf-dark shadow z-30 transition">+ ילד</button>
+                </div>`;
+        }
+
+        function syncAbsoluteCards() {
+            const layer = document.getElementById('cards-layer');
+            
+            globalNodes.forEach(n => {
+                if (!document.getElementById(`card-${n.id}`)) layer.insertAdjacentHTML('beforeend', createCardHTML(n));
+            });
+
+            // Map absolute physics coordinates directly to the DOM
+            globalNodes.forEach(n => {
+                const card = document.getElementById(`card-${n.id}`);
+                if (card) {
+                    card.style.left = `${n.x}px`;
+                    card.style.top = `${n.targetY}px`;
+                }
+            });
+        }
+
+        function drawSVGLines() {
+            const svg = document.getElementById('svg-layer');
+            let svgHTML = '';
+
+            // Using our mathematical layout data for perfect lines (no DOM querying required!)
+            globalNodes.forEach(n => {
+                // 1. Marriage Lines (Fixed 24px drop)
+                if (n.spouse_id && n.id < n.spouse_id) { 
+                    const spouse = globalNodeMap.get(n.spouse_id);
+                    if (spouse) {
+                        const y = n.targetY + 24;
+                        svgHTML += `<path d="M ${n.x} ${y} L ${spouse.x} ${y}" stroke="#a3b18a" stroke-width="2.5" fill="none" class="transition-all duration-500" />`;
+                    }
+                }
+
+                // 2. Pedigree Lines (Knee-Broken right angles)
+                if (n.parent_id) {
+                    const parent = globalNodeMap.get(n.parent_id);
+                    if (parent) {
+                        let startX = parent.x;
+                        let startY = parent.targetY + 110; // Bottom of a typical parent card
+
+                        if (parent.spouse_id) {
+                            const pSpouse = globalNodeMap.get(parent.spouse_id);
+                            if (pSpouse) {
+                                startX = (parent.x + pSpouse.x) / 2; // Midpoint
+                                startY = parent.targetY + 24; // Trace directly down from marriage line
+                            }
+                        }
+
+                        const midY = startY + ((n.targetY - startY) / 2);
+                        svgHTML += `<path d="M ${startX} ${startY} L ${startX} ${midY} L ${n.x} ${midY} L ${n.x} ${n.targetY}" stroke="#a3b18a" stroke-width="2" fill="none" class="transition-all duration-500" />`;
+                    }
+                }
+            });
+
+            svg.innerHTML = svgHTML;
+        }
+
+        async function saveEdit(element) {
+            const id = element.getAttribute('data-id');
+            const field = element.getAttribute('data-field');
+            const value = element.innerText.trim();
+            showStatus('שומר...');
+            await fetch(`/api/nodes/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [field]: value }) });
+            showStatus('נשמר בהצלחה');
+        }
+
+        async function addChild(parentId) {
+            const id = 'node_' + Math.random().toString(36).substr(2, 9);
+            await fetch('/api/nodes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, parent_id: parentId }) });
+            await loadTree();
+        }
+
+        async function addParent(childId) {
+            const newParentId = 'node_' + Math.random().toString(36).substr(2, 9);
+            showStatus('מוסיף הורה...');
+            const postRes = await fetch('/api/nodes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: newParentId }) });
+            if (postRes.ok) await fetch(`/api/nodes/${childId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parent_id: newParentId }) });
+            await loadTree();
+        }
+
+        async function addSpouse(partnerId) {
+            const spouseId = 'node_' + Math.random().toString(36).substr(2, 9);
+            await fetch('/api/nodes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: spouseId, spouse_id: partnerId }) });
+            await fetch(`/api/nodes/${partnerId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spouse_id: spouseId }) });
+            await loadTree();
+        }
+
+        async function deleteNode(id) {
+            if (!confirm('האם אתה בטוח שברצונך למחוק איש קשר זה?')) return;
+            showStatus('מוחק...');
+            document.getElementById(`card-${id}`)?.remove();
+            await fetch(`/api/nodes/${id}`, { method: 'DELETE' });
+            await loadTree();
+        }
+
+        function showStatus(msg) {
+            const status = document.getElementById('status');
+            status.innerText = msg;
+            status.classList.remove('opacity-0');
+            setTimeout(() => status.classList.add('opacity-0'), 2000);
+        }
+
+        document.body.addEventListener('focusin', (e) => { if (e.target.hasAttribute('contenteditable')) isEditing = true; });
+        document.body.addEventListener('focusout', (e) => {
+            if (e.target.hasAttribute('contenteditable')) {
+                isEditing = false;
+                saveEdit(e.target);
+            }
+        });
+
+        setInterval(() => { if (!isEditing) loadTree(); }, 5000);
+        loadTree();
+    </script>
+</body>
+</html>
