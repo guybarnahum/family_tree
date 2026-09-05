@@ -11,6 +11,7 @@
     const EXTRA_MEMBER_GAP = 58;
     const UNION_LANE_CLEARANCE = 18;
     const UNION_LANE_STEP = 16;
+    const UNION_CHILD_GROUP_GAP = 24;
 
     let graphCache = null;
     let graphFetchPromise = null;
@@ -219,7 +220,7 @@
         }
     };
 
-    positionMembers = function relationshipAwarePositionMembers() {
+    function placeMembers() {
         try { baseOrientCouples(); } catch (_) {}
 
         for (const unit of globalUnits) {
@@ -243,6 +244,11 @@
                 if (index < unit.members.length - 1) cursor += unit.memberGaps[index];
             });
         }
+    }
+
+    positionMembers = function relationshipAwarePositionMembers() {
+        placeMembers();
+        refineUnionChildRows();
     };
 
     function generationY(unit) {
@@ -338,6 +344,170 @@
         if (parent) return { x: parent.x, y: bottomEdge(parent) };
         if (unit.members.length === 2) return { x: unit.centerX, y: generationY(unit) };
         return { x: unit.members[0].x, y: bottomEdge(unit.members[0]) };
+    }
+
+    function unionDescriptorForChildUnit(childUnit, geometryByParent) {
+        for (const member of childUnit.members) {
+            const parents = visibleParents(member);
+            const byParentUnit = new Map();
+            for (const parent of parents) {
+                const parentUnit = unitByNodeId.get(parent.id);
+                if (!parentUnit?.multiPartner || parentUnit.gen !== childUnit.gen - 1) continue;
+                if (!byParentUnit.has(parentUnit)) byParentUnit.set(parentUnit, []);
+                byParentUnit.get(parentUnit).push(parent);
+            }
+
+            for (const [parentUnit, inUnit] of byParentUnit) {
+                if (!inUnit.length) continue;
+                let pair = null;
+                for (let i = 0; i < inUnit.length && !pair; i++) {
+                    for (let j = i + 1; j < inUnit.length; j++) {
+                        if (spouseEdge(inUnit[i].id, inUnit[j].id)) {
+                            pair = [inUnit[i], inUnit[j]];
+                            break;
+                        }
+                    }
+                }
+
+                if (pair) {
+                    const key = pairKey(pair[0].id, pair[1].id);
+                    const union = geometryByParent.get(parentUnit)?.get(key);
+                    return {
+                        key: `${parentUnit.id}::${key}`,
+                        anchorX: union?.x ?? average(pair.map(parent => parent.x))
+                    };
+                }
+
+                if (inUnit.length === 1) {
+                    return {
+                        key: `${parentUnit.id}::solo:${inUnit[0].id}`,
+                        anchorX: inUnit[0].x
+                    };
+                }
+            }
+        }
+        return null;
+    }
+
+    function clusterInternalLayout(units) {
+        const sorted = [...units].sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
+        if (sorted.length === 1) {
+            return { units: sorted, width: sorted[0].width, offsets: new Map([[sorted[0], 0]]) };
+        }
+
+        const centers = [sorted[0].width / 2];
+        for (let i = 1; i < sorted.length; i++) {
+            centers.push(centers[i - 1] + unitSeparation(sorted[i - 1], sorted[i]));
+        }
+        const left = centers[0] - sorted[0].width / 2;
+        const right = centers[centers.length - 1] + sorted[sorted.length - 1].width / 2;
+        const middle = (left + right) / 2;
+        return {
+            units: sorted,
+            width: right - left,
+            offsets: new Map(sorted.map((unit, i) => [unit, centers[i] - middle]))
+        };
+    }
+
+    function clusterGap(left, right) {
+        const leftUnit = left.units[left.units.length - 1];
+        const rightUnit = right.units[0];
+        const normalGap = Math.max(0,
+            unitSeparation(leftUnit, rightUnit) - leftUnit.width / 2 - rightUnit.width / 2
+        );
+        const extra = left.unionKey && right.unionKey && left.unionKey !== right.unionKey
+            ? UNION_CHILD_GROUP_GAP
+            : 0;
+        return normalGap + extra;
+    }
+
+    function packClusters(clusters) {
+        if (!clusters.length) return;
+        clusters.sort((a, b) => a.targetX - b.targetX || a.oldX - b.oldX || a.key.localeCompare(b.key));
+        const positions = clusters.map(cluster => cluster.targetX);
+
+        for (let i = 1; i < clusters.length; i++) {
+            const minimum = positions[i - 1] +
+                clusters[i - 1].width / 2 + clusterGap(clusters[i - 1], clusters[i]) + clusters[i].width / 2;
+            positions[i] = Math.max(positions[i], minimum);
+        }
+        for (let i = clusters.length - 2; i >= 0; i--) {
+            const maximum = positions[i + 1] -
+                clusters[i].width / 2 - clusterGap(clusters[i], clusters[i + 1]) - clusters[i + 1].width / 2;
+            positions[i] = Math.min(positions[i], maximum);
+        }
+
+        const delta = average(clusters.map((cluster, i) => cluster.targetX - positions[i]));
+        clusters.forEach((cluster, i) => {
+            const center = positions[i] + delta;
+            for (const unit of cluster.units) {
+                unit.centerX = center + (cluster.offsets.get(unit) || 0);
+            }
+        });
+    }
+
+    // The base sweeps know only that all children belong to the same multi-partner
+    // FamilyUnit, so children from distinct unions can interleave. Repack just those rows:
+    // each parent-pair becomes an indivisible child cluster ordered by its union anchor.
+    // A single child can therefore land directly below the union; sibling groups stay
+    // contiguous and centered around it, minimizing/eliminating crossed connector paths.
+    function refineUnionChildRows() {
+        const multiParents = globalUnits.filter(unit => unit.multiPartner);
+        if (!multiParents.length) return;
+
+        const geometryByParent = new Map(multiParents.map(unit => [unit, unionGeometry(unit)]));
+        const descriptors = new Map();
+        for (const unit of globalUnits) {
+            const descriptor = unionDescriptorForChildUnit(unit, geometryByParent);
+            if (descriptor) descriptors.set(unit, descriptor);
+        }
+        if (!descriptors.size) return;
+
+        const generations = [...new Set([...descriptors.keys()].map(unit => unit.gen))].sort((a, b) => a - b);
+        for (const gen of generations) {
+            const row = globalUnits.filter(unit => unit.gen === gen);
+            const grouped = new Map();
+            const clusters = [];
+
+            for (const unit of row) {
+                const descriptor = descriptors.get(unit);
+                if (!descriptor) {
+                    const layout = clusterInternalLayout([unit]);
+                    clusters.push({
+                        key: `unit:${unit.id}`,
+                        unionKey: null,
+                        targetX: unit.centerX,
+                        oldX: unit.centerX,
+                        ...layout
+                    });
+                    continue;
+                }
+
+                if (!grouped.has(descriptor.key)) {
+                    grouped.set(descriptor.key, {
+                        key: `union:${descriptor.key}`,
+                        unionKey: descriptor.key,
+                        targetX: descriptor.anchorX,
+                        oldX: 0,
+                        rawUnits: []
+                    });
+                }
+                grouped.get(descriptor.key).rawUnits.push(unit);
+            }
+
+            for (const group of grouped.values()) {
+                const layout = clusterInternalLayout(group.rawUnits);
+                group.oldX = average(group.rawUnits.map(unit => unit.centerX));
+                delete group.rawUnits;
+                Object.assign(group, layout);
+                clusters.push(group);
+            }
+
+            packClusters(clusters);
+            // Child units may themselves be couples/multi-partner units; update their card
+            // coordinates before using them as union anchors for the next generation.
+            placeMembers();
+        }
     }
 
     drawSVGLines = function relationshipAwareDrawSVGLines() {
