@@ -66,15 +66,26 @@
     observer.observe(cardsLayer, { childList: true, subtree: true });
 
     // Print controls depend on the title import/export strip, which is installed later in
-    // the injected script sequence. Load the print refinement after the page is complete so
-    // it can attach to that strip without racing the graph/bootstrap scripts.
+    // the injected script sequence. Load print-only geometry/style corrections alongside
+    // the print engine after the page is complete.
     function loadPrintRefinement() {
-        if (document.querySelector('script[data-family-print]')) return;
-        const print = document.createElement('script');
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
-        print.src = `/print-refinement.js?v=${encodeURIComponent(build)}`;
-        print.dataset.familyPrint = 'true';
-        document.body.appendChild(print);
+
+        if (!document.querySelector('script[data-family-print-polish]')) {
+            const polish = document.createElement('script');
+            polish.src = `/print-polish.js?v=${encodeURIComponent(build)}`;
+            polish.dataset.familyPrintPolish = 'true';
+            polish.async = false;
+            document.body.appendChild(polish);
+        }
+
+        if (!document.querySelector('script[data-family-print]')) {
+            const print = document.createElement('script');
+            print.src = `/print-refinement.js?v=${encodeURIComponent(build)}`;
+            print.dataset.familyPrint = 'true';
+            print.async = false;
+            document.body.appendChild(print);
+        }
     }
 
     if (document.readyState === 'complete') loadPrintRefinement();
