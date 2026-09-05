@@ -120,8 +120,8 @@
     window.addEventListener('pagehide', persistCurrentRoot);
 
     // Late refinements depend on controls/layout layers injected after this script. Load
-    // them once the page is complete; the planar layer waits for multi-partner initialization
-    // before wrapping the final layout function.
+    // them once the page is complete; the planar layers wait for multi-partner initialization
+    // before becoming the final authorities for horizontal order and connector routing.
     function loadLateRefinements() {
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
 
@@ -155,6 +155,14 @@
             planar.dataset.familyPlanarLayout = 'true';
             planar.async = false;
             document.body.appendChild(planar);
+        }
+
+        if (!document.querySelector('script[data-family-planar-router]')) {
+            const router = document.createElement('script');
+            router.src = `/planar-router.js?v=${encodeURIComponent(build)}`;
+            router.dataset.familyPlanarRouter = 'true';
+            router.async = false;
+            document.body.appendChild(router);
         }
     }
 
