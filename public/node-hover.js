@@ -131,7 +131,8 @@
     function loadRouterWhenMemberOrderReady(build, attempt = 0) {
         if (document.querySelector('script[data-family-planar-router]')) return;
         const memberOrderReady = typeof layoutAndRender === 'function' &&
-            layoutAndRender.name === 'lineageAwareLayoutAndRender';
+            (layoutAndRender.name === 'lineageAwareLayoutAndRender' ||
+             layoutAndRender.name === 'bridgeCompactedLayoutAndRender');
         if (!memberOrderReady && attempt < 150) {
             setTimeout(() => loadRouterWhenMemberOrderReady(build, attempt + 1), 20);
             return;
@@ -144,6 +145,7 @@
 
     function loadMemberOrderWhenPlanarReady(build, attempt = 0) {
         if (document.querySelector('script[data-family-member-order]')) {
+            appendScript('/bridge-compaction.js', 'data-family-bridge-compaction', build);
             loadRouterWhenMemberOrderReady(build);
             return;
         }
@@ -159,12 +161,16 @@
             return;
         }
         appendScript('/member-order-refinement.js', 'data-family-member-order', build);
+        // Bridge compaction waits internally for lineageAwareLayoutAndRender, so it is safe
+        // to inject immediately after the member-order script without another loader race.
+        appendScript('/bridge-compaction.js', 'data-family-bridge-compaction', build);
         loadRouterWhenMemberOrderReady(build);
     }
 
     // Late refinements depend on controls/layout layers injected after this script. Load
     // them once the page is complete. Row planarity is established first, then people inside
-    // spouse units are lineage-oriented, and only then are final orthogonal routes installed.
+    // spouse units are lineage-oriented; dangling bridge branches are compacted toward their
+    // attachment; final orthogonal routing draws the resulting geometry.
     function loadLateRefinements() {
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
 
