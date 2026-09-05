@@ -40,15 +40,25 @@
             letter-spacing: 0.02em;
             text-align: center;
             cursor: pointer;
-            opacity: 0.72;
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(2px);
             border-radius: 0 0 6px 6px;
+            transition: opacity 0.13s ease, transform 0.13s ease, background-color 0.13s ease;
+        }
+
+        .absolute-card:hover .graph-select-zone,
+        .absolute-card:focus-within .graph-select-zone,
+        .graph-select-zone:focus-visible {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0);
         }
 
         .graph-select-zone:hover,
         .graph-select-zone:focus-visible {
             background: rgba(163, 177, 138, 0.13);
             color: #344e41;
-            opacity: 1;
             outline: none;
         }
 
@@ -63,7 +73,6 @@
         .absolute-card.graph-root .graph-select-zone {
             background: rgba(163, 177, 138, 0.20);
             color: #344e41;
-            opacity: 1;
         }
 
         .absolute-card.graph-spouse-parent {
