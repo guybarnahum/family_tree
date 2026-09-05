@@ -4,6 +4,30 @@ function jsonResponse(value, init = {}) {
   return Response.json(value, { ...init, headers });
 }
 
+function buildInfo(env) {
+  const sha = typeof env.BUILD_SHA === 'string' && env.BUILD_SHA
+    ? env.BUILD_SHA
+    : 'unknown';
+  const deployedAt = typeof env.BUILD_TIME === 'string' && env.BUILD_TIME
+    ? env.BUILD_TIME
+    : null;
+
+  return {
+    sha,
+    short: sha.slice(0, 8),
+    deployedAt
+  };
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
 function normalizeImportedPerson(person) {
   return {
     id: person?.id,
@@ -191,9 +215,16 @@ async function handleNodesApi(request, env, url) {
 async function handleAsset(request, env) {
   const assetResponse = await env.ASSETS.fetch(request);
   const contentType = assetResponse.headers.get('Content-Type') || '';
+  const build = buildInfo(env);
 
   if (!contentType.includes('text/html')) {
-    return assetResponse;
+    const headers = new Headers(assetResponse.headers);
+    headers.set('X-Family-Tree-Build', build.short);
+    return new Response(assetResponse.body, {
+      status: assetResponse.status,
+      statusText: assetResponse.statusText,
+      headers
+    });
   }
 
   const html = await assetResponse.text();
@@ -207,13 +238,27 @@ async function handleAsset(request, env) {
     .filter(scriptTag => !html.includes(scriptTag))
     .join('\n');
 
-  const refinedHtml = missingScripts
-    ? html.replace('</body>', `${missingScripts}\n</body>`)
-    : html;
+  const buildMeta = `<meta name="family-tree-build" content="${escapeHtml(build.short)}">`;
+  const buildTitle = build.deployedAt
+    ? `Build ${build.sha} · deployed ${build.deployedAt}`
+    : `Build ${build.sha}`;
+  const buildBadge = `<div id="family-tree-build" title="${escapeHtml(buildTitle)}" style="position:fixed;right:10px;bottom:8px;z-index:9999;font:10px/1.2 Inter,sans-serif;color:#8b8b84;opacity:.72;pointer-events:none;direction:ltr">v ${escapeHtml(build.short)}</div>`;
+
+  let refinedHtml = html;
+  if (!refinedHtml.includes('name="family-tree-build"')) {
+    refinedHtml = refinedHtml.replace('</head>', `${buildMeta}\n</head>`);
+  }
+  if (missingScripts) {
+    refinedHtml = refinedHtml.replace('</body>', `${missingScripts}\n</body>`);
+  }
+  if (!refinedHtml.includes('id="family-tree-build"')) {
+    refinedHtml = refinedHtml.replace('</body>', `${buildBadge}\n</body>`);
+  }
 
   const headers = new Headers(assetResponse.headers);
   headers.set('Content-Type', 'text/html; charset=UTF-8');
   headers.set('Cache-Control', 'no-store');
+  headers.set('X-Family-Tree-Build', build.short);
   headers.delete('Content-Length');
 
   return new Response(refinedHtml, {
@@ -228,6 +273,12 @@ export default {
     const url = new URL(request.url);
 
     try {
+      if (url.pathname === '/api/version') {
+        return jsonResponse(buildInfo(env), {
+          headers: { 'X-Family-Tree-Build': buildInfo(env).short }
+        });
+      }
+
       if (url.pathname.startsWith('/api/')) {
         if (!env.DB) {
           return new Response('DB binding missing', { status: 500 });
