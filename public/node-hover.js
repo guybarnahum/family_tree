@@ -119,51 +119,37 @@
     });
     window.addEventListener('pagehide', persistCurrentRoot);
 
+    function appendScript(src, dataKey, build) {
+        if (document.querySelector(`script[${dataKey}]`)) return;
+        const script = document.createElement('script');
+        script.src = `${src}?v=${encodeURIComponent(build)}`;
+        script.setAttribute(dataKey, 'true');
+        script.async = false;
+        document.body.appendChild(script);
+    }
+
+    function loadRouterWhenPlanarReady(build, attempt = 0) {
+        if (document.querySelector('script[data-family-planar-router]')) return;
+        const planarReady = typeof layoutAndRender === 'function' &&
+            layoutAndRender.name === 'crossingSafeLayoutAndRender';
+        if (!planarReady && attempt < 120) {
+            setTimeout(() => loadRouterWhenPlanarReady(build, attempt + 1), 20);
+            return;
+        }
+        appendScript('/planar-router.js', 'data-family-planar-router', build);
+    }
+
     // Late refinements depend on controls/layout layers injected after this script. Load
-    // them once the page is complete; the planar layers wait for multi-partner initialization
-    // before becoming the final authorities for horizontal order and connector routing.
+    // them once the page is complete; the planar layout waits for multi-partner initialization,
+    // and the router waits until that crossing-safe layout wrapper is actually installed.
     function loadLateRefinements() {
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
 
-        if (!document.querySelector('script[data-family-print-polish]')) {
-            const polish = document.createElement('script');
-            polish.src = `/print-polish.js?v=${encodeURIComponent(build)}`;
-            polish.dataset.familyPrintPolish = 'true';
-            polish.async = false;
-            document.body.appendChild(polish);
-        }
-
-        if (!document.querySelector('script[data-family-print]')) {
-            const print = document.createElement('script');
-            print.src = `/print-refinement.js?v=${encodeURIComponent(build)}`;
-            print.dataset.familyPrint = 'true';
-            print.async = false;
-            document.body.appendChild(print);
-        }
-
-        if (!document.querySelector('script[data-family-planar-core]')) {
-            const core = document.createElement('script');
-            core.src = `/planar-core.js?v=${encodeURIComponent(build)}`;
-            core.dataset.familyPlanarCore = 'true';
-            core.async = false;
-            document.body.appendChild(core);
-        }
-
-        if (!document.querySelector('script[data-family-planar-layout]')) {
-            const planar = document.createElement('script');
-            planar.src = `/planar-layout.js?v=${encodeURIComponent(build)}`;
-            planar.dataset.familyPlanarLayout = 'true';
-            planar.async = false;
-            document.body.appendChild(planar);
-        }
-
-        if (!document.querySelector('script[data-family-planar-router]')) {
-            const router = document.createElement('script');
-            router.src = `/planar-router.js?v=${encodeURIComponent(build)}`;
-            router.dataset.familyPlanarRouter = 'true';
-            router.async = false;
-            document.body.appendChild(router);
-        }
+        appendScript('/print-polish.js', 'data-family-print-polish', build);
+        appendScript('/print-refinement.js', 'data-family-print', build);
+        appendScript('/planar-core.js', 'data-family-planar-core', build);
+        appendScript('/planar-layout.js', 'data-family-planar-layout', build);
+        loadRouterWhenPlanarReady(build);
     }
 
     if (document.readyState === 'complete') loadLateRefinements();
