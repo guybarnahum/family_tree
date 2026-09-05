@@ -50,9 +50,7 @@
                 padding-inline-end: 66px;
             }
 
-            .family-title-card > p {
-                display: none;
-            }
+            .family-title-card > p { display: none; }
 
             .graph-search-wrap {
                 width: 100% !important;
@@ -63,7 +61,7 @@
             .graph-search-input {
                 height: 42px;
                 padding: 8px 13px !important;
-                font-size: 16px !important; /* Prevent iOS focus zoom. */
+                font-size: 16px !important;
                 border-radius: 12px !important;
                 background: rgba(253, 251, 247, 0.96) !important;
             }
@@ -81,11 +79,8 @@
                 font-size: 14px !important;
             }
 
-            .graph-search-result small {
-                font-size: 11px !important;
-            }
+            .graph-search-result small { font-size: 11px !important; }
 
-            /* Hover cannot expose title actions on touch; keep compact icon actions available. */
             .family-title-card .family-import-export {
                 position: absolute;
                 top: 8px;
@@ -125,6 +120,7 @@
                 border-radius: 10px !important;
                 touch-action: pan-x pan-y;
                 -webkit-tap-highlight-color: transparent;
+                overflow: visible !important;
             }
 
             .absolute-card h2 {
@@ -137,54 +133,109 @@
                 line-height: 1.22 !important;
             }
 
-            /* On touch the whole non-root card is the recenter affordance. */
-            .graph-select-zone {
+            /* Non-root cards use their whole body as the selection target. */
+            .absolute-card:not(.graph-root) .graph-select-zone {
                 display: none !important;
             }
 
             .absolute-card.graph-root {
                 outline-width: 3px !important;
-                outline-offset: 2px !important;
-                box-shadow: 0 10px 24px rgba(52, 78, 65, 0.23) !important;
+                outline-offset: 3px !important;
+                box-shadow: 0 12px 28px rgba(52, 78, 65, 0.24) !important;
+                overflow: visible !important;
             }
 
-            /* Desktop hover controls become available only on the selected person. */
+            /* On touch, actions belong to the selected/full card only. */
             .absolute-card [data-action] {
                 opacity: 0 !important;
                 pointer-events: none !important;
             }
 
-            .absolute-card.graph-root [data-action],
-            .absolute-card.graph-root:focus-within [data-action] {
+            .absolute-card.graph-root [data-action] {
                 opacity: 1 !important;
                 pointer-events: auto !important;
+                z-index: 60 !important;
+                box-shadow: 0 3px 9px rgba(52, 78, 65, 0.16) !important;
+                touch-action: manipulation;
             }
 
             .absolute-card.graph-root [data-action="delete"] {
-                width: 28px !important;
-                height: 28px !important;
-                font-size: 12px !important;
-                top: -10px !important;
-                left: -10px !important;
+                top: -14px !important;
+                left: -14px !important;
+                width: 34px !important;
+                height: 34px !important;
+                padding: 0 !important;
+                border: 1px solid rgba(220, 38, 38, 0.16) !important;
+                border-radius: 999px !important;
+                background: rgba(255, 255, 255, 0.98) !important;
+                font-size: 13px !important;
+                line-height: 32px !important;
+            }
+
+            .absolute-card.graph-root [data-action="add-parent"] {
+                top: -17px !important;
+                left: 50% !important;
+                right: auto !important;
+                transform: translateX(-50%) !important;
+            }
+
+            .absolute-card.graph-root [data-action="add-spouse"] {
+                top: -17px !important;
+                right: 8px !important;
+                left: auto !important;
+                transform: none !important;
+            }
+
+            .absolute-card.graph-root [data-action="add-child"] {
+                bottom: -17px !important;
+                left: 50% !important;
+                right: auto !important;
+                transform: translateX(-50%) !important;
             }
 
             .absolute-card.graph-root [data-action="add-parent"],
             .absolute-card.graph-root [data-action="add-spouse"],
             .absolute-card.graph-root [data-action="add-child"] {
-                min-height: 28px;
-                padding: 5px 9px !important;
-                font-size: 10px !important;
+                min-height: 34px !important;
+                padding: 7px 12px !important;
+                border-radius: 999px !important;
+                font-size: 11px !important;
+                line-height: 18px !important;
                 white-space: nowrap;
             }
 
+            /* Selected-card marker mirrors desktop, but is informational on touch. */
+            .absolute-card.graph-root .graph-select-zone {
+                display: block !important;
+                left: 14px !important;
+                right: 14px !important;
+                bottom: 5px !important;
+                height: 22px !important;
+                opacity: 0.78 !important;
+                pointer-events: none !important;
+                transform: none !important;
+                background: transparent !important;
+                border-top: 1px solid rgba(88, 129, 87, 0.14) !important;
+                color: #526b58 !important;
+                font-size: 9px !important;
+                line-height: 21px !important;
+            }
+
+            /* Expansion markers sit outside the card without competing with CRUD pills. */
             .graph-frontier {
                 min-width: 34px !important;
                 height: 34px !important;
-                right: -20px !important;
+                right: -22px !important;
                 line-height: 32px !important;
                 font-size: 11px !important;
-                opacity: 0.92 !important;
+                opacity: 0.94 !important;
+                z-index: 55 !important;
                 touch-action: manipulation;
+            }
+
+            .absolute-card.graph-root .graph-frontier {
+                right: -24px !important;
+                top: 58% !important;
             }
 
             #status {
@@ -215,8 +266,6 @@
 
     if (!mobileQuery.matches) return;
 
-    // Tighter graph geometry on narrow/touch screens. Function declarations from the
-    // legacy layout are writable globals; override only while this mobile page is alive.
     try {
         unitSeparation = function mobileUnitSeparation(left, right) {
             return left.width / 2 + 48 + right.width / 2;
@@ -257,8 +306,8 @@
         catch (_) { return null; }
     }
 
-    // Most of a card is editable text on desktop. On touch, the first tap anywhere on a
-    // non-root card should select/recenter it. Once selected, taps on text edit normally.
+    // First tap on editable text in a non-root card selects it. Once selected, the same
+    // text behaves as a normal editor, matching the desktop selected-card model.
     let redispatching = false;
     cardsLayer.addEventListener('click', event => {
         if (redispatching) return;
@@ -284,8 +333,6 @@
         }
     }, true);
 
-    // The responsive CSS changes measured card sizes and the mobile geometry functions.
-    // Re-layout once after CSS has applied, preserving the current anchor as center.
     requestAnimationFrame(() => {
         requestAnimationFrame(() => {
             try {
