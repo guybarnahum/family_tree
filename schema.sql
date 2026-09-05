@@ -13,11 +13,12 @@ CREATE TABLE IF NOT EXISTS nodes (
     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Seed a default root only for a new/empty database.
-INSERT OR IGNORE INTO nodes (id, parent_id, spouse_id, name, dates, description)
+-- Seed a default root only for a new/empty database. spouse_id defaults to NULL.
+-- Omitting spouse_id here also keeps this seed compatible with a pre-migration
+-- database while the one-time ALTER TABLE migration is being applied.
+INSERT OR IGNORE INTO nodes (id, parent_id, name, dates, description)
 VALUES (
     'root',
-    NULL,
     NULL,
     'משפחתנו',
     '1945 - היום',
