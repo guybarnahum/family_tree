@@ -33,6 +33,10 @@
 
     const style = document.createElement('style');
     style.textContent = `
+        .family-title-card h1 {
+            font-weight: 700 !important;
+        }
+
         .absolute-card [data-action] {
             opacity: 0;
             pointer-events: none;
