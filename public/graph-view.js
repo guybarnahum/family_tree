@@ -173,6 +173,22 @@
         searchResults = searchWrap.querySelector('.graph-search-results');
     }
 
+    function hasMetadataValue(person, key) {
+        return !!person?.metadata && Object.prototype.hasOwnProperty.call(person.metadata, key);
+    }
+
+    function personLifeDates(person) {
+        return hasMetadataValue(person, 'lifeDates')
+            ? String(person.metadata.lifeDates ?? '')
+            : String(person?.dates ?? '');
+    }
+
+    function personBio(person) {
+        return hasMetadataValue(person, 'bio')
+            ? String(person.metadata.bio ?? '')
+            : String(person?.description ?? '');
+    }
+
     function addToMapSet(map, key, value) {
         if (!map.has(key)) map.set(key, new Set());
         map.get(key).add(value);
@@ -407,8 +423,11 @@
                 return {
                     id: person.id,
                     name: person.name,
-                    dates: person.dates,
-                    description: person.description,
+                    dates: personLifeDates(person),
+                    description: personBio(person),
+                    metadata: person.metadata && typeof person.metadata === 'object'
+                        ? { ...person.metadata }
+                        : {},
                     last_updated: person.lastUpdated,
                     parent_id: parentId,
                     spouse_id: spouseChoice.get(person.id) || null,
@@ -481,11 +500,9 @@
     }
 
     function updateRootUI() {
-        const root = graphPeopleById.get(graphRootId);
-        if (!root) return;
-
-        if (subtitle) subtitle.textContent = `מרכז: ${root.name || 'ללא שם'} • לחץ על אדם כדי למרכז`;
-        if (searchInput && document.activeElement !== searchInput) searchInput.value = root.name || '';
+        if (!graphPeopleById.has(graphRootId)) return;
+        if (subtitle) subtitle.textContent = 'דורות של אהבה • גרור כדי לנווט';
+        if (searchInput && document.activeElement !== searchInput) searchInput.value = '';
     }
 
     function expansionSignature() {
@@ -557,7 +574,12 @@
             const documentValue = await response.json();
             const nextSignature = JSON.stringify([
                 documentValue.people?.map(person => [
-                    person.id, person.name, person.dates, person.description, person.lastUpdated
+                    person.id,
+                    person.name,
+                    person.dates,
+                    person.description,
+                    person.metadata || null,
+                    person.lastUpdated
                 ]),
                 documentValue.relationships?.map(relation => [
                     relation.id, relation.type, relation.person1Id, relation.person2Id
@@ -593,7 +615,7 @@
     function matchesSearch(person, query) {
         const q = query.toLocaleLowerCase();
         return String(person.name || '').toLocaleLowerCase().includes(q) ||
-            String(person.dates || '').toLocaleLowerCase().includes(q);
+            personLifeDates(person).toLocaleLowerCase().includes(q);
     }
 
     function renderSearchResults(query) {
@@ -626,9 +648,10 @@
             name.textContent = person.name || 'ללא שם';
             button.appendChild(name);
 
-            if (person.dates) {
+            const datesValue = personLifeDates(person);
+            if (datesValue) {
                 const dates = document.createElement('small');
-                dates.textContent = person.dates;
+                dates.textContent = datesValue;
                 button.appendChild(dates);
             }
             searchResults.appendChild(button);
@@ -700,6 +723,18 @@
         await baseSaveEdit(element);
         await loadGraph(true, { recenter: false });
     };
+
+    // Pane-only edits deliberately avoid a graph reload. Mirror them into the canonical
+    // in-memory graph so search/rerooting sees the saved value immediately without flicker.
+    window.addEventListener('family-person-pane-saved', event => {
+        const detail = event.detail || {};
+        const person = graphPeopleById.get(detail.id);
+        if (!person) return;
+        if (detail.field === 'name') person.name = detail.value;
+        if (detail.field === 'metadata' && detail.metadata && typeof detail.metadata === 'object') {
+            person.metadata = { ...detail.metadata };
+        }
+    });
 
     window.startFamilyGraph = () => loadGraph(true, { recenter: true });
 })();
