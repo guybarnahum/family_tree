@@ -47,6 +47,38 @@ CREATE TABLE IF NOT EXISTS place_api_usage (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Slice D media metadata lives in D1 while original image bytes live in R2. `media_people`
+-- is an association table, not ownership: one photo can be associated with multiple people
+-- and Slice E can add face rectangles pointing to the same media row.
+CREATE TABLE IF NOT EXISTS media (
+    id TEXT PRIMARY KEY,
+    object_key TEXT NOT NULL UNIQUE,
+    original_filename TEXT,
+    mime_type TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    width INTEGER,
+    height INTEGER,
+    caption TEXT,
+    taken_date_text TEXT,
+    taken_place_json TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS media_people (
+    media_id TEXT NOT NULL,
+    person_id TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (media_id, person_id),
+    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE,
+    FOREIGN KEY (person_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_people_person
+ON media_people(person_id);
+
+CREATE INDEX IF NOT EXISTS idx_media_people_media
+ON media_people(media_id);
+
 -- Seed a default person only for a new/empty database.
 INSERT OR IGNORE INTO nodes (id, parent_id, name, metadata_json)
 VALUES (
