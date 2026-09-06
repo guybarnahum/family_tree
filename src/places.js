@@ -9,9 +9,9 @@ const DAILY_EXTERNAL_LIMIT = 8000;
 
 let placeSchemaPromise = null;
 
-function response(value, init = {}) {
+function response(value, { cacheable = false, ...init } = {}) {
   const headers = new Headers(init.headers || {});
-  headers.set('Cache-Control', 'private, max-age=86400');
+  headers.set('Cache-Control', cacheable ? 'private, max-age=86400' : 'no-store');
   return Response.json(value, { ...init, headers });
 }
 
@@ -174,10 +174,7 @@ async function queryGeoNames(query, lang, username) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 4500);
   try {
-    const upstream = await fetch(url.toString(), {
-      headers: { 'User-Agent': 'family-tree-place-search/1.0' },
-      signal: controller.signal
-    });
+    const upstream = await fetch(url.toString(), { signal: controller.signal });
     if (!upstream.ok) throw new Error(`GeoNames HTTP ${upstream.status}`);
     const data = await upstream.json();
     if (data?.status) throw new Error(`GeoNames ${data.status.value}: ${data.status.message}`);
@@ -206,7 +203,7 @@ export async function handlePlacesApi(request, env, url) {
 
   const cacheKey = `${lang}:${query}`;
   const cached = await cachedResults(env, cacheKey);
-  if (cached) return response({ results: cached, source: 'cache' });
+  if (cached) return response({ results: cached, source: 'cache' }, { cacheable: true });
 
   const username = String(env.GEONAMES_USERNAME || '').trim();
   if (!username) {
@@ -220,7 +217,7 @@ export async function handlePlacesApi(request, env, url) {
   try {
     const results = await queryGeoNames(rawQuery, lang, username);
     await writeCache(env, cacheKey, results);
-    return response({ results, source: 'geonames', configured: true });
+    return response({ results, source: 'geonames', configured: true }, { cacheable: true });
   } catch (error) {
     console.warn('GeoNames place lookup failed:', error);
     return response({ results: [], source: 'unavailable', configured: true });
