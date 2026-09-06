@@ -19,9 +19,6 @@
         catch (_) {}
     }
 
-    // node-hover is injected before graph-view.js. Restore the saved center directly into
-    // the URL here so graph-view's first root choice is deterministic even if later startup
-    // scripts load in a different order. An explicit ?person= always wins.
     const startupUrl = new URL(window.location.href);
     const explicitAnchor = startupUrl.searchParams.get('person');
     if (explicitAnchor) {
@@ -94,8 +91,6 @@
         markDefaultText(card || cardsLayer);
     });
 
-    // renderCards() replaces the card DOM after structural edits and polling.
-    // Re-mark new cards without coupling this behavior to the renderer itself.
     const observer = new MutationObserver(mutations => {
         for (const mutation of mutations) {
             if (mutation.type === 'childList') {
@@ -107,9 +102,6 @@
     });
     observer.observe(cardsLayer, { childList: true, subtree: true });
 
-    // Root decoration can occasionally change after card insertion in a later animation
-    // frame. Watch card class changes separately and mirror the authoritative .graph-root
-    // back to both URL and localStorage. This also makes refresh robust on mobile.
     const rootObserver = new MutationObserver(() => persistCurrentRoot());
     rootObserver.observe(cardsLayer, {
         childList: true,
@@ -161,19 +153,14 @@
             return;
         }
         appendScript('/member-order-refinement.js', 'data-family-member-order', build);
-        // Bridge compaction waits internally for lineageAwareLayoutAndRender, so it is safe
-        // to inject immediately after the member-order script without another loader race.
         appendScript('/bridge-compaction.js', 'data-family-bridge-compaction', build);
         loadRouterWhenMemberOrderReady(build);
     }
 
-    // Late refinements depend on controls/layout layers injected after this script. Load
-    // them once the page is complete. Slice A first establishes the final name-only card
-    // geometry + selected-person pane; row planarity is then solved using those measured
-    // cards, followed by lineage member order, bridge compaction and final routing.
     function loadLateRefinements() {
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
 
+        appendScript('/person-metadata.js', 'data-family-person-metadata', build);
         appendScript('/person-pane.js', 'data-family-person-pane', build);
         appendScript('/person-pane-position.js', 'data-family-person-pane-position', build);
         appendScript('/slice-a-polish.js', 'data-family-slice-a-polish', build);
