@@ -1,4 +1,4 @@
-// Person-pane interaction polish shared by Slice A/B:
+// Person-pane interaction polish shared by Slice A-C:
 // - desktop pane starts directly with the editable name
 // - pane blur saves only when a value actually changed
 // - metadata edits never relayout the graph
@@ -11,6 +11,17 @@
     const pane = document.getElementById('person-pane');
     const cardsLayer = document.getElementById('cards-layer');
     if (!pane || !cardsLayer) return;
+
+    const Metadata = window.FamilyPersonMetadata || {
+        metadataObject: value => value && typeof value === 'object' && !Array.isArray(value) ? value : {},
+        withField(metadata, key, value) {
+            const next = { ...(metadata || {}) };
+            const text = String(value ?? '').trim();
+            if (text) next[key] = text;
+            else delete next[key];
+            return next;
+        }
+    };
 
     const style = document.createElement('style');
     style.textContent = `
@@ -51,9 +62,7 @@
     }
 
     function metadataFor(person) {
-        return person?.metadata && typeof person.metadata === 'object' && !Array.isArray(person.metadata)
-            ? person.metadata
-            : {};
+        return Metadata.metadataObject(person?.metadata);
     }
 
     function restoreNamePresentation(id, value) {
@@ -82,6 +91,7 @@
         const id = element.dataset.id;
         const field = element.dataset.field;
         const metadataKey = element.dataset.metaKey || null;
+        const metadataKind = element.dataset.metaKind || 'text';
         const value = fieldValue(element);
         if (value === original) return;
 
@@ -92,7 +102,7 @@
 
         if (field === 'metadata') {
             if (!metadataKey) return;
-            nextMetadata = { ...priorMetadata, [metadataKey]: value };
+            nextMetadata = Metadata.withField(priorMetadata, metadataKey, value, metadataKind);
             payload = { metadata: nextMetadata };
         } else {
             payload = { [field]: value };
@@ -108,14 +118,8 @@
             if (!response.ok) throw new Error(await response.text());
 
             if (person) {
-                if (field === 'metadata') {
-                    person.metadata = nextMetadata;
-                    // Keep compatibility projections coherent in memory until the next GET.
-                    if (metadataKey === 'lifeDates') person.dates = value;
-                    if (metadataKey === 'bio') person.description = value;
-                } else {
-                    person[field] = value;
-                }
+                if (field === 'metadata') person.metadata = nextMetadata;
+                else person[field] = value;
             }
 
             originalValues.set(element, value);
@@ -128,7 +132,7 @@
 
             window.dispatchEvent(new CustomEvent('family-person-pane-saved', {
                 detail: field === 'metadata'
-                    ? { id, field, key: metadataKey, value, metadata: nextMetadata }
+                    ? { id, field, key: metadataKey, kind: metadataKind, value, metadata: nextMetadata }
                     : { id, field, value }
             }));
             showStatus('נשמר בהצלחה');
