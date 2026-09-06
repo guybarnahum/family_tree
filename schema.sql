@@ -1,21 +1,18 @@
 -- D1 Database Schema for Family Graph
 --
--- `nodes` is retained as the canonical people table for compatibility with the
--- existing app and data. Family structure is now canonicalized in the separate
--- `relationships` table so a person can have multiple parents/spouses and any
+-- `nodes` stores person identity plus flexible biographical metadata. Family structure is
+-- canonicalized in `relationships`, so a person can have multiple parents/spouses and any
 -- person can be used as the root of a generated view.
 --
--- Biographical/person-detail fields live in metadata_json. The legacy dates and
--- description columns are retained during the migration window for compatibility.
+-- Existing deployed databases may still physically contain old `dates` / `description`
+-- columns. Slice B intentionally ignores them; new databases do not create them.
 
 CREATE TABLE IF NOT EXISTS nodes (
     id TEXT PRIMARY KEY,
     parent_id TEXT,
     spouse_id TEXT,
     name TEXT,
-    dates TEXT,
-    description TEXT,
-    metadata_json TEXT,
+    metadata_json TEXT DEFAULT '{}',
     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -36,21 +33,17 @@ ON relationships(person1_id);
 CREATE INDEX IF NOT EXISTS idx_relationship_person2
 ON relationships(person2_id);
 
--- Seed a default person only for a new/empty database. metadata_json mirrors the
--- legacy seed content so a fresh database starts directly on the Slice B model.
-INSERT OR IGNORE INTO nodes (id, parent_id, name, dates, description, metadata_json)
+-- Seed a default person only for a new/empty database.
+INSERT OR IGNORE INTO nodes (id, parent_id, name, metadata_json)
 VALUES (
     'root',
     NULL,
     'משפחתנו',
-    '1945 - היום',
-    'שורשי עץ המשפחה שלנו, מחברים דורות של אהבה.',
-    '{"lifeDates":"1945 - היום","bio":"שורשי עץ המשפחה שלנו, מחברים דורות של אהבה."}'
+    '{}'
 );
 
--- Non-destructive compatibility migration from the original one-parent/one-spouse
--- columns. The Worker also runs these INSERT OR IGNORE statements lazily so an
--- existing deployed database upgrades automatically on first graph request.
+-- Non-destructive topology migration from the original one-parent/one-spouse columns.
+-- Person metadata is deliberately not migrated from any old biography fields.
 INSERT OR IGNORE INTO relationships (id, type, person1_id, person2_id)
 SELECT
     'parent:' || parent_id || ':' || id,
