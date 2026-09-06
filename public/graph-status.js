@@ -7,6 +7,7 @@
     if (!viewport) return;
 
     let retryHandler = null;
+    const RETRY_MIN_BUSY_MS = 1000;
 
     const style = document.createElement('style');
     style.textContent = `
@@ -45,7 +46,12 @@
             background: rgba(163,177,138,.13);
             color: #588157;
         }
-        .graph-status-icon svg { width: 34px; height: 34px; display: block; }
+        .graph-status-icon svg {
+            width: 34px;
+            height: 34px;
+            display: block;
+            transform-origin: 50% 50%;
+        }
 
         /* D1 quota/outage is infrastructure, not an application bug. Keep the
            infrastructure glyph prominent without changing the other status icons. */
@@ -58,6 +64,9 @@
         .graph-status-full[data-kind="quota"] .graph-status-icon svg {
             width: 128px;
             height: 128px;
+        }
+        .graph-status-full.retrying[data-kind="quota"] .graph-status-icon svg {
+            animation: graph-status-infra-spin .9s linear infinite;
         }
 
         .graph-status-title {
@@ -79,6 +88,7 @@
         }
         .graph-status-retry {
             min-height: 38px;
+            min-width: 86px;
             padding: 0 18px;
             border: 1px solid #588157;
             border-radius: 999px;
@@ -86,8 +96,52 @@
             color: white;
             cursor: pointer;
             font: 600 12px/1 Inter, sans-serif;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            transition:
+                background-color .14s ease,
+                border-color .14s ease,
+                color .14s ease,
+                box-shadow .14s ease,
+                transform .08s ease;
+            -webkit-tap-highlight-color: transparent;
         }
-        .graph-status-retry:disabled { opacity: .5; cursor: default; }
+        .graph-status-retry:hover:not(:disabled) {
+            background: #476f46;
+            border-color: #476f46;
+            box-shadow: 0 4px 12px rgba(52,78,65,.18);
+        }
+        .graph-status-retry:active:not(:disabled) {
+            background: #344e41;
+            border-color: #344e41;
+            box-shadow: 0 1px 3px rgba(52,78,65,.16);
+            transform: translateY(1px) scale(.97);
+        }
+        .graph-status-retry:focus-visible {
+            outline: 3px solid rgba(88,129,87,.22);
+            outline-offset: 2px;
+        }
+        .graph-status-retry:disabled {
+            cursor: wait;
+        }
+        .graph-status-retry[data-busy="true"] {
+            opacity: 1;
+            background: #476f46;
+            border-color: #476f46;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+        }
+        .graph-status-retry-spinner {
+            width: 13px;
+            height: 13px;
+            box-sizing: border-box;
+            flex: 0 0 13px;
+            border: 2px solid rgba(255,255,255,.42);
+            border-top-color: #fff;
+            border-radius: 999px;
+            animation: graph-status-spinner .65s linear infinite;
+        }
         .graph-status-details {
             margin-top: 16px;
             color: #8b948c;
@@ -148,11 +202,41 @@
         .graph-status-banner .graph-status-retry {
             flex: 0 0 auto;
             min-height: 31px;
+            min-width: 74px;
             padding: 0 12px;
             background: transparent;
             color: #6e5927;
             border-color: rgba(139,110,39,.35);
             font-size: 10px;
+        }
+        .graph-status-banner .graph-status-retry:hover:not(:disabled) {
+            background: rgba(139,110,39,.09);
+            border-color: rgba(139,110,39,.55);
+            color: #5d4a21;
+        }
+        .graph-status-banner .graph-status-retry:active:not(:disabled) {
+            background: rgba(139,110,39,.16);
+            border-color: rgba(139,110,39,.62);
+            color: #4f3f1d;
+        }
+        .graph-status-banner .graph-status-retry[data-busy="true"] {
+            background: rgba(139,110,39,.10);
+            border-color: rgba(139,110,39,.48);
+            color: #5d4a21;
+        }
+        .graph-status-banner .graph-status-retry-spinner {
+            width: 11px;
+            height: 11px;
+            flex-basis: 11px;
+            border-color: rgba(110,89,39,.3);
+            border-top-color: currentColor;
+        }
+
+        @keyframes graph-status-spinner {
+            to { transform: rotate(360deg); }
+        }
+        @keyframes graph-status-infra-spin {
+            to { transform: rotate(360deg); }
         }
 
         @media (max-width: 768px), (hover: none) and (pointer: coarse) {
@@ -179,6 +263,15 @@
                 align-items: flex-start;
             }
             .graph-status-banner-description { display: none; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .graph-status-retry,
+            .graph-status-retry-spinner,
+            .graph-status-full.retrying[data-kind="quota"] .graph-status-icon svg {
+                animation: none !important;
+                transition: none !important;
+            }
         }
 
         @media print {
@@ -294,11 +387,35 @@
         return lines.join('\n');
     }
 
+    function wait(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
     async function retry(button) {
-        if (typeof retryHandler !== 'function') return;
+        if (typeof retryHandler !== 'function' || button.dataset.busy === 'true') return;
+
+        const started = performance.now();
+        const surface = button.closest('.graph-status-full, .graph-status-banner');
+        const originalHTML = button.innerHTML;
+
+        button.dataset.busy = 'true';
         button.disabled = true;
-        try { await retryHandler(); }
-        finally { button.disabled = false; }
+        button.setAttribute('aria-busy', 'true');
+        button.innerHTML = '<span class="graph-status-retry-spinner" aria-hidden="true"></span><span>מנסה…</span>';
+        surface?.classList.add('retrying');
+
+        try {
+            await retryHandler();
+        } finally {
+            const remaining = RETRY_MIN_BUSY_MS - (performance.now() - started);
+            if (remaining > 0) await wait(remaining);
+
+            surface?.classList.remove('retrying');
+            button.innerHTML = originalHTML;
+            button.disabled = false;
+            button.removeAttribute('aria-busy');
+            delete button.dataset.busy;
+        }
     }
 
     full.querySelector('.graph-status-retry').addEventListener('click', event => void retry(event.currentTarget));
