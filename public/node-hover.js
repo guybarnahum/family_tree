@@ -175,6 +175,7 @@
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
 
         appendScript('/person-pane.js', 'data-family-person-pane', build);
+        appendScript('/person-pane-position.js', 'data-family-person-pane-position', build);
         appendScript('/print-polish.js', 'data-family-print-polish', build);
         appendScript('/print-refinement.js', 'data-family-print', build);
         appendScript('/planar-core.js', 'data-family-planar-core', build);
