@@ -30,6 +30,16 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+async function tableExists(env, name) {
+  const row = await env.DB.prepare(`
+    SELECT 1 AS present
+    FROM sqlite_master
+    WHERE type = 'table' AND name = ?
+    LIMIT 1
+  `).bind(name).first();
+  return !!row?.present;
+}
+
 function normalizedSpousePair(a, b) {
   return a < b ? [a, b] : [b, a];
 }
@@ -90,13 +100,10 @@ async function ensureNodeMetadataSchema(env) {
     try {
       await env.DB.prepare("ALTER TABLE nodes ADD COLUMN metadata_json TEXT DEFAULT '{}'").run();
     } catch (error) {
-      // Multiple Worker isolates may race the first schema upgrade.
       if (!String(error?.message || error).toLowerCase().includes('duplicate column')) throw error;
     }
   }
 
-  // Slice B intentionally does not migrate the old dates/description columns. Existing
-  // people simply start with empty flexible metadata.
   await env.DB.prepare(`
     UPDATE nodes
     SET metadata_json = '{}'
@@ -133,7 +140,6 @@ async function ensureGraphSchema(env) {
         `)
       ]);
 
-      // Keep the existing topology migration while nodes.parent_id/spouse_id still exist.
       await env.DB.batch([
         env.DB.prepare(`
           INSERT OR IGNORE INTO relationships (id, type, person1_id, person2_id)
@@ -184,8 +190,6 @@ function normalizePerson(person) {
 }
 
 function normalizeGraphPayload(payload) {
-  // Legacy v1 remains accepted for topology only; old dates/description are intentionally
-  // discarded rather than migrated into the new person metadata model.
   if (payload?.format === 'family-tree' && payload?.version === 1 && Array.isArray(payload.people)) {
     const people = payload.people.map(person => normalizePerson(person));
     const relationships = [];
@@ -221,21 +225,15 @@ function normalizeGraphPayload(payload) {
 
 function validateGraphPayload(payload) {
   const normalized = normalizeGraphPayload(payload);
-  if (normalized.people.length > 1000) {
-    throw new Error('Import is limited to 1000 people');
-  }
-  if (normalized.relationships.length > 5000) {
-    throw new Error('Import is limited to 5000 relationships');
-  }
+  if (normalized.people.length > 1000) throw new Error('Import is limited to 1000 people');
+  if (normalized.relationships.length > 5000) throw new Error('Import is limited to 5000 relationships');
 
   const ids = new Set();
   for (const person of normalized.people) {
     if (typeof person.id !== 'string' || !person.id.trim()) {
       throw new Error('Every person must have a non-empty string id');
     }
-    if (ids.has(person.id)) {
-      throw new Error(`Duplicate person id: ${person.id}`);
-    }
+    if (ids.has(person.id)) throw new Error(`Duplicate person id: ${person.id}`);
     ids.add(person.id);
   }
 
@@ -343,6 +341,14 @@ async function replaceGraph(env, payload) {
   }
 
   await env.DB.batch(statements);
+
+  if (await tableExists(env, 'media_people')) {
+    await env.DB.prepare(`
+      DELETE FROM media_people
+      WHERE person_id NOT IN (SELECT id FROM nodes)
+    `).run();
+  }
+
   return { people: people.length, relationships: relationships.length };
 }
 
@@ -381,9 +387,7 @@ async function graphDocument(env) {
 }
 
 async function handleGraphApi(request, env) {
-  if (request.method === 'GET') {
-    return jsonResponse(await graphDocument(env));
-  }
+  if (request.method === 'GET') return jsonResponse(await graphDocument(env));
 
   if (request.method === 'PUT') {
     const payload = await request.json();
@@ -454,8 +458,6 @@ async function handleNodesApi(request, env, url) {
       const { metadata_json: metadataJson, ...node } = row;
       return {
         ...node,
-        // Keep blank legacy presentation properties only so the old base card renderer can
-        // initialize safely; all actual person details live in metadata.
         dates: '',
         description: '',
         metadata: metadataObject(metadataJson)
@@ -510,15 +512,11 @@ async function handleNodesApi(request, env, url) {
   if (request.method === 'PATCH' && nodeId) {
     const data = await request.json();
     const fields = Object.keys(data);
-    if (fields.length !== 1) {
-      return new Response('PATCH expects exactly one field', { status: 400 });
-    }
+    if (fields.length !== 1) return new Response('PATCH expects exactly one field', { status: 400 });
 
     const field = fields[0];
     const allowedFields = ['name', 'metadata', 'parent_id', 'spouse_id'];
-    if (!allowedFields.includes(field)) {
-      return new Response('Unsupported field', { status: 400 });
-    }
+    if (!allowedFields.includes(field)) return new Response('Unsupported field', { status: 400 });
 
     if (field === 'parent_id') {
       const parentId = data.parent_id || null;
@@ -582,13 +580,16 @@ async function handleNodesApi(request, env, url) {
   }
 
   if (request.method === 'DELETE' && nodeId) {
-    await env.DB.batch([
+    const statements = [
       env.DB.prepare('DELETE FROM relationships WHERE person1_id = ? OR person2_id = ?').bind(nodeId, nodeId),
       env.DB.prepare('UPDATE nodes SET parent_id = NULL WHERE parent_id = ?').bind(nodeId),
       env.DB.prepare('UPDATE nodes SET spouse_id = NULL WHERE spouse_id = ?').bind(nodeId),
       env.DB.prepare('DELETE FROM nodes WHERE id = ?').bind(nodeId)
-    ]);
-
+    ];
+    if (await tableExists(env, 'media_people')) {
+      statements.unshift(env.DB.prepare('DELETE FROM media_people WHERE person_id = ?').bind(nodeId));
+    }
+    await env.DB.batch(statements);
     return jsonResponse({ success: true });
   }
 
@@ -633,9 +634,7 @@ async function handleAsset(request, env) {
   if (!refinedHtml.includes('name="family-tree-build"')) {
     refinedHtml = refinedHtml.replace('</head>', `${buildMeta}\n</head>`);
   }
-  if (missingScripts) {
-    refinedHtml = refinedHtml.replace('</body>', `${missingScripts}\n</body>`);
-  }
+  if (missingScripts) refinedHtml = refinedHtml.replace('</body>', `${missingScripts}\n</body>`);
   if (!refinedHtml.includes('id="family-tree-build"')) {
     refinedHtml = refinedHtml.replace('</body>', `${buildBadge}\n</body>`);
   }
@@ -666,19 +665,9 @@ export default {
 
       if (url.pathname.startsWith('/api/')) {
         if (!env.DB) return new Response('DB binding missing', { status: 500 });
-
-        if (url.pathname === '/api/graph') {
-          return await handleGraphApi(request, env);
-        }
-
-        if (url.pathname === '/api/tree') {
-          return await handleTreeApi(request, env);
-        }
-
-        if (url.pathname.startsWith('/api/nodes')) {
-          return await handleNodesApi(request, env, url);
-        }
-
+        if (url.pathname === '/api/graph') return await handleGraphApi(request, env);
+        if (url.pathname === '/api/tree') return await handleTreeApi(request, env);
+        if (url.pathname.startsWith('/api/nodes')) return await handleNodesApi(request, env, url);
         return new Response('Not found', { status: 404 });
       }
 
