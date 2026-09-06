@@ -43,8 +43,7 @@
     }
 
     function rootCardName(id) {
-        const escaped = window.CSS?.escape ? CSS.escape(id) : id.replace(/(["'\\.#:[\]()])/g, '\\$1');
-        return document.querySelector(`#card-${escaped} h2[data-field="name"]`);
+        return document.getElementById(`card-${id}`)?.querySelector('h2[data-field="name"]') || null;
     }
 
     function updateLocalPerson(id, field, value) {
