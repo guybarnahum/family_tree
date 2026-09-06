@@ -168,12 +168,13 @@
     }
 
     // Late refinements depend on controls/layout layers injected after this script. Load
-    // them once the page is complete. Row planarity is established first, then people inside
-    // spouse units are lineage-oriented; dangling bridge branches are compacted toward their
-    // attachment; final orthogonal routing draws the resulting geometry.
+    // them once the page is complete. Slice A first establishes the final name-only card
+    // geometry + selected-person pane; row planarity is then solved using those measured
+    // cards, followed by lineage member order, bridge compaction and final routing.
     function loadLateRefinements() {
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
 
+        appendScript('/person-pane.js', 'data-family-person-pane', build);
         appendScript('/print-polish.js', 'data-family-print-polish', build);
         appendScript('/print-refinement.js', 'data-family-print', build);
         appendScript('/planar-core.js', 'data-family-planar-core', build);
