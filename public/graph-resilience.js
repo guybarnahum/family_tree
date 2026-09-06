@@ -13,6 +13,9 @@
     }
 
     const nativeFetch = window.fetch.bind(window);
+    const baseShowStatus = typeof window.showStatus === 'function'
+        ? window.showStatus.bind(window)
+        : null;
     let retryInFlight = false;
 
     function isGraphRequest(input, init) {
@@ -79,12 +82,12 @@
         });
     }
 
-    async function captureSuccessfulGraph(response) {
+    async function readSuccessfulGraph(response) {
         try {
             const graph = await response.clone().json();
-            if (Cache.isGraphDocument(graph)) Cache.save(graph);
+            return Cache.isGraphDocument(graph) ? graph : null;
         } catch (_) {
-            // The normal graph loader will report malformed JSON as a data/render failure.
+            return null;
         }
     }
 
@@ -94,9 +97,18 @@
         try {
             const response = await nativeFetch(input, init);
             if (response.ok) {
-                await captureSuccessfulGraph(response);
-                Status.clear();
-                return response;
+                const graph = await readSuccessfulGraph(response);
+                if (graph) {
+                    Cache.save(graph);
+                    Status.clear();
+                    return response;
+                }
+
+                const malformed = new Error('Graph response was not valid graph JSON');
+                const classified = Status.classify(malformed);
+                const cached = Cache.load();
+                showFailure(classified, { cached, detail: malformed.message });
+                return cached ? cachedResponse(cached) : response;
             }
 
             let body = '';
@@ -117,6 +129,22 @@
             throw error;
         }
     };
+
+    // graph-view catches projection/layout/JSON failures internally. Upgrade its legacy
+    // tiny status message into the same large/bannner resilience surface.
+    if (baseShowStatus) {
+        window.showStatus = function resilientShowStatus(message, ...args) {
+            if (String(message) === 'שגיאה בטעינת הגרף') {
+                const cached = Cache.load();
+                showFailure(
+                    { kind: 'data', transient: false, status: null, text: 'Graph render/load failure' },
+                    { cached, detail: 'Graph render/load failure' }
+                );
+                return;
+            }
+            return baseShowStatus(message, ...args);
+        };
+    }
 
     window.addEventListener('online', () => {
         if (document.querySelector('.graph-status-full.open, .graph-status-banner.open')) {
