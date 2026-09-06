@@ -48,10 +48,9 @@ CREATE TABLE IF NOT EXISTS place_api_usage (
 );
 
 -- Slice D media metadata lives in D1 while original image bytes live in R2. `media_people`
--- is an association table, not ownership: one photo can be associated with multiple people
--- and Slice E can add face rectangles pointing to the same media row. person_id deliberately
--- has no FK because topology edits currently replace/reinsert `nodes`; associations must
--- survive that graph rewrite unchanged.
+-- is an association table, not ownership: one photo can be associated with multiple people.
+-- person_id deliberately has no FK because topology edits currently replace/reinsert `nodes`;
+-- associations must survive that graph rewrite unchanged.
 CREATE TABLE IF NOT EXISTS media (
     id TEXT PRIMARY KEY,
     object_key TEXT NOT NULL UNIQUE,
@@ -79,6 +78,35 @@ ON media_people(person_id);
 
 CREATE INDEX IF NOT EXISTS idx_media_people_media
 ON media_people(media_id);
+
+-- Slice E face rectangles are normalized to the original image (0..1), so the same record
+-- works at any rendered size. person_id is nullable: a face can be marked before it is named.
+-- As with media_people, person_id intentionally has no FK to nodes so graph rewrites do not
+-- destroy face identity assignments.
+CREATE TABLE IF NOT EXISTS faces (
+    id TEXT PRIMARY KEY,
+    media_id TEXT NOT NULL,
+    person_id TEXT,
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    width REAL NOT NULL,
+    height REAL NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE,
+    CHECK (x >= 0 AND x <= 1),
+    CHECK (y >= 0 AND y <= 1),
+    CHECK (width > 0 AND width <= 1),
+    CHECK (height > 0 AND height <= 1),
+    CHECK (x + width <= 1.000001),
+    CHECK (y + height <= 1.000001)
+);
+
+CREATE INDEX IF NOT EXISTS idx_faces_media
+ON faces(media_id);
+
+CREATE INDEX IF NOT EXISTS idx_faces_person
+ON faces(person_id);
 
 -- Seed a default person only for a new/empty database.
 INSERT OR IGNORE INTO nodes (id, parent_id, name, metadata_json)
