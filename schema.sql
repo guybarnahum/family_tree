@@ -33,6 +33,20 @@ ON relationships(person1_id);
 CREATE INDEX IF NOT EXISTS idx_relationship_person2
 ON relationships(person2_id);
 
+-- Place autocomplete caches GeoNames results aggressively so ordinary family editing stays
+-- well below the free service limits. Usage buckets count only cache misses sent upstream.
+CREATE TABLE IF NOT EXISTS place_search_cache (
+    cache_key TEXT PRIMARY KEY,
+    response_json TEXT NOT NULL,
+    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS place_api_usage (
+    bucket TEXT PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Seed a default person only for a new/empty database.
 INSERT OR IGNORE INTO nodes (id, parent_id, name, metadata_json)
 VALUES (
