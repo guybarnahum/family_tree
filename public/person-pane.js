@@ -645,7 +645,7 @@
             }
 
             const spouse = card.querySelector('[data-action="add-spouse"]');
-            if (spouse) spouse.textContent = '+ הוסף בן/בת זוג';
+            if (spouse) spouse.textContent = '+ בן/בת זוג';
             const child = card.querySelector('[data-action="add-child"]');
             if (child) child.textContent = '+ ילד';
         });
