@@ -61,9 +61,96 @@ function relationshipRecord(type, a, b) {
   };
 }
 
+function metadataObject(value, { strict = false } = {}) {
+  if (value === null || value === undefined || value === '') return {};
+
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch (error) {
+      if (strict) throw new Error('Person metadata must contain valid JSON');
+      return {};
+    }
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    if (strict) throw new Error('Person metadata must be a JSON object');
+    return {};
+  }
+
+  return JSON.parse(JSON.stringify(parsed));
+}
+
+function meaningfulLegacyText(value, placeholder) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (!text || text === placeholder) return null;
+  return text;
+}
+
+function metadataFromLegacy(metadata, dates, description) {
+  const result = { ...metadata };
+  const datesValue = meaningfulLegacyText(dates, 'תאריכים');
+  const descriptionValue = meaningfulLegacyText(description, 'תיאור');
+
+  if (!Object.prototype.hasOwnProperty.call(result, 'lifeDates') && datesValue) {
+    result.lifeDates = datesValue;
+  }
+  if (!Object.prototype.hasOwnProperty.call(result, 'bio') && descriptionValue) {
+    result.bio = descriptionValue;
+  }
+  return result;
+}
+
+function metadataValue(metadata, key, fallback = null) {
+  return metadata && Object.prototype.hasOwnProperty.call(metadata, key)
+    ? metadata[key]
+    : fallback;
+}
+
+async function ensureNodeMetadataSchema(env) {
+  const columns = await env.DB.prepare('PRAGMA table_info(nodes)').all();
+  const hasMetadata = (columns.results || []).some(column => column.name === 'metadata_json');
+
+  if (!hasMetadata) {
+    try {
+      await env.DB.prepare('ALTER TABLE nodes ADD COLUMN metadata_json TEXT').run();
+    } catch (error) {
+      // Two Worker isolates can observe the old schema at the same time. The second ALTER
+      // is harmless once another isolate has already added the column.
+      if (!String(error?.message || error).toLowerCase().includes('duplicate column')) throw error;
+    }
+  }
+
+  // Backfill only rows that have never received metadata. Once metadata_json exists for a
+  // person it is authoritative; intentionally blank/removed metadata must not be resurrected
+  // from the old dates/description columns on a later request.
+  const rows = await env.DB.prepare(`
+    SELECT id, dates, description, metadata_json
+    FROM nodes
+    WHERE metadata_json IS NULL OR TRIM(metadata_json) = ''
+  `).all();
+
+  const statements = [];
+  for (const row of rows.results || []) {
+    const metadata = metadataFromLegacy({}, row.dates, row.description);
+    statements.push(
+      env.DB.prepare('UPDATE nodes SET metadata_json = ? WHERE id = ?')
+        .bind(JSON.stringify(metadata), row.id)
+    );
+  }
+
+  for (let index = 0; index < statements.length; index += 50) {
+    await env.DB.batch(statements.slice(index, index + 50));
+  }
+}
+
 async function ensureGraphSchema(env) {
   if (!graphSchemaPromise) {
     graphSchemaPromise = (async () => {
+      await ensureNodeMetadataSchema(env);
+
       await env.DB.batch([
         env.DB.prepare(`
           CREATE TABLE IF NOT EXISTS relationships (
@@ -130,11 +217,18 @@ async function ensureGraphSchema(env) {
 }
 
 function normalizePerson(person) {
+  const metadataProvided = !!person && Object.prototype.hasOwnProperty.call(person, 'metadata');
+  let metadata = metadataObject(person?.metadata, { strict: metadataProvided });
+  if (!metadataProvided) {
+    metadata = metadataFromLegacy(metadata, person?.dates, person?.description);
+  }
+
   return {
     id: person?.id,
     name: person?.name ?? null,
-    dates: person?.dates ?? null,
-    description: person?.description ?? null
+    dates: metadataValue(metadata, 'lifeDates', person?.dates ?? null),
+    description: metadataValue(metadata, 'bio', person?.description ?? null),
+    metadata
   };
 }
 
@@ -258,6 +352,7 @@ function legacyLinksFor(people, relationships) {
 }
 
 async function replaceGraph(env, payload) {
+  await ensureGraphSchema(env);
   const { people, relationships } = validateGraphPayload(payload);
   const legacy = legacyLinksFor(people, relationships);
 
@@ -270,15 +365,16 @@ async function replaceGraph(env, payload) {
     const links = legacy.get(person.id);
     statements.push(
       env.DB.prepare(`
-        INSERT INTO nodes (id, parent_id, spouse_id, name, dates, description)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO nodes (id, parent_id, spouse_id, name, dates, description, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `).bind(
         person.id,
         links?.parent_id || null,
         links?.spouse_id || null,
         person.name,
         person.dates,
-        person.description
+        person.description,
+        JSON.stringify(person.metadata || {})
       )
     );
   }
@@ -300,7 +396,7 @@ async function graphDocument(env) {
   await ensureGraphSchema(env);
   const [peopleResult, relationshipsResult] = await Promise.all([
     env.DB.prepare(`
-      SELECT id, name, dates, description, last_updated
+      SELECT id, name, dates, description, metadata_json, last_updated
       FROM nodes
       ORDER BY id ASC
     `).all(),
@@ -319,6 +415,7 @@ async function graphDocument(env) {
       name: person.name ?? null,
       dates: person.dates ?? null,
       description: person.description ?? null,
+      metadata: metadataObject(person.metadata_json),
       lastUpdated: person.last_updated ?? null
     })),
     relationships: relationshipsResult.results.map(relation => ({
@@ -351,8 +448,8 @@ async function handleTreeApi(request, env) {
     const people = graph.people.map(person => ({
       id: person.id,
       name: person.name,
-      dates: person.dates,
-      description: person.description,
+      dates: metadataValue(person.metadata, 'lifeDates', person.dates),
+      description: metadataValue(person.metadata, 'bio', person.description),
       parentId: null,
       spouseId: null
     }));
@@ -399,24 +496,32 @@ async function handleNodesApi(request, env, url) {
       .prepare('SELECT * FROM nodes ORDER BY id ASC')
       .all();
 
-    return jsonResponse(results);
+    return jsonResponse(results.map(row => {
+      const { metadata_json: metadataJson, ...node } = row;
+      return { ...node, metadata: metadataObject(metadataJson) };
+    }));
   }
 
   if (request.method === 'POST') {
     const data = await request.json();
     if (!data.id) return new Response('Node id is required', { status: 400 });
 
+    const metadataProvided = Object.prototype.hasOwnProperty.call(data, 'metadata');
+    let metadata = metadataObject(data.metadata, { strict: metadataProvided });
+    if (!metadataProvided) metadata = metadataFromLegacy(metadata, data.dates, data.description);
+
     const statements = [
       env.DB.prepare(`
-        INSERT INTO nodes (id, parent_id, spouse_id, name, dates, description)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO nodes (id, parent_id, spouse_id, name, dates, description, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `).bind(
         data.id,
         data.parent_id || null,
         data.spouse_id || null,
         data.name || 'שם',
         data.dates || 'תאריכים',
-        data.description || 'תיאור'
+        data.description || 'תיאור',
+        JSON.stringify(metadata)
       )
     ];
 
@@ -452,7 +557,7 @@ async function handleNodesApi(request, env, url) {
     }
 
     const field = fields[0];
-    const allowedFields = ['name', 'dates', 'description', 'parent_id', 'spouse_id'];
+    const allowedFields = ['name', 'dates', 'description', 'metadata', 'parent_id', 'spouse_id'];
     if (!allowedFields.includes(field)) {
       return new Response('Unsupported field', { status: 400 });
     }
@@ -499,6 +604,33 @@ async function handleNodesApi(request, env, url) {
 
       await env.DB.batch(statements);
       return jsonResponse({ success: true });
+    }
+
+    if (field === 'metadata') {
+      const metadata = metadataObject(data.metadata, { strict: true });
+      const statements = [
+        env.DB.prepare(`
+          UPDATE nodes
+          SET metadata_json = ?, last_updated = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(JSON.stringify(metadata), nodeId)
+      ];
+
+      if (Object.prototype.hasOwnProperty.call(metadata, 'lifeDates')) {
+        statements.push(
+          env.DB.prepare('UPDATE nodes SET dates = ? WHERE id = ?')
+            .bind(metadata.lifeDates ?? null, nodeId)
+        );
+      }
+      if (Object.prototype.hasOwnProperty.call(metadata, 'bio')) {
+        statements.push(
+          env.DB.prepare('UPDATE nodes SET description = ? WHERE id = ?')
+            .bind(metadata.bio ?? null, nodeId)
+        );
+      }
+
+      await env.DB.batch(statements);
+      return jsonResponse({ success: true, metadata });
     }
 
     await env.DB.prepare(
