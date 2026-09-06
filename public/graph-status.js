@@ -46,6 +46,20 @@
             color: #588157;
         }
         .graph-status-icon svg { width: 34px; height: 34px; display: block; }
+
+        /* D1 quota failures are a product/service bug state, not a server glyph.
+           Give that state a much stronger visual anchor without changing other errors. */
+        .graph-status-full[data-kind="quota"] .graph-status-icon {
+            width: 168px;
+            height: 168px;
+            margin-bottom: 14px;
+            background: transparent;
+        }
+        .graph-status-full[data-kind="quota"] .graph-status-icon svg {
+            width: 128px;
+            height: 128px;
+        }
+
         .graph-status-title {
             margin: 0 0 8px;
             font: 700 24px/1.3 "Frank Ruhl Libre", serif;
@@ -148,6 +162,15 @@
                 padding: 25px 20px 22px;
                 border-radius: 20px;
             }
+            .graph-status-full[data-kind="quota"] .graph-status-icon {
+                width: 140px;
+                height: 140px;
+                margin-bottom: 10px;
+            }
+            .graph-status-full[data-kind="quota"] .graph-status-icon svg {
+                width: 108px;
+                height: 108px;
+            }
             .graph-status-title { font-size: 22px; }
             .graph-status-description { font-size: 13px; }
             .graph-status-banner {
@@ -196,12 +219,14 @@
     `;
     document.body.appendChild(banner);
 
+    const BUG_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 7.5 7 5.5M15 7.5l2-2M8 12H4.5M19.5 12H16M9 16.5l-2 2M15 16.5l2 2"/><rect x="8" y="7" width="8" height="10" rx="4"/><path d="M12 7V4M12 17v3"/></svg>`;
+
     const ICONS = {
         connectivity: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.8 8.9a14.3 14.3 0 0 1 18.4 0"/><path d="M6.2 12.4a9.2 9.2 0 0 1 11.6 0"/><path d="M9.5 15.8a4.3 4.3 0 0 1 5 0"/><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none"/></svg>`,
-        quota: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="5" rx="7" ry="3"/><path d="M5 5v5c0 1.7 3.1 3 7 3s7-1.3 7-3V5"/><path d="M5 10v5c0 1.7 3.1 3 7 3 1 0 2-.1 2.8-.3"/><path d="M18.5 15.2v3.2" stroke-linecap="round"/><circle cx="18.5" cy="21" r=".8" fill="currentColor" stroke="none"/></svg>`,
+        quota: BUG_ICON,
         server: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><circle cx="7.5" cy="7" r=".8" fill="currentColor" stroke="none"/><circle cx="7.5" cy="17" r=".8" fill="currentColor" stroke="none"/><path d="M11 7h6M11 17h6"/></svg>`,
         configuration: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M14.8 6.2a4 4 0 0 0-5 5L4.3 16.7a2.1 2.1 0 1 0 3 3l5.5-5.5a4 4 0 0 0 5-5l-2.4 2.4-3-3 2.4-2.4Z"/></svg>`,
-        data: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 7.5 7 5.5M15 7.5l2-2M8 12H4.5M19.5 12H16M9 16.5l-2 2M15 16.5l2 2"/><rect x="8" y="7" width="8" height="10" rx="4"/><path d="M12 7V4M12 17v3"/></svg>`
+        data: BUG_ICON
     };
 
     const COPY = {
@@ -283,6 +308,9 @@
         const copy = COPY[kind] || COPY.data;
         const icon = ICONS[kind] || ICONS.data;
         const retryVisible = !!retryHandler;
+
+        full.dataset.kind = kind;
+        banner.dataset.kind = kind;
 
         if (mode === 'banner') {
             full.classList.remove('open');
