@@ -264,7 +264,11 @@ function validateGraphPayload(payload) {
   for (const relation of relationships) {
     if (relation.type !== 'parent') continue;
     if (!parentsByChild.has(relation.person2_id)) parentsByChild.set(relation.person2_id, []);
-    parentsByChild.get(relation.person2_id).push(relation.person1_id);
+    const parents = parentsByChild.get(relation.person2_id);
+    parents.push(relation.person1_id);
+    if (parents.length > 2) {
+      throw new Error(`A person can have at most 2 parents: ${relation.person2_id}`);
+    }
   }
 
   const visiting = new Set();
