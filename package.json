@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node tests/planar-core.test.cjs && node tests/person-metadata.test.cjs && node --input-type=module --check < src/worker.js && node --check public/graph-view.js && node --check public/import-export.js && node --check public/person-pane.js && node --check public/person-pane-position.js && node --check public/slice-a-polish.js && node --check public/slice-a-geometry.js && node --check public/planar-layout.js && node --check public/member-order-refinement.js && node --check public/bridge-compaction.js && node --check public/planar-router.js"
+    "test": "node tests/planar-core.test.cjs && node tests/person-metadata.test.cjs && node tests/person-metadata-ui.test.cjs && node --input-type=module --check < src/worker.js && node --check public/person-metadata.js && node --check public/graph-view.js && node --check public/import-export.js && node --check public/person-pane.js && node --check public/person-pane-position.js && node --check public/slice-a-polish.js && node --check public/slice-a-geometry.js && node --check public/planar-layout.js && node --check public/member-order-refinement.js && node --check public/bridge-compaction.js && node --check public/planar-router.js"
   },
   "keywords": [],
   "author": "",
