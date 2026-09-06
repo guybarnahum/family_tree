@@ -189,6 +189,15 @@
             : String(person?.description ?? '');
     }
 
+    function graphStructureSignature(people, relationships) {
+        return JSON.stringify([
+            (people || []).map(person => [person.id, person.name]),
+            (relationships || []).map(relation => [
+                relation.id, relation.type, relation.person1Id, relation.person2Id
+            ])
+        ]);
+    }
+
     function addToMapSet(map, key, value) {
         if (!map.has(key)) map.set(key, new Set());
         map.get(key).add(value);
@@ -567,29 +576,54 @@
         renderGraphView({ recenter: true });
     }
 
+    function syncPersonDetailsWithoutRender(people) {
+        let changed = false;
+        for (const source of people || []) {
+            const canonical = graphPeopleById.get(source.id);
+            const visible = globalNodeMap?.get(source.id);
+            const nextMetadata = source.metadata && typeof source.metadata === 'object'
+                ? { ...source.metadata }
+                : {};
+
+            if (canonical) {
+                const before = JSON.stringify(canonical.metadata || {});
+                const after = JSON.stringify(nextMetadata);
+                if (before !== after || canonical.lastUpdated !== source.lastUpdated) changed = true;
+                canonical.metadata = nextMetadata;
+                canonical.lastUpdated = source.lastUpdated;
+            }
+
+            if (visible) {
+                visible.metadata = { ...nextMetadata };
+                visible.last_updated = source.lastUpdated;
+            }
+        }
+
+        if (changed) {
+            window.dispatchEvent(new CustomEvent('family-person-data-refreshed'));
+        }
+    }
+
     async function loadGraph(force = false, { recenter = false } = {}) {
         try {
             const response = await fetch('/api/graph', { cache: 'no-store' });
             if (!response.ok) throw new Error(await response.text());
             const documentValue = await response.json();
-            const nextSignature = JSON.stringify([
-                documentValue.people?.map(person => [
-                    person.id,
-                    person.name,
-                    person.dates,
-                    person.description,
-                    person.metadata || null,
-                    person.lastUpdated
-                ]),
-                documentValue.relationships?.map(relation => [
-                    relation.id, relation.type, relation.person1Id, relation.person2Id
-                ])
-            ]);
+            const nextPeople = documentValue.people || [];
+            const nextRelationships = documentValue.relationships || [];
+            const nextSignature = graphStructureSignature(nextPeople, nextRelationships);
 
-            if (!force && nextSignature === graphSignature) return;
+            // The five-second multi-client poll must not treat biography changes as graph
+            // changes. Metadata is merged in place; only names/topology can replace cards
+            // and invoke layoutAndRender().
+            if (!force && nextSignature === graphSignature) {
+                syncPersonDetailsWithoutRender(nextPeople);
+                return;
+            }
+
             graphSignature = nextSignature;
-            graphPeople = documentValue.people || [];
-            graphRelationships = documentValue.relationships || [];
+            graphPeople = nextPeople;
+            graphRelationships = nextRelationships;
             rebuildIndexes();
 
             if (!graphRootId || !graphPeopleById.has(graphRootId)) {
@@ -730,7 +764,12 @@
         const detail = event.detail || {};
         const person = graphPeopleById.get(detail.id);
         if (!person) return;
-        if (detail.field === 'name') person.name = detail.value;
+        if (detail.field === 'name') {
+            person.name = detail.value;
+            // The pane already reflowed the visible name card. Keep the polling signature
+            // coherent so the next five-second poll does not redraw the same graph again.
+            graphSignature = graphStructureSignature(graphPeople, graphRelationships);
+        }
         if (detail.field === 'metadata' && detail.metadata && typeof detail.metadata === 'object') {
             person.metadata = { ...detail.metadata };
         }
