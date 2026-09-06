@@ -47,8 +47,8 @@
         }
         .graph-status-icon svg { width: 34px; height: 34px; display: block; }
 
-        /* D1 quota failures are a product/service bug state, not a server glyph.
-           Give that state a much stronger visual anchor without changing other errors. */
+        /* D1 quota/outage is infrastructure, not an application bug. Keep the
+           infrastructure glyph prominent without changing the other status icons. */
         .graph-status-full[data-kind="quota"] .graph-status-icon {
             width: 168px;
             height: 168px;
@@ -220,11 +220,12 @@
     document.body.appendChild(banner);
 
     const BUG_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 7.5 7 5.5M15 7.5l2-2M8 12H4.5M19.5 12H16M9 16.5l-2 2M15 16.5l2 2"/><rect x="8" y="7" width="8" height="10" rx="4"/><path d="M12 7V4M12 17v3"/></svg>`;
+    const INFRA_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><circle cx="7.5" cy="7" r=".8" fill="currentColor" stroke="none"/><circle cx="7.5" cy="17" r=".8" fill="currentColor" stroke="none"/><path d="M11 7h6M11 17h6"/></svg>`;
 
     const ICONS = {
         connectivity: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2.8 8.9a14.3 14.3 0 0 1 18.4 0"/><path d="M6.2 12.4a9.2 9.2 0 0 1 11.6 0"/><path d="M9.5 15.8a4.3 4.3 0 0 1 5 0"/><circle cx="12" cy="19" r="1" fill="currentColor" stroke="none"/></svg>`,
-        quota: BUG_ICON,
-        server: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><circle cx="7.5" cy="7" r=".8" fill="currentColor" stroke="none"/><circle cx="7.5" cy="17" r=".8" fill="currentColor" stroke="none"/><path d="M11 7h6M11 17h6"/></svg>`,
+        quota: INFRA_ICON,
+        server: INFRA_ICON,
         configuration: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M14.8 6.2a4 4 0 0 0-5 5L4.3 16.7a2.1 2.1 0 1 0 3 3l5.5-5.5a4 4 0 0 0 5-5l-2.4 2.4-3-3 2.4-2.4Z"/></svg>`,
         data: BUG_ICON
     };
