@@ -1,6 +1,7 @@
 import worker from './worker.js';
 import { handlePlacesApi } from './places.js';
 import { handleMediaApi } from './media.js';
+import { handleFacesApi } from './faces.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -25,6 +26,15 @@ export default {
       } catch (error) {
         console.error('Media API failed:', error);
         return new Response(`Media API Error: ${error.message}`, { status: 500 });
+      }
+    }
+
+    if (url.pathname === '/api/faces' || url.pathname.startsWith('/api/faces/')) {
+      try {
+        return await handleFacesApi(request, env, url);
+      } catch (error) {
+        console.error('Faces API failed:', error);
+        return new Response(`Faces API Error: ${error.message}`, { status: 500 });
       }
     }
 
