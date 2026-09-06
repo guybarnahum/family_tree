@@ -1,4 +1,4 @@
-// Slice F graph decoration: show a small circular crop for the preferred (or fallback)
+// Slice F graph decoration: show a circular crop for the preferred (or fallback)
 // tagged face without changing card geometry or triggering a graph relayout.
 (() => {
     if (window.__familyNodeFaceDecorationInstalled) return;
@@ -15,23 +15,24 @@
     style.textContent = `
         #cards-layer .absolute-card .node-face-avatar {
             position: absolute;
-            left: 7px;
-            bottom: -12px;
-            width: 28px;
-            height: 28px;
+            left: -13px;
+            top: -15px;
+            width: 40px;
+            height: 40px;
             box-sizing: border-box;
             overflow: hidden;
             border: 2px solid rgba(255,255,255,.98);
             border-radius: 999px;
-            background: #eef1eb;
-            box-shadow: 0 2px 7px rgba(52,78,65,.22);
+            background: #eee9dd;
+            box-shadow: 0 3px 9px rgba(52,78,65,.24);
             z-index: 44;
             pointer-events: none;
         }
         #cards-layer .absolute-card.graph-root .node-face-avatar {
-            width: 30px;
-            height: 30px;
-            bottom: -13px;
+            left: -15px;
+            top: -17px;
+            width: 44px;
+            height: 44px;
         }
         #cards-layer .absolute-card .node-face-avatar img {
             position: absolute;
@@ -41,6 +42,7 @@
             margin: 0 !important;
             transform: none !important;
             transform-origin: 0 0;
+            filter: sepia(.82) saturate(.72) contrast(1.06);
         }
         @media print {
             #cards-layer .absolute-card .node-face-avatar { display: none !important; }
