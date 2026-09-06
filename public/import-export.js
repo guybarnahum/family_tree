@@ -25,9 +25,6 @@
         if (personId) writeStoredAnchor(personId);
     }
 
-    // Restore the last anchor for this browser/origin before graph-view performs its
-    // first canonical render. An explicit ?person= link wins and becomes the new saved
-    // anchor. Only the anchor persists; lateral +N expansion state remains ephemeral.
     const startupUrl = new URL(window.location.href);
     const explicitAnchor = startupUrl.searchParams.get('person');
     if (explicitAnchor) {
@@ -40,8 +37,6 @@
         }
     }
 
-    // graph-view updates ?person= whenever search/autocomplete or node-click changes the
-    // anchor. Persist those URL changes transparently so reload returns to that person.
     const nativeReplaceState = history.replaceState;
     history.replaceState = function persistedReplaceState(...args) {
         const result = nativeReplaceState.apply(this, args);
@@ -58,9 +53,6 @@
 
     window.addEventListener('popstate', persistAnchorFromLocation);
 
-    // The legacy inline page starts one /api/nodes request before injected scripts run.
-    // If that request finishes after graph-view.js, redirect its initial centering hook
-    // back into the graph renderer so the old full-tree response cannot win the race.
     const legacyCenterInitialTree = centerInitialTree;
     centerInitialTree = function graphAwareInitialCenter() {
         if (window.startFamilyGraph) {
@@ -70,8 +62,6 @@
         legacyCenterInitialTree();
     };
 
-    // Start the canonical person-centric renderer immediately. A late legacy response
-    // will call the override above and simply refresh the same graph view again.
     window.startFamilyGraph?.();
 
     const title = document.querySelector('h1');
@@ -82,22 +72,25 @@
 
     const style = document.createElement('style');
     style.textContent = `
+        /* Reserve the controls row at all times. Hover only changes visibility, never the
+           title card's measured height, so the aligned person pane remains stationary. */
         .family-title-card .family-import-export {
             display: flex;
+            align-items: center;
             gap: 6px;
             margin-top: 7px;
-            opacity: 0;
-            max-height: 0;
+            height: 24px;
+            max-height: 24px;
             overflow: hidden;
+            opacity: 0;
             pointer-events: none;
-            transform: translateY(-3px);
-            transition: opacity 0.16s ease, max-height 0.16s ease, transform 0.16s ease;
+            transform: translateY(-2px);
+            transition: opacity 0.16s ease, transform 0.16s ease;
         }
 
         .family-title-card:hover .family-import-export,
         .family-title-card:focus-within .family-import-export {
             opacity: 1;
-            max-height: 32px;
             pointer-events: auto;
             transform: translateY(0);
         }
@@ -228,8 +221,6 @@
         if (file) importFile(file);
     });
 
-    // Load interaction-only behavior after the graph and persistence layers exist.
-    // The build token keeps the dynamically loaded asset in lock-step with the Worker.
     if (!document.querySelector('script[data-family-interaction]')) {
         const interaction = document.createElement('script');
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
