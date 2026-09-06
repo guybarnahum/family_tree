@@ -242,27 +242,38 @@ async function deleteMedia(env, mediaId) {
 
 async function mediaContent(env, mediaId) {
   if (!env.MEDIA) return new Response('MEDIA R2 binding missing', { status: 503 });
-  const existing = await mediaRow(env, mediaId);
-  if (!existing) return new Response('Media not found', { status: 404 });
 
-  const object = await env.MEDIA.get(existing.object_key);
+  // Uploaded originals always use this deterministic key. Reading the bytes must not
+  // depend on D1: during a D1 outage a caller that already knows the media id should
+  // still be able to display the R2 object.
+  const safeMediaId = cleanText(mediaId, 180);
+  if (!safeMediaId) return new Response('Media not found', { status: 404 });
+  const object = await env.MEDIA.get(`media/${safeMediaId}/original`);
   if (!object) return new Response('Media object not found', { status: 404 });
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   headers.set('ETag', object.httpEtag || object.etag);
   headers.set('Cache-Control', 'private, max-age=86400');
-  headers.set('Content-Disposition', `inline; filename="${cleanFilename(existing.original_filename).replaceAll('"', '')}"`);
+  const originalFilename = cleanFilename(object.customMetadata?.originalFilename || 'photo');
+  headers.set('Content-Disposition', `inline; filename="${originalFilename.replaceAll('"', '')}"`);
   return new Response(object.body, { headers });
 }
 
 export async function handleMediaApi(request, env, url) {
-  if (!env.DB) return new Response('DB binding missing', { status: 500 });
-  await ensureMediaSchema(env);
-
   const parts = url.pathname.split('/').filter(Boolean);
   const mediaId = parts[2] ? decodeURIComponent(parts[2]) : null;
   const action = parts[3] || null;
+
+  // R2 content is deliberately available without consulting D1. All catalog/mutation
+  // operations still require D1 because associations and metadata live there.
+  if (mediaId && action === 'content') {
+    if (request.method !== 'GET') return new Response('Method not allowed', { status: 405 });
+    return mediaContent(env, mediaId);
+  }
+
+  if (!env.DB) return new Response('DB binding missing', { status: 500 });
+  await ensureMediaSchema(env);
 
   if (!mediaId) {
     if (request.method === 'GET') {
@@ -276,11 +287,6 @@ export async function handleMediaApi(request, env, url) {
     }
     if (request.method === 'POST') return uploadMedia(request, env, url);
     return new Response('Method not allowed', { status: 405 });
-  }
-
-  if (action === 'content') {
-    if (request.method !== 'GET') return new Response('Method not allowed', { status: 405 });
-    return mediaContent(env, mediaId);
   }
 
   if (request.method === 'PATCH') return patchMedia(request, env, mediaId);
