@@ -67,6 +67,61 @@
                 touch-action: pan-y;
                 padding-bottom: calc(18px + env(safe-area-inset-bottom)) !important;
             }
+
+            /* Photo viewer stays comfortably inside the visible mobile viewport instead of
+               growing to nearly full-screen height. Its header remains reachable while the
+               photo metadata/face controls scroll beneath it. */
+            #person-media-modal {
+                box-sizing: border-box !important;
+                align-items: center !important;
+                justify-content: center !important;
+                padding:
+                    max(10px, env(safe-area-inset-top))
+                    max(10px, env(safe-area-inset-right))
+                    max(10px, env(safe-area-inset-bottom))
+                    max(10px, env(safe-area-inset-left)) !important;
+            }
+
+            #person-media-modal .person-media-dialog {
+                width: min(430px, calc(100dvw - 20px)) !important;
+                max-width: calc(100dvw - 20px) !important;
+                max-height: min(72dvh, 620px) !important;
+                padding: 10px !important;
+                border-radius: 16px !important;
+                overscroll-behavior: contain !important;
+            }
+
+            #person-media-modal .person-media-dialog-top {
+                position: sticky !important;
+                top: -10px !important;
+                z-index: 10040 !important;
+                margin: 0 0 7px !important;
+                padding: 7px 2px 8px !important;
+                background: rgba(255,255,255,.98) !important;
+                backdrop-filter: blur(8px);
+                -webkit-backdrop-filter: blur(8px);
+            }
+
+            #person-media-modal .person-media-close {
+                width: 36px !important;
+                height: 36px !important;
+                flex: 0 0 36px !important;
+                font-size: 21px !important;
+                touch-action: manipulation;
+            }
+
+            #person-media-modal .face-stage {
+                min-height: 0 !important;
+            }
+
+            #person-media-modal .face-stage .person-media-full,
+            #person-media-modal .person-media-full {
+                max-height: min(34dvh, 300px) !important;
+            }
+
+            #person-media-modal .person-media-meta {
+                padding-top: 10px !important;
+            }
         }
     `;
     document.head.appendChild(style);
