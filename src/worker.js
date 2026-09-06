@@ -117,8 +117,6 @@ async function ensureNodeMetadataSchema(env) {
     try {
       await env.DB.prepare('ALTER TABLE nodes ADD COLUMN metadata_json TEXT').run();
     } catch (error) {
-      // Two Worker isolates can observe the old schema at the same time. The second ALTER
-      // is harmless once another isolate has already added the column.
       if (!String(error?.message || error).toLowerCase().includes('duplicate column')) throw error;
     }
   }
@@ -175,7 +173,6 @@ async function ensureGraphSchema(env) {
         `)
       ]);
 
-      // Seed the graph non-destructively from the legacy one-parent/one-spouse columns.
       await env.DB.batch([
         env.DB.prepare(`
           INSERT OR IGNORE INTO relationships (id, type, person1_id, person2_id)
@@ -226,8 +223,12 @@ function normalizePerson(person) {
   return {
     id: person?.id,
     name: person?.name ?? null,
-    dates: metadataValue(metadata, 'lifeDates', person?.dates ?? null),
-    description: metadataValue(metadata, 'bio', person?.description ?? null),
+    dates: metadataProvided
+      ? metadataValue(metadata, 'lifeDates', null)
+      : metadataValue(metadata, 'lifeDates', person?.dates ?? null),
+    description: metadataProvided
+      ? metadataValue(metadata, 'bio', null)
+      : metadataValue(metadata, 'bio', person?.description ?? null),
     metadata
   };
 }
@@ -307,7 +308,6 @@ function validateGraphPayload(payload) {
     relationships.push(record);
   }
 
-  // Detect ancestry cycles across any number of parent relationships.
   const parentsByChild = new Map();
   for (const relation of relationships) {
     if (relation.type !== 'parent') continue;
@@ -448,8 +448,8 @@ async function handleTreeApi(request, env) {
     const people = graph.people.map(person => ({
       id: person.id,
       name: person.name,
-      dates: metadataValue(person.metadata, 'lifeDates', person.dates),
-      description: metadataValue(person.metadata, 'bio', person.description),
+      dates: metadataValue(person.metadata, 'lifeDates', null),
+      description: metadataValue(person.metadata, 'bio', null),
       parentId: null,
       spouseId: null
     }));
@@ -510,6 +510,13 @@ async function handleNodesApi(request, env, url) {
     let metadata = metadataObject(data.metadata, { strict: metadataProvided });
     if (!metadataProvided) metadata = metadataFromLegacy(metadata, data.dates, data.description);
 
+    const dates = metadataProvided
+      ? metadataValue(metadata, 'lifeDates', null)
+      : (data.dates || 'תאריכים');
+    const description = metadataProvided
+      ? metadataValue(metadata, 'bio', null)
+      : (data.description || 'תיאור');
+
     const statements = [
       env.DB.prepare(`
         INSERT INTO nodes (id, parent_id, spouse_id, name, dates, description, metadata_json)
@@ -519,8 +526,8 @@ async function handleNodesApi(request, env, url) {
         data.parent_id || null,
         data.spouse_id || null,
         data.name || 'שם',
-        data.dates || 'תאריכים',
-        data.description || 'תיאור',
+        dates,
+        description,
         JSON.stringify(metadata)
       )
     ];
@@ -608,28 +615,36 @@ async function handleNodesApi(request, env, url) {
 
     if (field === 'metadata') {
       const metadata = metadataObject(data.metadata, { strict: true });
-      const statements = [
-        env.DB.prepare(`
-          UPDATE nodes
-          SET metadata_json = ?, last_updated = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).bind(JSON.stringify(metadata), nodeId)
-      ];
+      await env.DB.prepare(`
+        UPDATE nodes
+        SET metadata_json = ?,
+            dates = ?,
+            description = ?,
+            last_updated = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(
+        JSON.stringify(metadata),
+        metadataValue(metadata, 'lifeDates', null),
+        metadataValue(metadata, 'bio', null),
+        nodeId
+      ).run();
+      return jsonResponse({ success: true, metadata });
+    }
 
-      if (Object.prototype.hasOwnProperty.call(metadata, 'lifeDates')) {
-        statements.push(
-          env.DB.prepare('UPDATE nodes SET dates = ? WHERE id = ?')
-            .bind(metadata.lifeDates ?? null, nodeId)
-        );
-      }
-      if (Object.prototype.hasOwnProperty.call(metadata, 'bio')) {
-        statements.push(
-          env.DB.prepare('UPDATE nodes SET description = ? WHERE id = ?')
-            .bind(metadata.bio ?? null, nodeId)
-        );
-      }
+    if (field === 'dates' || field === 'description') {
+      const existing = await env.DB.prepare('SELECT metadata_json FROM nodes WHERE id = ?')
+        .bind(nodeId)
+        .first();
+      const metadata = metadataObject(existing?.metadata_json);
+      const metadataKey = field === 'dates' ? 'lifeDates' : 'bio';
+      const placeholder = field === 'dates' ? 'תאריכים' : 'תיאור';
+      metadata[metadataKey] = meaningfulLegacyText(data[field], placeholder) ?? '';
 
-      await env.DB.batch(statements);
+      await env.DB.prepare(`
+        UPDATE nodes
+        SET ${field} = ?, metadata_json = ?, last_updated = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(data[field], JSON.stringify(metadata), nodeId).run();
       return jsonResponse({ success: true, metadata });
     }
 
