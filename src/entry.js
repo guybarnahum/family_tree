@@ -1,5 +1,6 @@
 import worker from './worker.js';
 import { handlePlacesApi } from './places.js';
+import { handleMediaApi } from './media.js';
 
 export default {
   async fetch(request, env, ctx) {
@@ -15,6 +16,15 @@ export default {
           { results: [], source: 'error' },
           { status: 200, headers: { 'Cache-Control': 'no-store' } }
         );
+      }
+    }
+
+    if (url.pathname === '/api/media' || url.pathname.startsWith('/api/media/')) {
+      try {
+        return await handleMediaApi(request, env, url);
+      } catch (error) {
+        console.error('Media API failed:', error);
+        return new Response(`Media API Error: ${error.message}`, { status: 500 });
       }
     }
 
