@@ -16,6 +16,16 @@ function finite(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function metadataObject(value) {
+  if (!value) return {};
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
 export function normalizeFaceRect(value, { strict = false } = {}) {
   const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const x = finite(input.x);
@@ -37,6 +47,17 @@ export function normalizeFaceRect(value, { strict = false } = {}) {
     width: Math.max(MIN_FACE_SIZE, Math.min(1 - x, width)),
     height: Math.max(MIN_FACE_SIZE, Math.min(1 - y, height))
   };
+}
+
+export function choosePreferredFace(items, primaryFaceId, personId = null) {
+  const assigned = (Array.isArray(items) ? items : [])
+    .filter(face => !personId || face.personId === personId);
+  if (!assigned.length) return null;
+  if (primaryFaceId) {
+    const preferred = assigned.find(face => face.id === primaryFaceId);
+    if (preferred) return preferred;
+  }
+  return assigned[0];
 }
 
 async function ensureFacesSchema(env) {
@@ -76,7 +97,7 @@ async function ensureFacesSchema(env) {
 }
 
 function rowToFace(row) {
-  return {
+  const face = {
     id: row.id,
     mediaId: row.media_id,
     personId: row.person_id || null,
@@ -87,13 +108,24 @@ function rowToFace(row) {
     createdAt: row.created_at || null,
     updatedAt: row.updated_at || null
   };
+
+  if (row.media_width !== undefined || row.media_height !== undefined || row.mime_type !== undefined) {
+    face.contentUrl = `/api/media/${encodeURIComponent(row.media_id)}/content`;
+    face.sourceWidth = row.media_width == null ? null : Number(row.media_width);
+    face.sourceHeight = row.media_height == null ? null : Number(row.media_height);
+    face.mimeType = row.mime_type || null;
+  }
+  return face;
 }
 
 async function faceRow(env, faceId) {
   return env.DB.prepare(`
-    SELECT id, media_id, person_id, x, y, width, height, created_at, updated_at
-    FROM faces
-    WHERE id = ?
+    SELECT f.id, f.media_id, f.person_id, f.x, f.y, f.width, f.height,
+           f.created_at, f.updated_at,
+           m.width AS media_width, m.height AS media_height, m.mime_type
+    FROM faces f
+    INNER JOIN media m ON m.id = f.media_id
+    WHERE f.id = ?
   `).bind(faceId).first();
 }
 
@@ -108,6 +140,24 @@ async function requirePerson(env, personId) {
   if (!row) throw new Error('Person not found');
 }
 
+async function clearPrimaryFaceReferences(env, faceId) {
+  const result = await env.DB.prepare('SELECT id, metadata_json FROM nodes').all();
+  const statements = [];
+  for (const row of result.results || []) {
+    const metadata = metadataObject(row.metadata_json);
+    if (metadata.primaryFaceId !== faceId) continue;
+    delete metadata.primaryFaceId;
+    statements.push(
+      env.DB.prepare(`
+        UPDATE nodes
+        SET metadata_json = ?, last_updated = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(JSON.stringify(metadata), row.id)
+    );
+  }
+  if (statements.length) await env.DB.batch(statements);
+}
+
 async function listFaces(env, url) {
   const mediaId = cleanId(url.searchParams.get('media'));
   const personId = cleanId(url.searchParams.get('person'));
@@ -116,22 +166,61 @@ async function listFaces(env, url) {
   const clauses = [];
   const values = [];
   if (mediaId) {
-    clauses.push('media_id = ?');
+    clauses.push('f.media_id = ?');
     values.push(mediaId);
   }
   if (personId) {
-    clauses.push('person_id = ?');
+    clauses.push('f.person_id = ?');
     values.push(personId);
   }
 
   const statement = env.DB.prepare(`
-    SELECT id, media_id, person_id, x, y, width, height, created_at, updated_at
-    FROM faces
+    SELECT f.id, f.media_id, f.person_id, f.x, f.y, f.width, f.height,
+           f.created_at, f.updated_at,
+           m.width AS media_width, m.height AS media_height, m.mime_type
+    FROM faces f
+    INNER JOIN media m ON m.id = f.media_id
     WHERE ${clauses.join(' AND ')}
-    ORDER BY created_at ASC, id ASC
+    ORDER BY f.created_at ASC, f.id ASC
   `).bind(...values);
   const result = await statement.all();
   return json({ items: (result.results || []).map(rowToFace) });
+}
+
+async function preferredFaces(env) {
+  const [peopleResult, facesResult] = await Promise.all([
+    env.DB.prepare('SELECT id, metadata_json FROM nodes ORDER BY id ASC').all(),
+    env.DB.prepare(`
+      SELECT f.id, f.media_id, f.person_id, f.x, f.y, f.width, f.height,
+             f.created_at, f.updated_at,
+             m.width AS media_width, m.height AS media_height, m.mime_type
+      FROM faces f
+      INNER JOIN media m ON m.id = f.media_id
+      WHERE f.person_id IS NOT NULL AND f.person_id <> ''
+      ORDER BY f.person_id ASC, f.created_at ASC, f.id ASC
+    `).all()
+  ]);
+
+  const byPerson = new Map();
+  for (const row of facesResult.results || []) {
+    const face = rowToFace(row);
+    if (!byPerson.has(face.personId)) byPerson.set(face.personId, []);
+    byPerson.get(face.personId).push(face);
+  }
+
+  const items = [];
+  for (const person of peopleResult.results || []) {
+    const metadata = metadataObject(person.metadata_json);
+    const candidates = byPerson.get(person.id) || [];
+    const face = choosePreferredFace(candidates, metadata.primaryFaceId, person.id);
+    if (!face) continue;
+    items.push({
+      personId: person.id,
+      explicit: !!metadata.primaryFaceId && face.id === metadata.primaryFaceId,
+      face
+    });
+  }
+  return json({ items });
 }
 
 async function createFace(request, env) {
@@ -156,9 +245,6 @@ async function createFace(request, env) {
     `).bind(id, mediaId, personId, rect.x, rect.y, rect.width, rect.height)
   ];
 
-  // A tagged face also makes the photo discoverable in that person's gallery. We keep
-  // media_people as an association rather than ownership, so unassigning a face does not
-  // destructively remove an association that may have existed independently.
   if (personId) {
     statements.push(
       env.DB.prepare(`
@@ -170,6 +256,31 @@ async function createFace(request, env) {
 
   await env.DB.batch(statements);
   return json({ success: true, item: rowToFace(await faceRow(env, id)) }, { status: 201 });
+}
+
+async function setPreferredFace(env, faceId) {
+  const existing = await faceRow(env, faceId);
+  if (!existing) return new Response('Face not found', { status: 404 });
+  if (!existing.person_id) return new Response('Assign the face to a person first', { status: 409 });
+
+  const person = await env.DB.prepare('SELECT id, metadata_json FROM nodes WHERE id = ?')
+    .bind(existing.person_id).first();
+  if (!person) return new Response('Person not found', { status: 404 });
+
+  const metadata = metadataObject(person.metadata_json);
+  metadata.primaryFaceId = faceId;
+  await env.DB.prepare(`
+    UPDATE nodes
+    SET metadata_json = ?, last_updated = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(JSON.stringify(metadata), person.id).run();
+
+  return json({
+    success: true,
+    personId: person.id,
+    primaryFaceId: faceId,
+    face: rowToFace(existing)
+  });
 }
 
 async function patchFace(request, env, faceId) {
@@ -184,6 +295,10 @@ async function patchFace(request, env, faceId) {
     const personId = cleanId(data.personId) || null;
     try { await requirePerson(env, personId); }
     catch (error) { return new Response(error.message, { status: 404 }); }
+
+    if (existing.person_id && existing.person_id !== personId) {
+      await clearPrimaryFaceReferences(env, faceId);
+    }
 
     const statements = [
       env.DB.prepare(`
@@ -218,6 +333,7 @@ async function patchFace(request, env, faceId) {
 async function deleteFace(env, faceId) {
   const existing = await faceRow(env, faceId);
   if (!existing) return new Response('Face not found', { status: 404 });
+  await clearPrimaryFaceReferences(env, faceId);
   await env.DB.prepare('DELETE FROM faces WHERE id = ?').bind(faceId).run();
   return json({ success: true });
 }
@@ -228,12 +344,23 @@ export async function handleFacesApi(request, env, url) {
 
   const parts = url.pathname.split('/').filter(Boolean);
   const faceId = parts[2] ? decodeURIComponent(parts[2]) : null;
+  const action = parts[3] || null;
 
   try {
+    if (faceId === 'preferred' && !action) {
+      if (request.method !== 'GET') return new Response('Method not allowed', { status: 405 });
+      return preferredFaces(env);
+    }
+
     if (!faceId) {
       if (request.method === 'GET') return listFaces(env, url);
       if (request.method === 'POST') return createFace(request, env);
       return new Response('Method not allowed', { status: 405 });
+    }
+
+    if (action === 'preferred') {
+      if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+      return setPreferredFace(env, faceId);
     }
 
     if (request.method === 'PATCH') return patchFace(request, env, faceId);
