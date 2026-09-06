@@ -15,8 +15,8 @@
     style.textContent = `
         #cards-layer .absolute-card .node-face-avatar {
             position: absolute;
-            left: -13px;
-            top: -15px;
+            left: -14px;
+            top: 13px;
             width: 40px;
             height: 40px;
             box-sizing: border-box;
@@ -25,12 +25,12 @@
             border-radius: 999px;
             background: #eee9dd;
             box-shadow: 0 3px 9px rgba(52,78,65,.24);
-            z-index: 44;
+            z-index: 35;
             pointer-events: none;
         }
         #cards-layer .absolute-card.graph-root .node-face-avatar {
-            left: -15px;
-            top: -17px;
+            left: -16px;
+            top: 18px;
             width: 44px;
             height: 44px;
         }
