@@ -27,6 +27,10 @@
                 background-color: #fff !important;
                 background-image: none !important;
                 mix-blend-mode: normal !important;
+                /* Chrome/Skia emits CSS shadows as grayscale soft-mask images. macOS
+                   Preview can expose those mask bounds as gray rectangles, so print uses
+                   crisp opaque cards and leaves shadows as an on-screen-only treatment. */
+                box-shadow: none !important;
             }
 
             /* The live avatar CSS is scoped to #cards-layer, but print-refinement clones
@@ -42,10 +46,10 @@
                 height: 40px !important;
                 box-sizing: border-box !important;
                 overflow: hidden !important;
-                border: 2px solid rgba(255,255,255,.98) !important;
+                border: 2px solid #fff !important;
                 border-radius: 999px !important;
                 background: #eee9dd !important;
-                box-shadow: 0 2px 6px rgba(52,78,65,.18) !important;
+                box-shadow: none !important;
                 z-index: 35 !important;
                 pointer-events: none !important;
                 transform: translateY(-50%) !important;
@@ -142,7 +146,7 @@
         printCard.style.setProperty('background-color', '#fff', 'important');
         printCard.style.setProperty('background-image', 'none', 'important');
         printCard.style.setProperty('mix-blend-mode', 'normal', 'important');
-        printCard.style.setProperty('box-shadow', '0 2px 7px rgba(52, 78, 65, 0.12)', 'important');
+        printCard.style.setProperty('box-shadow', 'none', 'important');
 
         const fields = [...printCard.querySelectorAll('[data-field]')];
         fields.forEach(field => {
