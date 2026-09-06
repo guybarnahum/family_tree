@@ -165,6 +165,7 @@
         appendScript('/place-autocomplete.js', 'data-family-place-autocomplete', build);
         appendScript('/pane-save-guard.js', 'data-family-pane-save-guard', build);
         appendScript('/person-media.js', 'data-family-person-media', build);
+        appendScript('/face-tagging.js', 'data-family-face-tagging', build);
         appendScript('/parent-limit.js', 'data-family-parent-limit', build);
         appendScript('/person-pane-position.js', 'data-family-person-pane-position', build);
         appendScript('/mobile-chrome.js', 'data-family-mobile-chrome', build);
