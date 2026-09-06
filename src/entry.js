@@ -8,7 +8,9 @@ async function injectGraphResilience(response, env) {
   if (!contentType.includes('text/html')) return response;
 
   const html = await response.text();
-  if (html.includes('data-family-graph-resilience')) {
+  const hasGraphResilience = html.includes('data-family-graph-resilience');
+  const hasMediaResilience = html.includes('data-family-media-resilience');
+  if (hasGraphResilience && hasMediaResilience) {
     const headers = new Headers(response.headers);
     headers.delete('Content-Length');
     return new Response(html, {
@@ -22,10 +24,19 @@ async function injectGraphResilience(response, env) {
     ? env.BUILD_SHA.slice(0, 8)
     : 'dev';
   const scripts = [
-    `<script src="/graph-cache.js?v=${encodeURIComponent(build)}" data-family-graph-cache></script>`,
-    `<script src="/graph-status.js?v=${encodeURIComponent(build)}" data-family-graph-status></script>`,
-    `<script src="/graph-resilience.js?v=${encodeURIComponent(build)}" data-family-graph-resilience></script>`
-  ].join('\n');
+    !hasGraphResilience
+      ? `<script src="/graph-cache.js?v=${encodeURIComponent(build)}" data-family-graph-cache></script>`
+      : '',
+    !hasGraphResilience
+      ? `<script src="/graph-status.js?v=${encodeURIComponent(build)}" data-family-graph-status></script>`
+      : '',
+    !hasGraphResilience
+      ? `<script src="/graph-resilience.js?v=${encodeURIComponent(build)}" data-family-graph-resilience></script>`
+      : '',
+    !hasMediaResilience
+      ? `<script src="/media-resilience.js?v=${encodeURIComponent(build)}" data-family-media-resilience></script>`
+      : ''
+  ].filter(Boolean).join('\n');
 
   const graphViewPattern = /<script src="\/graph-view\.js(?:\?[^\"]*)?"[^>]*><\/script>/;
   const refinedHtml = graphViewPattern.test(html)
