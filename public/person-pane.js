@@ -1,9 +1,5 @@
-// Slice A: keep the graph topology-only (name + relationship actions) and move the
-// currently selected person's editable details into one persistent pane.
-//
-// This deliberately uses the existing nodes.name / dates / description fields. No schema
-// migration happens in Slice A; later metadata slices can replace the pane's backing model
-// without putting biography fields back into graph cards.
+// Selected-person details pane. Graph cards remain topology-only; biographical fields
+// are backed by nodes.metadata_json (Slice B) while name remains a first-class column.
 (() => {
     if (window.__familyPersonPaneInstalled) return;
     window.__familyPersonPaneInstalled = true;
@@ -12,17 +8,11 @@
     const viewport = document.getElementById('scroll-viewport');
     if (!cardsLayer || !viewport) return;
 
-    const EMPTY = {
-        name: new Set(['', 'שם']),
-        dates: new Set(['', 'תאריכים']),
-        description: new Set(['', 'תיאור'])
-    };
+    const EMPTY_NAMES = new Set(['', 'שם']);
     const mobileQuery = window.matchMedia('(max-width: 768px), (hover: none) and (pointer: coarse)');
 
     const style = document.createElement('style');
     style.textContent = `
-        /* Graph cards are identity + topology only. The hidden legacy fields stay in the
-           model for Slice A but no longer participate in card sizing or presentation. */
         #cards-layer .absolute-card {
             padding: 11px 14px !important;
         }
@@ -47,8 +37,6 @@
             display: none !important;
         }
 
-        /* Selected cards expose their topology actions without requiring another hover.
-           Context cards retain the existing hover behavior. */
         #cards-layer .absolute-card.graph-root [data-action] {
             opacity: 1 !important;
             pointer-events: auto !important;
@@ -255,7 +243,6 @@
                 padding-bottom: 58px;
             }
 
-            /* Selected mobile cards no longer expand to accommodate biography fields. */
             #cards-layer .absolute-card.graph-root {
                 min-width: min(190px, calc(100vw - 44px)) !important;
                 width: auto !important;
@@ -291,9 +278,13 @@
     let renderedPersonId = null;
     let relayoutQueued = false;
 
-    function cleanValue(field, value) {
+    function cleanName(value) {
         const text = String(value ?? '').trim();
-        return EMPTY[field]?.has(text) ? '' : text;
+        return EMPTY_NAMES.has(text) ? '' : text;
+    }
+
+    function cleanMetadataText(value) {
+        return value === null || value === undefined ? '' : String(value).trim();
     }
 
     function currentRootId() {
@@ -311,7 +302,26 @@
         return globalNodeMap?.get(id) || null;
     }
 
-    function editable(field, value, className = '', placeholder = '') {
+    function metadataForPerson(person) {
+        if (!person) return {};
+        if (Object.prototype.hasOwnProperty.call(person, 'metadata')) {
+            return person.metadata && typeof person.metadata === 'object' && !Array.isArray(person.metadata)
+                ? person.metadata
+                : {};
+        }
+
+        // Compatibility only for a stale pre-Slice-B in-memory person. Once metadata is
+        // present—even as {}—it is authoritative and legacy text is not reintroduced.
+        const metadata = {};
+        const dates = cleanMetadataText(person.dates);
+        const description = cleanMetadataText(person.description);
+        if (dates && dates !== 'תאריכים') metadata.lifeDates = dates;
+        if (description && description !== 'תיאור') metadata.bio = description;
+        person.metadata = metadata;
+        return metadata;
+    }
+
+    function editable(field, value, { className = '', placeholder = '', metadataKey = null } = {}) {
         const personId = currentRootId();
         const element = document.createElement('div');
         element.className = `person-pane-value ${className}`.trim();
@@ -319,27 +329,29 @@
         element.spellcheck = true;
         element.dataset.id = personId || '';
         element.dataset.field = field;
+        if (metadataKey) element.dataset.metaKey = metadataKey;
         element.dataset.placeholder = placeholder;
         element.textContent = value;
         return element;
     }
 
-    function addField(field) {
+    function addField(metadataKey) {
         const person = currentPerson();
         if (!person) return;
-        if (field === 'dates') person.dates = '';
-        if (field === 'description') person.description = '';
-        renderPerson({ focusField: field });
+        const metadata = { ...metadataForPerson(person) };
+        if (!Object.prototype.hasOwnProperty.call(metadata, metadataKey)) metadata[metadataKey] = '';
+        person.metadata = metadata;
+        renderPerson({ focusField: metadataKey });
     }
 
-    function fieldRow(label, field, value, { className = '', placeholder = '' } = {}) {
+    function fieldRow(label, metadataKey, value, { className = '', placeholder = '' } = {}) {
         const row = document.createElement('section');
         row.className = 'person-pane-field';
         const heading = document.createElement('span');
         heading.className = 'person-pane-label';
         heading.textContent = label;
         row.appendChild(heading);
-        row.appendChild(editable(field, value, className, placeholder));
+        row.appendChild(editable('metadata', value, { className, placeholder, metadataKey }));
         return row;
     }
 
@@ -357,9 +369,10 @@
             return;
         }
 
-        const nameValue = cleanValue('name', person.name);
-        const datesValue = cleanValue('dates', person.dates);
-        const descriptionValue = cleanValue('description', person.description);
+        const metadata = metadataForPerson(person);
+        const nameValue = cleanName(person.name);
+        const lifeDatesValue = cleanMetadataText(metadata.lifeDates);
+        const bioValue = cleanMetadataText(metadata.bio);
         mobileName.textContent = nameValue || 'ללא שם';
 
         const name = document.createElement('div');
@@ -372,22 +385,22 @@
         name.textContent = nameValue;
         body.appendChild(name);
 
-        if (datesValue || focusField === 'dates') {
-            body.appendChild(fieldRow('תאריכים', 'dates', datesValue, {
+        if (lifeDatesValue || focusField === 'lifeDates') {
+            body.appendChild(fieldRow('תאריכים', 'lifeDates', lifeDatesValue, {
                 placeholder: 'שנה, טווח או תיאור חופשי'
             }));
         }
 
-        if (descriptionValue || focusField === 'description') {
-            body.appendChild(fieldRow('ביוגרפיה קצרה', 'description', descriptionValue, {
+        if (bioValue || focusField === 'bio') {
+            body.appendChild(fieldRow('ביוגרפיה קצרה', 'bio', bioValue, {
                 className: 'person-pane-bio',
                 placeholder: 'כמה מילים על האדם…'
             }));
         }
 
         const missing = [];
-        if (!datesValue && focusField !== 'dates') missing.push(['dates', '+ הוסף תאריכים']);
-        if (!descriptionValue && focusField !== 'description') missing.push(['description', '+ הוסף ביוגרפיה קצרה']);
+        if (!lifeDatesValue && focusField !== 'lifeDates') missing.push(['lifeDates', '+ הוסף תאריכים']);
+        if (!bioValue && focusField !== 'bio') missing.push(['bio', '+ הוסף ביוגרפיה קצרה']);
         if (missing.length) {
             const additions = document.createElement('div');
             additions.className = 'person-pane-additions';
@@ -404,7 +417,10 @@
 
         if (focusField) {
             requestAnimationFrame(() => {
-                const target = body.querySelector(`[contenteditable="true"][data-field="${focusField}"]`);
+                const selector = focusField === 'name'
+                    ? '[contenteditable="true"][data-field="name"]'
+                    : `[contenteditable="true"][data-meta-key="${focusField}"]`;
+                const target = body.querySelector(selector);
                 target?.focus();
                 if (target && document.createRange) {
                     const range = document.createRange();
@@ -442,8 +458,6 @@
                 geometryChanged = true;
             }
 
-            // Parent relationships are now additive, just like spouse relationships; keep
-            // the action available even when a person already has a recorded parent.
             if (!card.querySelector('[data-action="add-parent"]')) {
                 ensureAction(
                     card,
@@ -499,19 +513,15 @@
         addField(button.dataset.addPersonField);
     });
 
-    // Keep the graph label live while the canonical save still happens through the app's
-    // existing delegated contenteditable focusout/saveEdit path.
     body.addEventListener('input', event => {
         const field = event.target?.dataset?.field;
         if (field !== 'name') return;
         const id = event.target.dataset.id;
-        const cardName = document.querySelector(`#card-${CSS.escape(id)} h2[data-field="name"]`);
+        const cardName = document.getElementById(`card-${id}`)?.querySelector('h2[data-field="name"]');
         if (cardName) cardName.textContent = event.target.innerText.trim() || 'שם';
         mobileName.textContent = event.target.innerText.trim() || 'ללא שם';
     });
 
-    // Cards are replaced on reroot, expansion and structural changes. Direct child-list
-    // observation is enough and avoids reacting to our own inline pane editing.
     const cardObserver = new MutationObserver(mutations => {
         if (!mutations.some(mutation => mutation.type === 'childList')) return;
         requestAnimationFrame(() => refreshFromGraph());
@@ -550,8 +560,6 @@
         queueRelayout({ center: true });
     });
 
-    // The pane changes desktop viewport width and card height, so consume those geometry
-    // changes once after all existing graph/presentation layers have initialized.
     requestAnimationFrame(() => requestAnimationFrame(() => {
         decorateCards();
         renderPerson();
