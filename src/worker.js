@@ -82,66 +82,26 @@ function metadataObject(value, { strict = false } = {}) {
   return JSON.parse(JSON.stringify(parsed));
 }
 
-function meaningfulLegacyText(value, placeholder) {
-  if (value === null || value === undefined) return null;
-  const text = String(value).trim();
-  if (!text || text === placeholder) return null;
-  return text;
-}
-
-function metadataFromLegacy(metadata, dates, description) {
-  const result = { ...metadata };
-  const datesValue = meaningfulLegacyText(dates, 'תאריכים');
-  const descriptionValue = meaningfulLegacyText(description, 'תיאור');
-
-  if (!Object.prototype.hasOwnProperty.call(result, 'lifeDates') && datesValue) {
-    result.lifeDates = datesValue;
-  }
-  if (!Object.prototype.hasOwnProperty.call(result, 'bio') && descriptionValue) {
-    result.bio = descriptionValue;
-  }
-  return result;
-}
-
-function metadataValue(metadata, key, fallback = null) {
-  return metadata && Object.prototype.hasOwnProperty.call(metadata, key)
-    ? metadata[key]
-    : fallback;
-}
-
 async function ensureNodeMetadataSchema(env) {
   const columns = await env.DB.prepare('PRAGMA table_info(nodes)').all();
   const hasMetadata = (columns.results || []).some(column => column.name === 'metadata_json');
 
   if (!hasMetadata) {
     try {
-      await env.DB.prepare('ALTER TABLE nodes ADD COLUMN metadata_json TEXT').run();
+      await env.DB.prepare("ALTER TABLE nodes ADD COLUMN metadata_json TEXT DEFAULT '{}'").run();
     } catch (error) {
+      // Multiple Worker isolates may race the first schema upgrade.
       if (!String(error?.message || error).toLowerCase().includes('duplicate column')) throw error;
     }
   }
 
-  // Backfill only rows that have never received metadata. Once metadata_json exists for a
-  // person it is authoritative; intentionally blank/removed metadata must not be resurrected
-  // from the old dates/description columns on a later request.
-  const rows = await env.DB.prepare(`
-    SELECT id, dates, description, metadata_json
-    FROM nodes
+  // Slice B intentionally does not migrate the old dates/description columns. Existing
+  // people simply start with empty flexible metadata.
+  await env.DB.prepare(`
+    UPDATE nodes
+    SET metadata_json = '{}'
     WHERE metadata_json IS NULL OR TRIM(metadata_json) = ''
-  `).all();
-
-  const statements = [];
-  for (const row of rows.results || []) {
-    const metadata = metadataFromLegacy({}, row.dates, row.description);
-    statements.push(
-      env.DB.prepare('UPDATE nodes SET metadata_json = ? WHERE id = ?')
-        .bind(JSON.stringify(metadata), row.id)
-    );
-  }
-
-  for (let index = 0; index < statements.length; index += 50) {
-    await env.DB.batch(statements.slice(index, index + 50));
-  }
+  `).run();
 }
 
 async function ensureGraphSchema(env) {
@@ -173,6 +133,7 @@ async function ensureGraphSchema(env) {
         `)
       ]);
 
+      // Keep the existing topology migration while nodes.parent_id/spouse_id still exist.
       await env.DB.batch([
         env.DB.prepare(`
           INSERT OR IGNORE INTO relationships (id, type, person1_id, person2_id)
@@ -215,25 +176,16 @@ async function ensureGraphSchema(env) {
 
 function normalizePerson(person) {
   const metadataProvided = !!person && Object.prototype.hasOwnProperty.call(person, 'metadata');
-  let metadata = metadataObject(person?.metadata, { strict: metadataProvided });
-  if (!metadataProvided) {
-    metadata = metadataFromLegacy(metadata, person?.dates, person?.description);
-  }
-
   return {
     id: person?.id,
     name: person?.name ?? null,
-    dates: metadataProvided
-      ? metadataValue(metadata, 'lifeDates', null)
-      : metadataValue(metadata, 'lifeDates', person?.dates ?? null),
-    description: metadataProvided
-      ? metadataValue(metadata, 'bio', null)
-      : metadataValue(metadata, 'bio', person?.description ?? null),
-    metadata
+    metadata: metadataObject(person?.metadata, { strict: metadataProvided })
   };
 }
 
 function normalizeGraphPayload(payload) {
+  // Legacy v1 remains accepted for topology only; old dates/description are intentionally
+  // discarded rather than migrated into the new person metadata model.
   if (payload?.format === 'family-tree' && payload?.version === 1 && Array.isArray(payload.people)) {
     const people = payload.people.map(person => normalizePerson(person));
     const relationships = [];
@@ -365,15 +317,13 @@ async function replaceGraph(env, payload) {
     const links = legacy.get(person.id);
     statements.push(
       env.DB.prepare(`
-        INSERT INTO nodes (id, parent_id, spouse_id, name, dates, description, metadata_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO nodes (id, parent_id, spouse_id, name, metadata_json)
+        VALUES (?, ?, ?, ?, ?)
       `).bind(
         person.id,
         links?.parent_id || null,
         links?.spouse_id || null,
         person.name,
-        person.dates,
-        person.description,
         JSON.stringify(person.metadata || {})
       )
     );
@@ -396,7 +346,7 @@ async function graphDocument(env) {
   await ensureGraphSchema(env);
   const [peopleResult, relationshipsResult] = await Promise.all([
     env.DB.prepare(`
-      SELECT id, name, dates, description, metadata_json, last_updated
+      SELECT id, name, metadata_json, last_updated
       FROM nodes
       ORDER BY id ASC
     `).all(),
@@ -413,8 +363,6 @@ async function graphDocument(env) {
     people: peopleResult.results.map(person => ({
       id: person.id,
       name: person.name ?? null,
-      dates: person.dates ?? null,
-      description: person.description ?? null,
       metadata: metadataObject(person.metadata_json),
       lastUpdated: person.last_updated ?? null
     })),
@@ -448,8 +396,8 @@ async function handleTreeApi(request, env) {
     const people = graph.people.map(person => ({
       id: person.id,
       name: person.name,
-      dates: metadataValue(person.metadata, 'lifeDates', null),
-      description: metadataValue(person.metadata, 'bio', null),
+      dates: person.metadata?.lifeDates ?? null,
+      description: person.metadata?.bio ?? null,
       parentId: null,
       spouseId: null
     }));
@@ -492,13 +440,22 @@ async function handleNodesApi(request, env, url) {
   const nodeId = pathParts[2];
 
   if (request.method === 'GET') {
-    const { results } = await env.DB
-      .prepare('SELECT * FROM nodes ORDER BY id ASC')
-      .all();
+    const { results } = await env.DB.prepare(`
+      SELECT id, parent_id, spouse_id, name, metadata_json, last_updated
+      FROM nodes
+      ORDER BY id ASC
+    `).all();
 
     return jsonResponse(results.map(row => {
       const { metadata_json: metadataJson, ...node } = row;
-      return { ...node, metadata: metadataObject(metadataJson) };
+      return {
+        ...node,
+        // Keep blank legacy presentation properties only so the old base card renderer can
+        // initialize safely; all actual person details live in metadata.
+        dates: '',
+        description: '',
+        metadata: metadataObject(metadataJson)
+      };
     }));
   }
 
@@ -507,27 +464,17 @@ async function handleNodesApi(request, env, url) {
     if (!data.id) return new Response('Node id is required', { status: 400 });
 
     const metadataProvided = Object.prototype.hasOwnProperty.call(data, 'metadata');
-    let metadata = metadataObject(data.metadata, { strict: metadataProvided });
-    if (!metadataProvided) metadata = metadataFromLegacy(metadata, data.dates, data.description);
-
-    const dates = metadataProvided
-      ? metadataValue(metadata, 'lifeDates', null)
-      : (data.dates || 'תאריכים');
-    const description = metadataProvided
-      ? metadataValue(metadata, 'bio', null)
-      : (data.description || 'תיאור');
+    const metadata = metadataObject(data.metadata, { strict: metadataProvided });
 
     const statements = [
       env.DB.prepare(`
-        INSERT INTO nodes (id, parent_id, spouse_id, name, dates, description, metadata_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO nodes (id, parent_id, spouse_id, name, metadata_json)
+        VALUES (?, ?, ?, ?, ?)
       `).bind(
         data.id,
         data.parent_id || null,
         data.spouse_id || null,
         data.name || 'שם',
-        dates,
-        description,
         JSON.stringify(metadata)
       )
     ];
@@ -564,7 +511,7 @@ async function handleNodesApi(request, env, url) {
     }
 
     const field = fields[0];
-    const allowedFields = ['name', 'dates', 'description', 'metadata', 'parent_id', 'spouse_id'];
+    const allowedFields = ['name', 'metadata', 'parent_id', 'spouse_id'];
     if (!allowedFields.includes(field)) {
       return new Response('Unsupported field', { status: 400 });
     }
@@ -617,34 +564,9 @@ async function handleNodesApi(request, env, url) {
       const metadata = metadataObject(data.metadata, { strict: true });
       await env.DB.prepare(`
         UPDATE nodes
-        SET metadata_json = ?,
-            dates = ?,
-            description = ?,
-            last_updated = CURRENT_TIMESTAMP
+        SET metadata_json = ?, last_updated = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).bind(
-        JSON.stringify(metadata),
-        metadataValue(metadata, 'lifeDates', null),
-        metadataValue(metadata, 'bio', null),
-        nodeId
-      ).run();
-      return jsonResponse({ success: true, metadata });
-    }
-
-    if (field === 'dates' || field === 'description') {
-      const existing = await env.DB.prepare('SELECT metadata_json FROM nodes WHERE id = ?')
-        .bind(nodeId)
-        .first();
-      const metadata = metadataObject(existing?.metadata_json);
-      const metadataKey = field === 'dates' ? 'lifeDates' : 'bio';
-      const placeholder = field === 'dates' ? 'תאריכים' : 'תיאור';
-      metadata[metadataKey] = meaningfulLegacyText(data[field], placeholder) ?? '';
-
-      await env.DB.prepare(`
-        UPDATE nodes
-        SET ${field} = ?, metadata_json = ?, last_updated = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).bind(data[field], JSON.stringify(metadata), nodeId).run();
+      `).bind(JSON.stringify(metadata), nodeId).run();
       return jsonResponse({ success: true, metadata });
     }
 
