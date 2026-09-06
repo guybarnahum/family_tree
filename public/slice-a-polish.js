@@ -1,8 +1,8 @@
-// Slice A interaction polish:
-// - desktop pane starts directly with the editable name (no redundant person header)
+// Person-pane interaction polish shared by Slice A/B:
+// - desktop pane starts directly with the editable name
 // - pane blur saves only when a value actually changed
-// - biography/date edits never relayout the graph
-// - name edits relayout once, because only name can change graph-card geometry
+// - metadata edits never relayout the graph
+// - name edits relayout once because only name can change graph-card geometry
 // - title subtitle remains a generic navigation hint and search stays an empty search box
 (() => {
     if (window.__familySliceAPolishInstalled) return;
@@ -46,9 +46,14 @@
         return document.getElementById(`card-${id}`)?.querySelector('h2[data-field="name"]') || null;
     }
 
-    function updateLocalPerson(id, field, value) {
-        const person = globalNodeMap?.get(id);
-        if (person) person[field] = value;
+    function localPerson(id) {
+        return globalNodeMap?.get(id) || null;
+    }
+
+    function metadataFor(person) {
+        return person?.metadata && typeof person.metadata === 'object' && !Array.isArray(person.metadata)
+            ? person.metadata
+            : {};
     }
 
     function restoreNamePresentation(id, value) {
@@ -76,19 +81,43 @@
     async function savePaneField(element, original) {
         const id = element.dataset.id;
         const field = element.dataset.field;
+        const metadataKey = element.dataset.metaKey || null;
         const value = fieldValue(element);
         if (value === original) return;
+
+        const person = localPerson(id);
+        const priorMetadata = metadataFor(person);
+        let payload;
+        let nextMetadata = null;
+
+        if (field === 'metadata') {
+            if (!metadataKey) return;
+            nextMetadata = { ...priorMetadata, [metadataKey]: value };
+            payload = { metadata: nextMetadata };
+        } else {
+            payload = { [field]: value };
+        }
 
         showStatus('שומר...');
         try {
             const response = await fetch(`/api/nodes/${encodeURIComponent(id)}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ [field]: value })
+                body: JSON.stringify(payload)
             });
             if (!response.ok) throw new Error(await response.text());
 
-            updateLocalPerson(id, field, value);
+            if (person) {
+                if (field === 'metadata') {
+                    person.metadata = nextMetadata;
+                    // Keep compatibility projections coherent in memory until the next GET.
+                    if (metadataKey === 'lifeDates') person.dates = value;
+                    if (metadataKey === 'bio') person.description = value;
+                } else {
+                    person[field] = value;
+                }
+            }
+
             originalValues.set(element, value);
             element.dataset.personPaneSavedValue = value;
 
@@ -98,27 +127,30 @@
             }
 
             window.dispatchEvent(new CustomEvent('family-person-pane-saved', {
-                detail: { id, field, value }
+                detail: field === 'metadata'
+                    ? { id, field, key: metadataKey, value, metadata: nextMetadata }
+                    : { id, field, value }
             }));
             showStatus('נשמר בהצלחה');
         } catch (error) {
             console.error('Failed to save person detail:', error);
             element.textContent = original;
-            updateLocalPerson(id, field, original);
+            if (person) {
+                if (field === 'metadata') person.metadata = priorMetadata;
+                else person[field] = original;
+            }
             if (field === 'name') restoreNamePresentation(id, original);
             showStatus('שגיאה בשמירה');
         }
     }
 
-    // Remember the exact persisted presentation value at focus time. The old global editor
-    // used to PATCH and redraw on every blur; this lets unchanged focus/blur be a true no-op.
     pane.addEventListener('focusin', event => {
         if (!editableTarget(event.target)) return;
         originalValues.set(event.target, fieldValue(event.target));
     }, true);
 
-    // Capture focusout inside the pane and stop it before the legacy body-level saveEdit()
-    // handler sees it. Pane editing has different geometry semantics from graph-card editing.
+    // Stop pane blur before the legacy body-level saveEdit() handler sees it. Metadata is
+    // deliberately independent of graph geometry, and unchanged focus/blur is a true no-op.
     pane.addEventListener('focusout', event => {
         if (!editableTarget(event.target)) return;
         event.stopPropagation();
