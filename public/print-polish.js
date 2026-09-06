@@ -28,6 +28,49 @@
                 background-image: none !important;
                 mix-blend-mode: normal !important;
             }
+
+            /* The live avatar CSS is scoped to #cards-layer, but print-refinement clones
+               cards into .family-print-graph. Recreate the avatar clipping here so the
+               cloned source image stays a circular face crop instead of expanding into
+               the full rectangular photograph in the PDF. */
+            html body .family-print-sheet .family-print-graph .absolute-card .node-face-avatar {
+                display: block !important;
+                position: absolute !important;
+                left: -14px !important;
+                top: 50% !important;
+                width: 40px !important;
+                height: 40px !important;
+                box-sizing: border-box !important;
+                overflow: hidden !important;
+                border: 2px solid rgba(255,255,255,.98) !important;
+                border-radius: 999px !important;
+                background: #eee9dd !important;
+                box-shadow: 0 2px 6px rgba(52,78,65,.18) !important;
+                z-index: 35 !important;
+                pointer-events: none !important;
+                transform: translateY(-50%) !important;
+                print-color-adjust: exact !important;
+                -webkit-print-color-adjust: exact !important;
+            }
+
+            html body .family-print-sheet .family-print-graph .absolute-card.graph-root .node-face-avatar {
+                left: -16px !important;
+                top: 50% !important;
+                width: 44px !important;
+                height: 44px !important;
+                transform: translateY(-50%) !important;
+            }
+
+            html body .family-print-sheet .family-print-graph .absolute-card .node-face-avatar img {
+                position: absolute !important;
+                display: block !important;
+                max-width: none !important;
+                max-height: none !important;
+                margin: 0 !important;
+                transform: none !important;
+                transform-origin: 0 0 !important;
+                filter: sepia(.82) saturate(.72) contrast(1.06) !important;
+            }
         }
     `;
     document.head.appendChild(style);
