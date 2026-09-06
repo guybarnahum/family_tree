@@ -16,7 +16,7 @@
         #cards-layer .absolute-card .node-face-avatar {
             position: absolute;
             left: -14px;
-            top: 13px;
+            top: 50%;
             width: 40px;
             height: 40px;
             box-sizing: border-box;
@@ -27,12 +27,14 @@
             box-shadow: 0 3px 9px rgba(52,78,65,.24);
             z-index: 35;
             pointer-events: none;
+            transform: translateY(-50%);
         }
         #cards-layer .absolute-card.graph-root .node-face-avatar {
             left: -16px;
-            top: 18px;
+            top: 50%;
             width: 44px;
             height: 44px;
+            transform: translateY(-50%);
         }
         #cards-layer .absolute-card .node-face-avatar img {
             position: absolute;
