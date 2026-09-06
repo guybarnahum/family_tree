@@ -162,6 +162,8 @@
 
         appendScript('/person-metadata.js', 'data-family-person-metadata', build);
         appendScript('/person-pane.js', 'data-family-person-pane', build);
+        appendScript('/place-autocomplete.js', 'data-family-place-autocomplete', build);
+        appendScript('/pane-save-guard.js', 'data-family-pane-save-guard', build);
         appendScript('/person-pane-position.js', 'data-family-person-pane-position', build);
         appendScript('/slice-a-polish.js', 'data-family-slice-a-polish', build);
         appendScript('/slice-a-geometry.js', 'data-family-slice-a-geometry', build);
