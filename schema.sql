@@ -49,7 +49,9 @@ CREATE TABLE IF NOT EXISTS place_api_usage (
 
 -- Slice D media metadata lives in D1 while original image bytes live in R2. `media_people`
 -- is an association table, not ownership: one photo can be associated with multiple people
--- and Slice E can add face rectangles pointing to the same media row.
+-- and Slice E can add face rectangles pointing to the same media row. person_id deliberately
+-- has no FK because topology edits currently replace/reinsert `nodes`; associations must
+-- survive that graph rewrite unchanged.
 CREATE TABLE IF NOT EXISTS media (
     id TEXT PRIMARY KEY,
     object_key TEXT NOT NULL UNIQUE,
@@ -69,8 +71,7 @@ CREATE TABLE IF NOT EXISTS media_people (
     person_id TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (media_id, person_id),
-    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE,
-    FOREIGN KEY (person_id) REFERENCES nodes(id) ON DELETE CASCADE
+    FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_media_people_person
