@@ -4,6 +4,9 @@
 -- existing app and data. Family structure is now canonicalized in the separate
 -- `relationships` table so a person can have multiple parents/spouses and any
 -- person can be used as the root of a generated view.
+--
+-- Biographical/person-detail fields live in metadata_json. The legacy dates and
+-- description columns are retained during the migration window for compatibility.
 
 CREATE TABLE IF NOT EXISTS nodes (
     id TEXT PRIMARY KEY,
@@ -12,6 +15,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     name TEXT,
     dates TEXT,
     description TEXT,
+    metadata_json TEXT,
     last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -32,14 +36,16 @@ ON relationships(person1_id);
 CREATE INDEX IF NOT EXISTS idx_relationship_person2
 ON relationships(person2_id);
 
--- Seed a default person only for a new/empty database.
-INSERT OR IGNORE INTO nodes (id, parent_id, name, dates, description)
+-- Seed a default person only for a new/empty database. metadata_json mirrors the
+-- legacy seed content so a fresh database starts directly on the Slice B model.
+INSERT OR IGNORE INTO nodes (id, parent_id, name, dates, description, metadata_json)
 VALUES (
     'root',
     NULL,
     'משפחתנו',
     '1945 - היום',
-    'שורשי עץ המשפחה שלנו, מחברים דורות של אהבה.'
+    'שורשי עץ המשפחה שלנו, מחברים דורות של אהבה.',
+    '{"lifeDates":"1945 - היום","bio":"שורשי עץ המשפחה שלנו, מחברים דורות של אהבה."}'
 );
 
 -- Non-destructive compatibility migration from the original one-parent/one-spouse
