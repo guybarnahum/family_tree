@@ -1,5 +1,5 @@
 name = "family-tree-app"
-main = "src/worker.js"
+main = "src/entry.js"
 compatibility_date = "2024-03-20"
 
 # Modern native static asset hosting
