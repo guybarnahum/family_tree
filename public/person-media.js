@@ -356,6 +356,9 @@
         if (!personId) return;
         const existing = paneBody.querySelector('.person-media-section');
         if (existing?.dataset.personId === personId) return;
+        if (selectedItem && (!selectedItem._section?.isConnected || selectedItem._section?.dataset.personId !== personId)) {
+            closeMedia();
+        }
         existing?.remove();
 
         const section = sectionShell(personId);
@@ -371,7 +374,8 @@
     }
 
     function openMedia(item, section) {
-        selectedItem = { ...item, _section: section };
+        selectedItem = item;
+        selectedItem._section = section;
         modalImage.src = item.contentUrl;
         modalImage.alt = item.caption || '';
         modal.querySelector('[data-media-field="caption"]').textContent = item.caption || '';
@@ -405,7 +409,11 @@
             Object.assign(selectedItem, result.item || {});
             editOriginals.set(element, value);
             showStatus('נשמר בהצלחה');
-            if (field === 'caption') modalImage.alt = value;
+            if (field === 'caption') {
+                modalImage.alt = value;
+                const tile = selectedItem._section?.querySelector(`[data-media-id="${selectedItem.id}"]`);
+                if (tile) tile.title = value || selectedItem.originalFilename || 'תמונה';
+            }
         } catch (error) {
             console.error('Unable to save photo detail:', error);
             element.textContent = original;
@@ -417,12 +425,17 @@
     modal.addEventListener('focusin', event => {
         const field = event.target?.dataset?.mediaField;
         if (!field) return;
+        if (typeof isEditing !== 'undefined') isEditing = true;
         editOriginals.set(event.target, event.target.innerText.trim());
     }, true);
 
+    // These contenteditables are media metadata, not graph-card fields. Stop their blur in
+    // capture phase so the legacy body-level saveEdit() listener can never reload the graph.
     modal.addEventListener('focusout', event => {
         const field = event.target?.dataset?.mediaField;
         if (!field) return;
+        event.stopPropagation();
+        if (typeof isEditing !== 'undefined') isEditing = false;
         const value = event.target.innerText.trim();
         const original = editOriginals.get(event.target) ?? value;
         void patchSelected(field, value, event.target, original);
