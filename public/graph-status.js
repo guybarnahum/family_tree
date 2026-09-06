@@ -168,7 +168,8 @@
         .graph-status-banner {
             position: fixed;
             left: 50%;
-            top: 118px;
+            top: auto;
+            bottom: 28px;
             width: min(680px, calc(100vw - 28px));
             transform: translateX(-50%);
             z-index: 480;
@@ -259,6 +260,7 @@
             .graph-status-description { font-size: 13px; }
             .graph-status-banner {
                 top: 136px;
+                bottom: auto;
                 width: calc(100dvw - 22px);
                 align-items: flex-start;
             }
