@@ -65,6 +65,18 @@
         return Metadata.metadataObject(person?.metadata);
     }
 
+    function selectedPlace(element, value) {
+        if (element.dataset.metaKind !== 'place' || !element.dataset.placeSelection) return null;
+        try {
+            const place = JSON.parse(element.dataset.placeSelection);
+            if (!place || typeof place !== 'object' || Array.isArray(place)) return null;
+            if (String(place.text || '').trim() !== value) return null;
+            return place;
+        } catch (_) {
+            return null;
+        }
+    }
+
     function restoreNamePresentation(id, value) {
         const cardName = rootCardName(id);
         if (cardName) cardName.textContent = value || 'שם';
@@ -102,7 +114,12 @@
 
         if (field === 'metadata') {
             if (!metadataKey) return;
-            nextMetadata = Metadata.withField(priorMetadata, metadataKey, value, metadataKind);
+            const structuredPlace = selectedPlace(element, value);
+            if (structuredPlace) {
+                nextMetadata = { ...priorMetadata, [metadataKey]: structuredPlace };
+            } else {
+                nextMetadata = Metadata.withField(priorMetadata, metadataKey, value, metadataKind);
+            }
             payload = { metadata: nextMetadata };
         } else {
             payload = { [field]: value };
