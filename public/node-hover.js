@@ -167,6 +167,8 @@
         appendScript('/person-media.js', 'data-family-person-media', build);
         appendScript('/face-tagging.js', 'data-family-face-tagging', build);
         appendScript('/face-tagging-ux.js', 'data-family-face-tagging-ux', build);
+        appendScript('/face-primary.js', 'data-family-face-primary', build);
+        appendScript('/node-face-decoration.js', 'data-family-node-face-decoration', build);
         appendScript('/parent-limit.js', 'data-family-parent-limit', build);
         appendScript('/person-pane-position.js', 'data-family-person-pane-position', build);
         appendScript('/mobile-chrome.js', 'data-family-mobile-chrome', build);
