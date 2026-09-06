@@ -83,8 +83,7 @@ async function ensureMediaSchema(env) {
           person_id TEXT NOT NULL,
           created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
           PRIMARY KEY (media_id, person_id),
-          FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE,
-          FOREIGN KEY (person_id) REFERENCES nodes(id) ON DELETE CASCADE
+          FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
         )
       `),
       env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_media_people_person ON media_people(person_id)`),
