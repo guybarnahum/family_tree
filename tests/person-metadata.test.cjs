@@ -6,67 +6,48 @@ const workerPath = path.join(__dirname, '..', 'src', 'worker.js');
 let source = fs.readFileSync(workerPath, 'utf8');
 source = source.replace(/\bexport\s+default\s+/, 'const __worker = ');
 
-const loadHelpers = new Function(`${source}\nreturn { metadataObject, metadataFromLegacy, normalizePerson };`);
-const { metadataObject, metadataFromLegacy, normalizePerson } = loadHelpers();
+const loadHelpers = new Function(`${source}\nreturn { metadataObject, normalizePerson };`);
+const { metadataObject, normalizePerson } = loadHelpers();
 
 assert.deepEqual(metadataObject(null), {});
 assert.deepEqual(metadataObject('{"birthDate":"1945"}'), { birthDate: '1945' });
-assert.deepEqual(
-  metadataFromLegacy({}, '1945 - היום', 'legacy bio'),
-  { lifeDates: '1945 - היום', bio: 'legacy bio' }
-);
-assert.deepEqual(
-  metadataFromLegacy({}, 'תאריכים', 'תיאור'),
-  {}
-);
+assert.deepEqual(metadataObject({ birthPlace: { text: 'Tel Aviv', countryCode: 'IL' } }), {
+  birthPlace: { text: 'Tel Aviv', countryCode: 'IL' }
+});
 
-// Old graph/person records without metadata are upgraded from legacy fields.
+// Old dates/description are deliberately ignored. Slice B starts existing people with
+// empty metadata rather than attempting to infer or preserve biography fields.
 assert.deepEqual(
   normalizePerson({ id: 'old', name: 'Old', dates: 'c. 1940', description: 'A bio' }),
-  {
-    id: 'old',
-    name: 'Old',
-    dates: 'c. 1940',
-    description: 'A bio',
-    metadata: { lifeDates: 'c. 1940', bio: 'A bio' }
-  }
+  { id: 'old', name: 'Old', metadata: {} }
 );
 
-// Once metadata is explicitly present, it is authoritative. Empty metadata must not
-// resurrect legacy values on the next import or request.
 assert.deepEqual(
   normalizePerson({
-    id: 'new',
-    name: 'New',
-    dates: 'legacy dates',
-    description: 'legacy bio',
-    metadata: {}
+    id: 'person',
+    name: 'Person',
+    dates: 'ignored',
+    description: 'ignored',
+    metadata: {
+      birthDate: 'Spring 1945',
+      birthPlace: { text: 'Tel Aviv', countryCode: 'IL' },
+      bio: 'New bio'
+    }
   }),
   {
-    id: 'new',
-    name: 'New',
-    dates: 'legacy dates',
-    description: 'legacy bio',
-    metadata: {}
+    id: 'person',
+    name: 'Person',
+    metadata: {
+      birthDate: 'Spring 1945',
+      birthPlace: { text: 'Tel Aviv', countryCode: 'IL' },
+      bio: 'New bio'
+    }
   }
 );
 
-// Metadata values win for the legacy compatibility projection as well.
-assert.deepEqual(
-  normalizePerson({
-    id: 'mixed',
-    name: 'Mixed',
-    dates: 'old dates',
-    description: 'old bio',
-    metadata: { lifeDates: 'Spring 1945', bio: 'New bio', custom: 'kept' }
-  }),
-  {
-    id: 'mixed',
-    name: 'Mixed',
-    dates: 'Spring 1945',
-    description: 'New bio',
-    metadata: { lifeDates: 'Spring 1945', bio: 'New bio', custom: 'kept' }
-  }
+assert.throws(
+  () => metadataObject('[1,2,3]', { strict: true }),
+  /JSON object/
 );
 
-console.log('person metadata migration tests passed');
+console.log('person metadata tests passed');
