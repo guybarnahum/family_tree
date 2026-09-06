@@ -17,6 +17,8 @@
         ? window.showStatus.bind(window)
         : null;
     let retryInFlight = false;
+    let lastGraphFailure = null;
+    const FAILURE_CLASSIFICATION_TTL_MS = 15000;
 
     function isGraphRequest(input, init) {
         const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
@@ -46,7 +48,26 @@
         }
     }
 
+    function rememberFailure(classified, detail = '') {
+        lastGraphFailure = {
+            classified: { ...classified },
+            detail: detail || classified?.text || '',
+            at: Date.now()
+        };
+    }
+
+    function recentFailure() {
+        if (!lastGraphFailure) return null;
+        if (Date.now() - lastGraphFailure.at > FAILURE_CLASSIFICATION_TTL_MS) {
+            lastGraphFailure = null;
+            return null;
+        }
+        return lastGraphFailure;
+    }
+
     function showFailure(classified, { cached = null, detail = '' } = {}) {
+        rememberFailure(classified, detail);
+
         const options = {
             kind: classified.kind,
             retry: retryGraph,
@@ -100,6 +121,7 @@
                 const graph = await readSuccessfulGraph(response);
                 if (graph) {
                     Cache.save(graph);
+                    lastGraphFailure = null;
                     Status.clear();
                     return response;
                 }
@@ -130,16 +152,26 @@
         }
     };
 
-    // graph-view catches projection/layout/JSON failures internally. Upgrade its legacy
-    // tiny status message into the same large/bannner resilience surface.
+    // graph-view catches projection/layout/JSON failures internally and collapses them into
+    // one legacy Hebrew status string. If that string immediately follows a real /api/graph
+    // failure, preserve the real classification instead of incorrectly relabeling an infra
+    // outage as a logical/data bug. Only use `data` when no recent transport failure exists.
     if (baseShowStatus) {
         window.showStatus = function resilientShowStatus(message, ...args) {
             if (String(message) === 'שגיאה בטעינת הגרף') {
                 const cached = Cache.load();
-                showFailure(
-                    { kind: 'data', transient: false, status: null, text: 'Graph render/load failure' },
-                    { cached, detail: 'Graph render/load failure' }
-                );
+                const recent = recentFailure();
+                if (recent) {
+                    showFailure(recent.classified, {
+                        cached,
+                        detail: recent.detail || recent.classified.text
+                    });
+                } else {
+                    showFailure(
+                        { kind: 'data', transient: false, status: null, text: 'Graph render/load failure' },
+                        { cached, detail: 'Graph render/load failure' }
+                    );
+                }
                 return;
             }
             return baseShowStatus(message, ...args);
