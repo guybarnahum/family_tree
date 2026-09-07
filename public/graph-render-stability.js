@@ -39,6 +39,7 @@
     let structural = null;
     let selection = null;
     let remoteReconcilePending = false;
+    let remoteSettleInFlight = false;
     const hiddenReasons = new Set();
 
     const diagnostics = {
@@ -373,13 +374,26 @@
         // chain. Hide that direct reconciliation, then run one cache-backed loadTree transaction
         // after it reports completion. No additional D1 graph read is required.
         window.addEventListener('family-graph-sync-metrics', event => {
-            if (!event.detail?.reconcileInFlight || remoteReconcilePending) return;
-            remoteReconcilePending = true;
-            hide('remote-reconcile');
+            const inFlight = !!event.detail?.reconcileInFlight;
+            if (inFlight && !remoteReconcilePending) {
+                remoteReconcilePending = true;
+                hide('remote-reconcile');
+                return;
+            }
+
+            // A failed reconciliation never dispatches family-graph-synced. Once graph-sync
+            // leaves its in-flight state without a settle pass having started, reveal the last
+            // good cached graph instead of leaving the canvas hidden.
+            if (!inFlight && remoteReconcilePending && !remoteSettleInFlight) {
+                remoteReconcilePending = false;
+                reveal('remote-reconcile');
+                exposeDiagnostics();
+            }
         });
 
         window.addEventListener('family-graph-synced', () => {
-            if (!remoteReconcilePending) return;
+            if (!remoteReconcilePending || remoteSettleInFlight) return;
+            remoteSettleInFlight = true;
             void (async () => {
                 try {
                     await loadTree(null, false);
@@ -387,6 +401,7 @@
                 } catch (error) {
                     console.warn('Unable to settle remote graph reconciliation:', error);
                 } finally {
+                    remoteSettleInFlight = false;
                     remoteReconcilePending = false;
                     reveal('remote-reconcile');
                     exposeDiagnostics();
