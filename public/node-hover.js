@@ -188,6 +188,7 @@
         appendScript('/print-refinement.js', 'data-family-print', build);
         appendScript('/planar-core.js', 'data-family-planar-core', build);
         appendScript('/planar-layout.js', 'data-family-planar-layout', build);
+        appendScript('/graph-render-stability.js', 'data-family-graph-render-stability', build);
         loadMemberOrderWhenPlanarReady(build);
     }
 
