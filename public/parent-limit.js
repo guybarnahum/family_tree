@@ -1,16 +1,14 @@
-// Slice D parent invariant: a person may have at most two effective parents.
+// Parent invariant UI: a person may have at most two effective parents.
 // One explicit parent plus that parent's sole spouse is already a complete visible pair.
 (() => {
     if (window.__familyParentLimitInstalled) return;
     window.__familyParentLimitInstalled = true;
 
     const cardsLayer = document.getElementById('cards-layer');
-    if (!cardsLayer) return;
+    const Store = window.FamilyGraphStore;
+    if (!cardsLayer || !Store) return;
 
-    const explicitParents = new Map();
-    const spouses = new Map();
     let refreshPromise = null;
-    let refreshTimer = 0;
     let wrapped = false;
 
     const style = document.createElement('style');
@@ -21,29 +19,16 @@
     `;
     document.head.appendChild(style);
 
-    function addSet(map, key, value) {
-        if (!map.has(key)) map.set(key, new Set());
-        map.get(key).add(value);
-    }
-
-    function rebuild(documentValue) {
-        explicitParents.clear();
-        spouses.clear();
-        for (const relation of documentValue.relationships || []) {
-            if (relation.type === 'parent') {
-                addSet(explicitParents, relation.person2Id, relation.person1Id);
-            } else if (relation.type === 'spouse') {
-                addSet(spouses, relation.person1Id, relation.person2Id);
-                addSet(spouses, relation.person2Id, relation.person1Id);
-            }
-        }
+    function graphIndexes() {
+        return Store.snapshot().indexes;
     }
 
     function effectiveParentCount(childId) {
-        const parents = explicitParents.get(childId) || new Set();
+        const { parentsByChild, spousesByPerson } = graphIndexes();
+        const parents = parentsByChild.get(childId) || new Set();
         if (parents.size !== 1) return parents.size;
         const [parentId] = [...parents];
-        const partners = spouses.get(parentId) || new Set();
+        const partners = spousesByPerson.get(parentId) || new Set();
         return partners.size === 1 ? 2 : 1;
     }
 
@@ -57,8 +42,6 @@
                 card.removeAttribute('data-parent-limit');
             } else {
                 card.dataset.parentLimit = 'full';
-                // Remove it as well as hiding it. If a later card pass reconstructs the
-                // action, the data attribute keeps it hidden until this guard reapplies.
                 card.querySelector('[data-action="add-parent"]')?.remove();
             }
         });
@@ -66,15 +49,10 @@
 
     async function refresh(force = false) {
         if (refreshPromise && !force) return refreshPromise;
-        refreshPromise = fetch('/api/graph', { cache: 'no-store' })
-            .then(async response => {
-                if (!response.ok) throw new Error(await response.text());
-                return response.json();
-            })
-            .then(documentValue => {
-                rebuild(documentValue);
+        refreshPromise = Store.read({ reason: 'parent-limit' })
+            .then(snapshot => {
                 apply();
-                return documentValue;
+                return snapshot.graph;
             })
             .catch(error => {
                 console.warn('Unable to refresh parent limit:', error);
@@ -82,11 +60,6 @@
             })
             .finally(() => { refreshPromise = null; });
         return refreshPromise;
-    }
-
-    function queueRefresh() {
-        clearTimeout(refreshTimer);
-        refreshTimer = setTimeout(() => void refresh(false), 80);
     }
 
     function installAddParentGuard(attempt = 0) {
@@ -113,13 +86,11 @@
         wrapped = true;
     }
 
-    window.FamilyParentLimit = { canAddParent, effectiveParentCount, refresh, apply };
+    window.FamilyParentLimit = Object.freeze({ canAddParent, effectiveParentCount, refresh, apply });
 
-    new MutationObserver(mutations => {
-        if (!mutations.some(mutation => mutation.type === 'childList')) return;
-        apply();
-        queueRefresh();
-    }).observe(cardsLayer, { childList: true, subtree: true });
+    // Graph/card lifecycle is explicit in M3; do not infer it from DOM child mutations.
+    window.addEventListener('family-graph-store-changed', apply);
+    window.addEventListener('family-graph-rendered', apply);
 
     void refresh(true);
     installAddParentGuard();
