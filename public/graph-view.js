@@ -521,8 +521,8 @@
             .join(',');
     }
 
-    function renderGraphView({ recenter = false } = {}) {
-        if (!graphRootId || !graphPeopleById.has(graphRootId)) return;
+    function renderGraphView({ recenter = false, reason = 'projection' } = {}) {
+        if (!graphRootId || !graphPeopleById.has(graphRootId)) return Promise.resolve(null);
         const anchor = !recenter && globalNodeMap.has(graphRootId)
             ? captureAnchor(graphRootId)
             : null;
@@ -536,12 +536,27 @@
         decorateCards();
         updateRootUI();
 
-        requestAnimationFrame(() => {
-            layoutAndRender();
+        const controller = window.FamilyRenderController;
+        if (controller?.renderProjection) {
+            return controller.renderProjection({
+                rootId: graphRootId,
+                recenter,
+                anchor,
+                reason
+            });
+        }
+
+        // Resilient fallback for a partially loaded development page. Production M2 always
+        // installs RenderController before startFamilyGraph().
+        return new Promise(resolve => {
             requestAnimationFrame(() => {
-                decorateCards();
-                if (recenter) centerOnRoot();
-                else if (anchor) restoreAnchor(anchor);
+                layoutAndRender();
+                requestAnimationFrame(() => {
+                    decorateCards();
+                    if (recenter) centerOnRoot();
+                    else if (anchor) restoreAnchor(anchor);
+                    resolve(null);
+                });
             });
         });
     }
@@ -563,7 +578,7 @@
     }
 
     function setRoot(personId, { updateUrl = true } = {}) {
-        if (!graphPeopleById.has(personId)) return;
+        if (!graphPeopleById.has(personId)) return Promise.resolve(null);
         graphRootId = personId;
         expandedBySource.clear();
 
@@ -573,7 +588,7 @@
             history.replaceState(null, '', url);
         }
 
-        renderGraphView({ recenter: true });
+        return renderGraphView({ recenter: true, reason: 'selection' });
     }
 
     function syncPersonDetailsWithoutRender(people) {
@@ -613,9 +628,8 @@
             const nextRelationships = documentValue.relationships || [];
             const nextSignature = graphStructureSignature(nextPeople, nextRelationships);
 
-            // The five-second multi-client poll must not treat biography changes as graph
-            // changes. Metadata is merged in place; only names/topology can replace cards
-            // and invoke layoutAndRender().
+            // Biography-only changes merge into visible/canonical objects without a topology
+            // generation. Only names/topology replace cards and invoke the render controller.
             if (!force && nextSignature === graphSignature) {
                 syncPersonDetailsWithoutRender(nextPeople);
                 return;
@@ -635,11 +649,23 @@
                 globalNodes = [];
                 globalNodeMap = new Map();
                 renderCards();
-                layoutAndRender();
+                svgLayer.innerHTML = '';
                 return;
             }
 
-            renderGraphView({ recenter });
+            const controller = window.FamilyRenderController;
+            if (controller?.prepare) {
+                await controller.prepare({
+                    reason: force ? 'graph-force' : 'graph-load',
+                    anchorId: graphRootId,
+                    rootId: graphRootId
+                });
+            }
+
+            return await renderGraphView({
+                recenter,
+                reason: force ? 'graph-force' : 'graph-load'
+            });
         } catch (error) {
             console.error('Failed to load family graph:', error);
             showStatus('שגיאה בטעינת הגרף');
@@ -704,7 +730,7 @@
             if (!results.length) return;
             event.preventDefault();
             searchResults.classList.remove('open');
-            setRoot(results[0].id);
+            void setRoot(results[0].id);
             searchInput.blur();
         });
 
@@ -712,7 +738,7 @@
             const button = event.target.closest('[data-person-id]');
             if (!button) return;
             searchResults.classList.remove('open');
-            setRoot(button.dataset.personId);
+            void setRoot(button.dataset.personId);
         });
 
         document.addEventListener('pointerdown', event => {
@@ -726,7 +752,7 @@
             event.preventDefault();
             event.stopPropagation();
             expandedBySource.delete(collapse.dataset.graphCollapse);
-            renderGraphView({ recenter: false });
+            void renderGraphView({ recenter: false, reason: 'collapse' });
             return;
         }
 
@@ -737,14 +763,14 @@
             const sourceId = expand.dataset.graphExpand;
             const branches = hiddenBranchesFor(sourceId);
             if (branches.size) expandedBySource.set(sourceId, new Set(branches));
-            renderGraphView({ recenter: false });
+            void renderGraphView({ recenter: false, reason: 'expand' });
             return;
         }
 
         if (event.target.closest('[data-action]') || event.target.closest('[contenteditable="true"]')) return;
         const card = event.target.closest('.absolute-card[data-node-id]');
         if (!card) return;
-        setRoot(card.dataset.nodeId);
+        void setRoot(card.dataset.nodeId);
     });
 
     // Existing add/edit/delete flows call loadTree(). Point them at the global graph.
@@ -766,8 +792,8 @@
         if (!person) return;
         if (detail.field === 'name') {
             person.name = detail.value;
-            // The pane already reflowed the visible name card. Keep the polling signature
-            // coherent so the next five-second poll does not redraw the same graph again.
+            // Keep the structure signature coherent so the next revision reconciliation does
+            // not redraw a name edit the pane has already applied locally.
             graphSignature = graphStructureSignature(graphPeople, graphRelationships);
         }
         if (detail.field === 'metadata' && detail.metadata && typeof detail.metadata === 'object') {
