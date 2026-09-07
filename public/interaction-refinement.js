@@ -68,6 +68,8 @@
             box-shadow: 0 12px 28px rgba(52, 78, 65, 0.24) !important;
             border-top-color: #344e41 !important;
             background: #fff !important;
+            opacity: 1 !important;
+            filter: none !important;
         }
 
         .absolute-card.graph-root .graph-select-zone {
@@ -211,25 +213,39 @@
         if (zone.title !== nextTitle) zone.title = nextTitle;
     }
 
-    async function decorate() {
-        const rootId = currentRootId();
+    let decorateGeneration = 0;
+
+    async function decorate(generation) {
         const graph = await loadGraphDocument(false);
+        if (generation !== decorateGeneration) return;
+
+        // Resolve root only after the async graph read. A selection may have changed while
+        // that request was in flight; an older generation must never paint its old root roles.
+        const rootId = currentRootId();
         const spouseDepths = spouseAncestorDepths(graph, rootId);
 
         cardsLayerEl.querySelectorAll('.absolute-card[data-node-id]').forEach(card => {
             ensureSelectZone(card);
 
             const id = card.dataset.nodeId;
+            const isRoot = id === rootId || card.classList.contains('graph-root');
             const depth = spouseDepths.get(id);
-            card.classList.toggle('graph-spouse-parent', depth === 1);
-            card.classList.toggle('graph-spouse-ancestor-deep', Number.isFinite(depth) && depth > 1);
+
+            // Selection is authoritative. Even if this card was a spouse ancestor in the
+            // previous generation, no contextual ancestry class may survive on the root.
+            card.classList.toggle('graph-spouse-parent', !isRoot && depth === 1);
+            card.classList.toggle(
+                'graph-spouse-ancestor-deep',
+                !isRoot && Number.isFinite(depth) && depth > 1
+            );
 
             const zone = card.querySelector('.graph-select-zone');
             if (zone) {
-                const isRoot = id === rootId || card.classList.contains('graph-root');
                 setTextIfChanged(zone, isRoot ? '● מרכז נוכחי' : '◎ מרכז כאן');
             }
         });
+
+        if (generation !== decorateGeneration) return;
 
         // The first time this script arrives, the original layout may already have
         // measured the cards. Re-measure once so connector endpoints include the footer.
@@ -246,11 +262,15 @@
     let decorateQueued = false;
     function queueDecorate({ refreshGraph = false } = {}) {
         if (refreshGraph) graphCache = null;
+
+        // Every request advances the generation, including requests coalesced into an already
+        // queued microtask. Any decorate() awaiting an older graph read then self-discards.
+        decorateGeneration += 1;
         if (decorateQueued) return;
         decorateQueued = true;
         queueMicrotask(() => {
             decorateQueued = false;
-            decorate();
+            void decorate(decorateGeneration);
         });
     }
 
