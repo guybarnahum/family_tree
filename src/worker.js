@@ -30,6 +30,13 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
+function normalizePersonName(value) {
+  return String(value ?? '')
+    .normalize('NFC')
+    .trim()
+    .replace(/\s+/gu, ' ');
+}
+
 async function tableExists(env, name) {
   const row = await env.DB.prepare(`
     SELECT 1 AS present
@@ -184,7 +191,9 @@ function normalizePerson(person) {
   const metadataProvided = !!person && Object.prototype.hasOwnProperty.call(person, 'metadata');
   return {
     id: person?.id,
-    name: person?.name ?? null,
+    name: person?.name === null || person?.name === undefined
+      ? null
+      : normalizePersonName(person.name),
     metadata: metadataObject(person?.metadata, { strict: metadataProvided })
   };
 }
@@ -372,7 +381,9 @@ async function graphDocument(env) {
     version: 2,
     people: peopleResult.results.map(person => ({
       id: person.id,
-      name: person.name ?? null,
+      name: person.name === null || person.name === undefined
+        ? null
+        : normalizePersonName(person.name),
       metadata: metadataObject(person.metadata_json),
       lastUpdated: person.last_updated ?? null
     })),
@@ -458,6 +469,9 @@ async function handleNodesApi(request, env, url) {
       const { metadata_json: metadataJson, ...node } = row;
       return {
         ...node,
+        name: node.name === null || node.name === undefined
+          ? null
+          : normalizePersonName(node.name),
         dates: '',
         description: '',
         metadata: metadataObject(metadataJson)
@@ -471,6 +485,7 @@ async function handleNodesApi(request, env, url) {
 
     const metadataProvided = Object.prototype.hasOwnProperty.call(data, 'metadata');
     const metadata = metadataObject(data.metadata, { strict: metadataProvided });
+    const name = normalizePersonName(data.name || 'שם') || 'שם';
 
     const statements = [
       env.DB.prepare(`
@@ -480,7 +495,7 @@ async function handleNodesApi(request, env, url) {
         data.id,
         data.parent_id || null,
         data.spouse_id || null,
-        data.name || 'שם',
+        name,
         JSON.stringify(metadata)
       )
     ];
@@ -506,7 +521,7 @@ async function handleNodesApi(request, env, url) {
     }
 
     await env.DB.batch(statements);
-    return jsonResponse({ success: true });
+    return jsonResponse({ success: true, name });
   }
 
   if (request.method === 'PATCH' && nodeId) {
@@ -572,11 +587,17 @@ async function handleNodesApi(request, env, url) {
       return jsonResponse({ success: true, metadata });
     }
 
-    await env.DB.prepare(
-      `UPDATE nodes SET ${field} = ?, last_updated = CURRENT_TIMESTAMP WHERE id = ?`
-    ).bind(data[field], nodeId).run();
+    if (field === 'name') {
+      const name = normalizePersonName(data.name);
+      await env.DB.prepare(`
+        UPDATE nodes
+        SET name = ?, last_updated = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(name, nodeId).run();
+      return jsonResponse({ success: true, name });
+    }
 
-    return jsonResponse({ success: true });
+    return new Response('Unsupported field', { status: 400 });
   }
 
   if (request.method === 'DELETE' && nodeId) {
