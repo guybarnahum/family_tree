@@ -50,7 +50,10 @@ async function bumpGraphRevision(env) {
 
 function withRevisionHeader(response, revision) {
   const headers = new Headers(response.headers);
+  // Keep the historical graph header for browser-cache compatibility while also exposing
+  // the counter under its broader meaning: every user-visible data mutation advances it.
   headers.set('X-Family-Graph-Revision', String(revision));
+  headers.set('X-Family-Revision', String(revision));
   headers.delete('Content-Length');
   return new Response(response.body, {
     status: response.status,
@@ -59,12 +62,31 @@ function withRevisionHeader(response, revision) {
   });
 }
 
-function isGraphMutation(request, url) {
-  const method = request.method.toUpperCase();
-  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+function isMutationMethod(method) {
+  const value = String(method || 'GET').toUpperCase();
+  return value !== 'GET' && value !== 'HEAD' && value !== 'OPTIONS';
+}
+
+function isRevisionMutation(request, url) {
+  if (!isMutationMethod(request.method)) return false;
   return url.pathname === '/api/graph' ||
     url.pathname === '/api/tree' ||
-    url.pathname.startsWith('/api/nodes');
+    url.pathname.startsWith('/api/nodes') ||
+    url.pathname === '/api/media' ||
+    url.pathname.startsWith('/api/media/') ||
+    url.pathname === '/api/faces' ||
+    url.pathname.startsWith('/api/faces/');
+}
+
+async function attachMutationRevision(response, env, request, url) {
+  if (!env.DB || !response.ok || !isRevisionMutation(request, url)) return response;
+  try {
+    const revision = await bumpGraphRevision(env);
+    return withRevisionHeader(response, revision);
+  } catch (error) {
+    console.error('Unable to bump family data revision:', error);
+    return response;
+  }
 }
 
 async function injectGraphResilience(response, env) {
@@ -81,11 +103,12 @@ async function injectGraphResilience(response, env) {
   const hasGraphResilience = html.includes('data-family-graph-resilience');
   const hasGraphSync = html.includes('data-family-graph-sync');
   const hasGraphDebug = html.includes('data-family-graph-debug');
+  const hasRevisionLayoutGuard = html.includes('data-family-revision-layout-guard');
   const hasPersonIdentity = html.includes('data-family-person-identity');
   const hasPersonPickerLabels = html.includes('data-family-person-picker-labels');
   const hasMediaResilience = html.includes('data-family-media-resilience');
   if (
-    hasGraphResilience && hasGraphSync && hasGraphDebug &&
+    hasGraphResilience && hasGraphSync && hasGraphDebug && hasRevisionLayoutGuard &&
     hasPersonIdentity && hasPersonPickerLabels && hasMediaResilience
   ) {
     const headers = new Headers(response.headers);
@@ -122,6 +145,9 @@ async function injectGraphResilience(response, env) {
     !hasGraphDebug
       ? `<script src="/graph-debug.js?v=${encodeURIComponent(build)}" data-family-graph-debug></script>`
       : '',
+    !hasRevisionLayoutGuard
+      ? `<script src="/revision-layout-guard.js?v=${encodeURIComponent(build)}" data-family-revision-layout-guard></script>`
+      : '',
     !hasMediaResilience
       ? `<script src="/media-resilience.js?v=${encodeURIComponent(build)}" data-family-media-resilience></script>`
       : ''
@@ -156,7 +182,8 @@ export default {
           {
             headers: {
               'Cache-Control': 'no-store',
-              'X-Family-Graph-Revision': String(revision)
+              'X-Family-Graph-Revision': String(revision),
+              'X-Family-Revision': String(revision)
             }
           }
         );
@@ -181,7 +208,8 @@ export default {
 
     if (url.pathname === '/api/media' || url.pathname.startsWith('/api/media/')) {
       try {
-        return await handleMediaApi(request, env, url);
+        const response = await handleMediaApi(request, env, url);
+        return await attachMutationRevision(response, env, request, url);
       } catch (error) {
         console.error('Media API failed:', error);
         return new Response(`Media API Error: ${error.message}`, { status: 500 });
@@ -190,9 +218,8 @@ export default {
 
     if (url.pathname === '/api/faces' || url.pathname.startsWith('/api/faces/')) {
       try {
-        // Face records affect portrait decoration, not the canonical /api/graph document.
-        // Keep them out of graph_state so face UI activity can never trigger graph reloads.
-        return await handleFacesApi(request, env, url);
+        const response = await handleFacesApi(request, env, url);
+        return await attachMutationRevision(response, env, request, url);
       } catch (error) {
         console.error('Faces API failed:', error);
         return new Response(`Faces API Error: ${error.message}`, { status: 500 });
@@ -201,13 +228,8 @@ export default {
 
     let response = await worker.fetch(request, env, ctx);
 
-    if (env.DB && response.ok && isGraphMutation(request, url)) {
-      try {
-        const revision = await bumpGraphRevision(env);
-        response = withRevisionHeader(response, revision);
-      } catch (error) {
-        console.error('Unable to bump graph revision:', error);
-      }
+    if (env.DB && response.ok && isRevisionMutation(request, url)) {
+      response = await attachMutationRevision(response, env, request, url);
     } else if (env.DB && response.ok && url.pathname === '/api/graph' && request.method === 'GET') {
       try {
         const revision = await readGraphRevision(env);
