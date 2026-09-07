@@ -214,10 +214,13 @@
 
     function install() {
         if (installed) return true;
+        const routerReady =
+            typeof loadTree === 'function' && loadTree.name === 'routerAwareLoadTree' &&
+            typeof drawSVGLines === 'function' && drawSVGLines.name === 'crossingSafeDraw';
         if (!window.__familyPlanarRouterInstalled ||
             !window.__familyRevisionLayoutGuardInstalled ||
-            typeof layoutAndRender !== 'function' ||
-            typeof loadTree !== 'function') {
+            !routerReady ||
+            typeof layoutAndRender !== 'function') {
             return false;
         }
 
