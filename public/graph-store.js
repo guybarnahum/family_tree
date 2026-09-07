@@ -1,9 +1,8 @@
 // M3 canonical client graph store.
 //
 // One browser-side owner for the canonical graph document, revision/dirty/stale state,
-// persistent cache, shared topology indexes, and /api/graph reads. Legacy callers that still
-// fetch('/api/graph') are transparently served from this same store so there is no second graph
-// document/cache path while the remaining algorithm modules are flattened in later cleanup.
+// persistent cache, shared topology indexes, and /api/graph reads. Legacy algorithm modules
+// may still fetch('/api/graph'), but those reads are transparently served from this same store.
 (() => {
     if (window.FamilyGraphStore) return;
 
@@ -167,9 +166,6 @@
         if (Number.isFinite(payload.latencyMs)) diagnostics.lastFetchLatencyMs = payload.latencyMs;
         expose();
         window.dispatchEvent(new CustomEvent('family-graph-store-fetch', { detail: payload }));
-        // Compatibility event for feature code that predates M3. New code should use the
-        // graph-store event; this alias can disappear with the remaining feature cleanup.
-        window.dispatchEvent(new CustomEvent('family-graph-fetch', { detail: payload }));
     }
 
     function acceptGraph(value, {
@@ -458,7 +454,7 @@
         return fetchGraph(input, init || { cache: 'no-store' });
     };
 
-    const api = Object.freeze({
+    window.FamilyGraphStore = Object.freeze({
         snapshot,
         read,
         refresh,
@@ -476,32 +472,6 @@
         isGraphDocument,
         finiteRevision,
         nativeFetch: (...args) => nativeFetch(...args)
-    });
-    window.FamilyGraphStore = api;
-
-    // Temporary API-compatibility facade. It references the same in-memory document/state;
-    // there is no second cache. M3 updates active consumers to FamilyGraphStore, after which
-    // this alias can be removed without changing persistence semantics.
-    window.FamilyGraphCache = Object.freeze({
-        load: () => graph ? {
-            savedAt,
-            revision,
-            serverRevision,
-            stale,
-            dirty,
-            graph
-        } : null,
-        save: (value, options = {}) => {
-            try { acceptGraph(value, { revision: options.revision, source: 'compat-save', clean: true, reason: 'compat-save' }); return true; }
-            catch (_) { return false; }
-        },
-        markStale,
-        markDirty,
-        markClean,
-        clear,
-        ageMs,
-        isGraphDocument,
-        finiteRevision
     });
 
     expose();
