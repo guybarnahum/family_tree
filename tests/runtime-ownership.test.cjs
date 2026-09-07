@@ -11,6 +11,10 @@ const interaction = read('public/interaction-refinement.js');
 const bootstrap = read('public/runtime-bootstrap.js');
 const graphView = read('public/graph-view.js');
 const controller = read('public/render-controller.js');
+const store = read('public/graph-store.js');
+const sync = read('public/graph-sync.js');
+const visualRoles = read('public/visual-roles.js');
+const parentLimit = read('public/parent-limit.js');
 const entry = read('src/entry.js');
 
 assert(!nodeHover.includes('appendScript('), 'node-hover must not bootstrap runtime scripts');
@@ -27,13 +31,19 @@ assert(!interaction.includes('layoutAndRender()'), 'interaction must not request
 
 assert(bootstrap.includes("'/selection-controller.js'"), 'bootstrap must install selection controller');
 assert(bootstrap.includes("'/render-controller.js'"), 'bootstrap must install RenderController');
+assert(bootstrap.includes("'/node-hover.js'"), 'bootstrap must explicitly own node-hover startup');
 assert(bootstrap.includes("'/visual-roles.js'"), 'bootstrap must install visual roles');
 assert(bootstrap.includes("'/graph-sync.js'"), 'bootstrap must own sync startup');
 assert(bootstrap.includes('await window.startFamilyGraph()'), 'bootstrap must explicitly start the graph');
-assert(!bootstrap.includes("'/revision-layout-guard.js'"), 'M1 revision layout guard must not load');
-assert(!bootstrap.includes("'/graph-render-stability.js'"), 'M1 render stability repair layer must not load');
-assert(!bootstrap.includes("'/root-context-refinement.js'"), 'legacy root-context layer must not load');
-assert(!bootstrap.includes("'/root-selection-coherence.js'"), 'legacy selection repair layer must not load');
+for (const retired of [
+  'revision-layout-guard.js',
+  'graph-render-stability.js',
+  'root-context-refinement.js',
+  'root-selection-coherence.js'
+]) {
+  assert(!bootstrap.includes(retired), `${retired} must not load`);
+  assert(!fs.existsSync(`public/${retired}`), `${retired} must be physically removed`);
+}
 
 for (const stage of [
   "name: 'relationship-compaction'",
@@ -75,12 +85,36 @@ assert(controller.includes('function completeVisualCommit('), 'RenderController 
 assert(controller.includes("window.dispatchEvent(new CustomEvent('family-graph-rendered'"),
   'RenderController must publish committed render generations');
 
-assert(entry.includes("const legacyGraphStart = '        loadTree(null, true);\\n';"));
-assert(entry.includes('layoutRefinementPattern'), 'entry must remove historical eager layout-refinement');
-assert(entry.includes('revisionGuardPattern'), 'entry must remove any stale revision guard tag');
-assert(!entry.includes('<script src="/revision-layout-guard.js'), 'entry must not inject revision guard');
-assert(entry.includes('runtime-bootstrap.js'));
-assert(!entry.includes('<script src="/graph-sync.js'), 'entry must not inject sync before bootstrap');
-assert(!entry.includes('<script src="/graph-debug.js'), 'entry must not inject graph debug before sync');
+assert(store.includes('window.FamilyGraphStore = api'), 'GraphStore must own canonical client graph state');
+assert(store.includes('window.fetch = async function graphStoreFetch'), 'GraphStore must own /api/graph read interception');
+assert(store.includes('peopleById') && store.includes('parentsByChild') && store.includes('spousesByPerson'),
+  'GraphStore must own shared topology indexes');
+assert(!fs.existsSync('public/graph-cache.js'), 'old graph-cache file must be removed');
+assert(!fs.existsSync('public/graph-resilience.js'), 'old graph-resilience file must be removed');
+
+assert(sync.includes('const Store = window.FamilyGraphStore'), 'sync must consume GraphStore');
+for (const retiredToken of [
+  '__familyRevisionReconcileToken',
+  '__familyGraphMutationLayoutToken',
+  'settleRenderWindow',
+  'family-revision-layout-suppressed',
+  'family-noop-resize-layout-suppressed'
+]) {
+  assert(!sync.includes(retiredToken), `sync must not retain ${retiredToken}`);
+}
+
+assert(!visualRoles.includes('MutationObserver'), 'visual roles must use explicit lifecycle events');
+assert(visualRoles.includes('FamilyGraphStore'), 'visual roles must use shared Store indexes');
+assert(!parentLimit.includes('MutationObserver'), 'parent limit must use explicit lifecycle events');
+assert(parentLimit.includes('FamilyGraphStore'), 'parent limit must use shared Store indexes');
+
+assert(entry.includes("'/graph-store.js'"), 'entry must install GraphStore foundation');
+assert(!entry.includes("'/graph-cache.js'"), 'entry must not install retired graph cache');
+assert(!entry.includes("'/graph-resilience.js'"), 'entry must not install retired graph resilience');
+assert(entry.includes("if (!url.pathname.startsWith('/api/'))"), 'entry must own frontend asset handling directly');
+assert(entry.includes('return handleFrontendAsset(request, env);'), 'frontend must bypass worker script injection');
+assert(entry.includes("'/runtime-bootstrap.js'"), 'entry must install runtime bootstrap');
+assert(!entry.includes("'/graph-sync.js'"), 'entry must not inject sync before bootstrap');
+assert(!entry.includes("'/graph-debug.js'"), 'entry must not inject graph debug before sync');
 
 console.log('runtime ownership tests passed');
