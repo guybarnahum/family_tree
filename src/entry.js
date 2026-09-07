@@ -173,12 +173,9 @@ export default {
 
     if (url.pathname === '/api/faces' || url.pathname.startsWith('/api/faces/')) {
       try {
-        let response = await handleFacesApi(request, env, url);
-        if (response.ok && request.method !== 'GET' && request.method !== 'HEAD') {
-          const revision = await bumpGraphRevision(env);
-          response = withRevisionHeader(response, revision);
-        }
-        return response;
+        // Face records affect portrait decoration, not the canonical /api/graph document.
+        // Keep them out of graph_state so face UI activity can never trigger graph reloads.
+        return await handleFacesApi(request, env, url);
       } catch (error) {
         console.error('Faces API failed:', error);
         return new Response(`Faces API Error: ${error.message}`, { status: 500 });
