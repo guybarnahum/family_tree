@@ -17,7 +17,7 @@
             bottom: 12px;
             z-index: 12000;
             display: none;
-            max-height: min(46vh, 430px);
+            max-height: min(52vh, 500px);
             overflow: auto;
             box-sizing: border-box;
             padding: 12px 14px 10px;
@@ -110,7 +110,7 @@
                 left: 7px;
                 right: 7px;
                 bottom: max(7px, env(safe-area-inset-bottom));
-                max-height: 58vh;
+                max-height: 62vh;
                 padding: 10px;
             }
             .family-graph-debug-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -133,6 +133,7 @@
         <div class="family-graph-debug-grid"></div>
         <div class="family-graph-debug-foot">
             <span>revision endpoint: /api/graph/revision</span>
+            <span>5s active checks · 30s max reconciliation rate · 15m idle</span>
             <span>one-row D1 revision query per check</span>
             <span class="family-graph-debug-build"></span>
         </div>
@@ -150,27 +151,35 @@
         ['frequency', 'Revision frequency'],
         ['page', 'Page'],
         ['next', 'Next check'],
-        ['revisions', 'Revisions'],
+        ['revisions', 'Revisions', 'wide'],
+        ['pending', 'Pending revision'],
+        ['reconcileNext', 'Next reconciliation'],
         ['cacheState', 'Cache state'],
         ['cacheAge', 'Cache age'],
         ['graphSize', 'Cached graph'],
         ['checks', 'Revision checks'],
         ['rows', 'Est. revision rows'],
         ['changes', 'Server revision changes'],
-        ['bootstrap', 'Bootstrap refreshes'],
-        ['repairs', 'Local state repairs'],
+        ['coalesced', 'Changes coalesced'],
+        ['reconciliations', 'Reconciliations'],
+        ['revisionLayouts', 'Revision layouts'],
+        ['dataOnly', 'Data-only reconciles'],
+        ['suppressed', 'Duplicate layouts suppressed'],
+        ['reconcileErrors', 'Reconcile errors'],
         ['latency', 'Last check latency'],
         ['graphReads', 'Full graph fetches'],
         ['cacheHits', 'Graph cache hits'],
         ['graphRows', 'Est. full graph rows'],
-        ['mutations', 'Graph mutations'],
-        ['lastMutation', 'Last graph mutation', 'wide'],
+        ['mutations', 'Data mutations'],
+        ['graphMutations', 'Graph mutations'],
+        ['lastMutation', 'Last mutation', 'wide'],
+        ['lastReconcile', 'Last reconciliation', 'wide'],
         ['activity', 'Last activity'],
         ['lastCheck', 'Last revision check'],
         ['lastGraph', 'Last graph fetch'],
         ['session', 'Session age'],
-        ['legacy', 'Legacy 5s graph poll'],
-        ['error', 'Last revision error', 'wide error']
+        ['legacy', 'Legacy 5s full-graph poll'],
+        ['error', 'Last sync error', 'wide error']
     ];
 
     for (const [key, label, flags = ''] of definitions) {
@@ -234,22 +243,36 @@
         set('frequency', frequency(s));
         set('page', `${s.visible ? 'visible' : 'hidden'} / ${s.focused ? 'focused' : 'blurred'}`);
         set('next', s.nextCheckInMs == null ? '—' : duration(s.nextCheckInMs));
-        set('revisions', `local ${cache.revision ?? '—'} · server ${s.serverRevision ?? cache.serverRevision ?? '—'}`);
+        set('revisions', `known ${s.knownRevision ?? '—'} · server ${s.serverRevision ?? '—'} · graph-cache ${cache.revision ?? '—'}`);
+        set('pending', s.pendingRevision
+            ? `rev ${s.pendingRevision}${s.pendingReason ? ` · ${s.pendingReason}` : ''}`
+            : 'none');
+        set('reconcileNext', s.reconcileInFlight
+            ? 'in progress'
+            : (s.nextReconcileInMs == null ? '—' : duration(s.nextReconcileInMs)));
         set('cacheState', cacheState);
         set('cacheAge', duration(cache.ageMs));
         set('graphSize', `${cache.people || 0} people · ${cache.relationships || 0} rels`);
         set('checks', String(s.revisionChecks || 0));
         set('rows', `~${s.estimatedRevisionRowsRead || 0}`);
         set('changes', String(s.revisionChanges || 0));
-        set('bootstrap', String(s.bootstrapRefreshes || 0));
-        set('repairs', String(s.stateRepairs || 0));
+        set('coalesced', String(s.coalescedRevisionChanges || 0));
+        set('reconciliations', String(s.reconciliations || 0));
+        set('revisionLayouts', String(s.revisionLayouts || 0));
+        set('dataOnly', String(s.dataOnlyReconciliations || 0));
+        set('suppressed', String(s.suppressedLayouts || 0));
+        set('reconcileErrors', String(s.reconcileErrors || 0));
         set('latency', duration(s.lastRevisionLatencyMs));
         set('graphReads', String(s.graphNetworkFetches || 0));
         set('cacheHits', String(s.graphCacheHits || 0));
         set('graphRows', `~${s.estimatedFullGraphRowsRead || 0}`);
-        set('mutations', String(s.graphMutations || 0));
+        set('mutations', String(s.dataMutations || 0));
+        set('graphMutations', String(s.graphMutations || 0));
         set('lastMutation', s.lastMutationAt
-            ? `${s.lastMutationMethod || '?'} ${s.lastMutationPath || '?'} · rev ${s.lastMutationRevision ?? '—'} @ ${clock(s.lastMutationAt)}`
+            ? `${s.lastMutationScope || '?'} · ${s.lastMutationMethod || '?'} ${s.lastMutationPath || '?'} · rev ${s.lastMutationRevision ?? '—'} @ ${clock(s.lastMutationAt)}`
+            : 'none');
+        set('lastReconcile', s.lastReconcileAt
+            ? `rev ${s.lastReconcileRevision ?? '—'} · ${s.lastReconcileReason || '?'} @ ${clock(s.lastReconcileAt)}`
             : 'none');
         set('activity', `${duration(s.activityAgeMs)} ago`);
         set('lastCheck', clock(s.lastRevisionCheckAt));
@@ -257,7 +280,7 @@
             ? `${s.lastGraphFetchSource || '?'} @ ${clock(s.lastGraphFetchAt)}`
             : '—');
         set('session', duration(s.sessionAgeMs));
-        set('legacy', window.loadTree?.__familyRevisionAware ? 'suppressed' : 'unknown');
+        set('legacy', 'removed');
         set('error', s.lastRevisionError || 'none');
 
         const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
