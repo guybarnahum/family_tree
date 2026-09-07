@@ -6,11 +6,15 @@
     window.__familyRuntimeBootstrapInstalled = true;
 
     const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
+    // graph-view is loaded immediately before this bootstrap. Keep its direct loader so the
+    // later sync layer can preserve its efficient reconciliation path without booting early.
+    const directGraphLoadTree = typeof window.loadTree === 'function' ? window.loadTree : null;
     const diagnostics = {
         phase: 'installing',
         loaded: [],
         startedAt: new Date().toISOString(),
         graphStartedAt: null,
+        syncStartedAt: null,
         readyAt: null,
         error: null
     };
@@ -28,7 +32,10 @@
         if (existing && existing.dataset.familyBootstrapLoaded === 'true') return Promise.resolve(existing);
         if (existing?.src) {
             return new Promise((resolve, reject) => {
+                let settled = false;
                 const done = () => {
+                    if (settled) return;
+                    settled = true;
                     existing.dataset.familyBootstrapLoaded = 'true';
                     diagnostics.loaded.push(src);
                     expose();
@@ -36,8 +43,12 @@
                 };
                 existing.addEventListener('load', done, { once: true });
                 existing.addEventListener('error', () => reject(new Error(`Unable to load ${src}`)), { once: true });
-                // Existing server-injected scripts have already executed before this bootstrap.
-                if (existing.readyState === 'complete' || existing.readyState === 'loaded') queueMicrotask(done);
+                // Existing server-injected scripts execute before this bootstrap. If their
+                // installation marker is already visible, do not wait for an already-fired load.
+                queueMicrotask(() => {
+                    if (existing.dataset.familyBootstrapLoaded === 'true' ||
+                        existing.readyState === 'complete' || existing.readyState === 'loaded') done();
+                });
             });
         }
 
@@ -57,7 +68,7 @@
         });
     }
 
-    function waitFor(predicate, label, timeoutMs = 8000) {
+    function waitFor(predicate, label, timeoutMs = 12000) {
         const started = performance.now();
         return new Promise((resolve, reject) => {
             const check = () => {
@@ -98,10 +109,7 @@
         }
         await loadScript('/presentation-refinement.js', 'data-family-presentation');
         await loadScript('/multi-partner-refinement.js', 'data-family-multi-partner');
-        await waitFor(
-            () => !!window.__familyMultiPartnerRefinement,
-            'multi-partner refinement'
-        );
+        await waitFor(() => !!window.__familyMultiPartnerRefinement, 'multi-partner refinement');
     }
 
     async function installFeatureStack() {
@@ -166,7 +174,8 @@
             'planar router'
         );
 
-        // revision-layout-guard is server-injected before graph-view and waits for the router.
+        // revision-layout-guard is still a safety rail in M1. It was loaded before graph-view
+        // and installs itself only after the final router becomes available.
         await waitFor(
             () => typeof layoutAndRender === 'function' && !!layoutAndRender.__familyRevisionLayoutGuard,
             'revision layout guard'
@@ -179,6 +188,28 @@
         );
 
         await loadScript('/visual-roles.js', 'data-family-visual-roles');
+    }
+
+    async function installSyncStack() {
+        // Never allow the startup revision check to become an alternate first renderer.
+        // Wait until the initial graph is committed, then load sync. Temporarily expose the
+        // graph-view loader captured before wrappers so graph-sync retains its existing direct
+        // reconciliation optimization; restore the authoritative final wrapper immediately.
+        await waitFor(() => document.readyState === 'complete', 'window load');
+        const finalLoadTree = window.loadTree;
+        try {
+            if (directGraphLoadTree) {
+                loadTree = directGraphLoadTree;
+                window.loadTree = directGraphLoadTree;
+            }
+            await loadScript('/graph-sync.js', 'data-family-graph-sync');
+        } finally {
+            loadTree = finalLoadTree;
+            window.loadTree = finalLoadTree;
+        }
+        await loadScript('/graph-debug.js', 'data-family-graph-debug');
+        diagnostics.syncStartedAt = new Date().toISOString();
+        expose();
     }
 
     async function start() {
@@ -198,6 +229,10 @@
             window.FamilySelectionController?.syncFromRenderedRoot?.({ source: 'initial-graph' });
             window.FamilyVisualRoles?.refreshNow?.();
             await settleFrames(4);
+
+            diagnostics.phase = 'starting-sync';
+            expose();
+            await installSyncStack();
 
             diagnostics.phase = 'ready';
             diagnostics.readyAt = new Date().toISOString();
