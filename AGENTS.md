@@ -1,13 +1,13 @@
 # AGENTS.md — family_tree continuity guide
 
 This file is the authoritative handoff for AI/code agents working on `guybarnahum/family_tree`.
-Read it before changing the repository. Update it when architecture/invariants materially change.
+Read it before changing the repository. Update it whenever architecture or invariants materially change.
 
 ## 1. Working style / repo rules
 
 - Work directly on `main` unless the user explicitly asks for a PR.
 - **Do not create PRs by default.**
-- Refetch the current file SHA before every write; do not reuse stale SHAs.
+- Refetch the current file SHA before every GitHub write; never reuse stale SHAs.
 - Never claim a commit unless the write actually succeeded and returned a commit SHA.
 - Prefer direct implementation over speculative design when the user says “do it”.
 - Do not deploy from the assistant unless explicitly asked and the environment actually supports it.
@@ -49,9 +49,11 @@ There is no saved “view”. Selecting another person reroots the projection ar
 
 - URL `?person=` is an explicit selection source.
 - LocalStorage key: `family-tree.anchor-person`.
-- Current root should persist across reloads.
-- The rendering system should programmatically restore the selected/root person from URL/LocalStorage.
+- Current root persists across reloads.
 - Side/collateral expansions are ephemeral and clear on reroot.
+- As of M1 (2026-09-07), `public/selection-controller.js` is the canonical browser-side owner of URL/LocalStorage selection persistence and selection events.
+- `graph-view.js` still owns the internal projection root (`graphRootId`) and reroot mechanics; history updates synchronously flow through the selection controller.
+- `graph-render-stability.js` still contains some defensive root persistence while it remains as an M1 safety rail. Do not add another persistence owner; this duplication is intended to disappear when the stabilization wrapper is retired in M2.
 
 ## 3. Canonical graph invariants
 
@@ -82,7 +84,7 @@ relationships
   created_at
 ```
 
-`spouse` should be understood topologically as the family/partner **union** edge. Do not over-interpret it as current legal marital status.
+`spouse` is topologically a family/partner **union** edge. Do not over-interpret it as current legal marital status.
 
 ### Parent limit
 
@@ -91,8 +93,6 @@ A person may have at most **two explicit canonical parent relationships**.
 ### Parent-union invariant
 
 If a child has two parents, those two parents must be connected by the same union/spouse edge.
-
-Canonical rule:
 
 ```text
 0 parents       valid
@@ -113,9 +113,8 @@ A generic person-level `+ ילד` is only unambiguous when the person has 0 or 1
 2+ spouses → generic person-level + child must not execute
 ```
 
-For 2+ spouses, child creation is **union-specific**: the user chooses the spouse/union, and the child is created with both members of that union as explicit parents.
-
-This is critical. Never infer which spouse is the co-parent when there are multiple possible spouses.
+For 2+ spouses, child creation is **union-specific**: the user chooses the spouse/union and the child is created with both members of that union as explicit parents.
+Never infer which spouse is the co-parent when multiple spouses are possible.
 
 ### Adding a second parent
 
@@ -126,7 +125,7 @@ parent2 → child
 parent1 ↔ parent2
 ```
 
-The frontend should express the intent; backend/graph normalization owns the invariant.
+The frontend expresses intent; backend/graph normalization owns the invariant.
 
 ## 4. Person names and picker identity
 
@@ -139,21 +138,15 @@ String(value ?? '')
   .replace(/\s+/gu, ' ')
 ```
 
-Use it:
-
-- on save/import/backend normalization;
-- for name-collision grouping;
-- for search/picker identity.
-
-Do **not** remove all internal spaces. Only normalize formatting whitespace.
+Use it on save/import/backend normalization and for name-collision/search/picker identity.
+Do **not** remove all internal spaces.
 
 ### Duplicate names / disambiguation
 
-There is a shared person identity/disambiguation layer (`public/person-identity.js` and picker helpers).
+Shared identity logic lives in `public/person-identity.js` and picker helpers.
 Collision checks happen on normalized names.
 
-Unique names stay visually unchanged.
-For collision groups, use the shortest useful gender-neutral Hebrew qualifier, roughly:
+Unique names stay visually unchanged. Collision groups use the shortest useful gender-neutral Hebrew qualifier, roughly:
 
 1. parent identity: `הורה: X`
 2. child identity: `הורה של Y`
@@ -164,10 +157,9 @@ For collision groups, use the shortest useful gender-neutral Hebrew qualifier, r
 7. internal ID only as pathological fallback
 
 Do not add gender merely to solve Hebrew grammar.
-
 Build the disambiguation index once per canonical graph state/revision, not independently in every picker.
 
-All person pickers/searches should consume the same derived identity presentation:
+All person pickers/searches consume the same derived identity presentation:
 
 - global person search
 - face assignment
@@ -183,8 +175,8 @@ Graph cards are topology-focused:
 - name
 - add parent
 - add spouse
-- add child (when unambiguous)
-- delete X
+- add child when unambiguous
+- delete
 - decorative face avatar
 
 Biography lives in the selected-person pane on the right (desktop) / mobile sheet.
@@ -201,12 +193,8 @@ bio
 primaryFaceId
 ```
 
-All optional.
-Dates are arbitrary text strings, not calendar-only values.
-Places may preserve human text plus structured GeoNames fields.
-
-No separate View/Edit mode: inline editing in the same pane.
-Empty optional values normally stay visually quiet.
+All optional. Dates are arbitrary text strings, not calendar-only values. Places may preserve human text plus structured GeoNames fields.
+No separate View/Edit mode: inline editing in the same pane. Empty optional values stay visually quiet.
 
 ### Legacy metadata decision
 
@@ -214,9 +202,9 @@ Do **not** revive old `dates` or `description` migration behavior. The user expl
 
 ### Save behavior
 
-- Unchanged pane fields must be true no-ops (no PATCH, no revision bump).
-- Unchanged graph-card name blur must also be a no-op.
-- Successful pane edits should update in-memory/cached canonical data directly when safe, avoiding a redundant full graph fetch/redraw.
+- Unchanged pane fields are true no-ops: no PATCH, no revision bump.
+- Unchanged graph-card name blur is also a no-op.
+- Successful pane edits update in-memory/cached canonical data directly when safe, avoiding redundant full graph fetch/redraw.
 
 ## 6. New-person UX
 
@@ -229,8 +217,7 @@ After creating a child/person through graph actions:
 
 Relevant helper: `public/new-person-focus.js`.
 
-Deleting a completely unfilled placeholder person should happen without a confirmation dialog.
-Populated people or people with meaningful data/media should still use protective confirmation.
+Deleting a completely unfilled placeholder person happens without confirmation. Populated people or people with meaningful data/media retain protective confirmation.
 
 ## 7. Projection semantics / visual emphasis
 
@@ -248,7 +235,7 @@ Default intent:
 
 ### Root-relative context
 
-Context dimming must be relative to the selected person.
+Context dimming is relative to the selected person.
 Example: if Anat is selected and Guy has another spouse:
 
 - Anat’s siblings remain primary, not gray.
@@ -256,27 +243,39 @@ Example: if Anat is selected and Guy has another spouse:
 - Guy’s **other spouse** is contextual/gray.
 - Descendants belonging to Guy + that other spouse’s union are contextual/gray.
 
-Do not simply gray all siblings or all spouse branches globally.
-Relevant refinement: `public/root-context-refinement.js`.
+Do not gray all siblings or all spouse branches globally.
+
+### M1 visual-role ownership
+
+As of M1, `public/visual-roles.js` is the single refinement layer that converts canonical/root-relative graph context into dimming classes:
+
+```text
+graph-context
+graph-spouse-parent
+graph-spouse-ancestor-deep
+```
+
+It consumes `node.viewRole` from `graph-view.js` plus the cached canonical relationship graph. It guarantees the selected/root card cannot remain dimmed and promotes the selected root’s own siblings out of contextual gray.
+
+`public/root-context-refinement.js` and `public/root-selection-coherence.js` remain in the repository for historical safety/reference and syntax checks, but **M1 runtime-bootstrap does not load them**. Do not re-add them to startup unless intentionally reverting the M1 ownership model.
+
+`public/interaction-refinement.js` now owns pointer behavior + selection-footer presentation only. It must not fetch `/api/graph`, wrap History, compute visual roles, or request corrective layouts.
 
 ## 8. Media / R2
 
 D1 schema includes `media` and `media_people`; original bytes live in R2.
-
 Media is associated with people, not owned by one person.
 
 Key routes include:
 
 ```text
-GET/POST   /api/media?person=ID
-PATCH/DELETE /api/media/:id
-GET        /api/media/:id/content
+GET/POST      /api/media?person=ID
+PATCH/DELETE  /api/media/:id
+GET           /api/media/:id/content
 ```
 
 Uploads are capped at about 15 MB; supported image types include JPEG/PNG/WebP/GIF/AVIF.
-
-R2 object key is deterministic (`media/{id}/original`), so content reads should not require D1 just to discover the key.
-
+R2 object key is deterministic (`media/{id}/original`), so content reads should not require D1 merely to discover the key.
 Browser-side media resilience caches photo/face metadata so previously loaded media remains usable during D1 outages.
 
 Limitation: a browser that never successfully loaded associations/crops cannot infer them from R2 bytes alone.
@@ -314,23 +313,21 @@ The node portrait is a circular crop centered on the **left card edge**:
 - normal 40 px diameter → `left: -20px`
 - root 44 px diameter → `left: -22px`
 
-Half the circle extends outside the card.
-Layout measurement must reserve that outside half-diameter so neighboring nodes do not crowd the avatar.
+Half the circle extends outside the card. Layout measurement reserves that outside half-diameter so neighboring nodes do not crowd the avatar.
 
 Relevant files:
 
 - `public/node-face-decoration.js`
 - `public/node-face-footprint.js`
 
-Portrait changes should not trigger unnecessary graph topology redraws; only reflow when the set/footprint of avatars actually changes.
+Portrait changes should not trigger unnecessary topology redraws; only reflow when the set/footprint of avatars actually changes.
 
 ## 10. D1 usage / graph caching / revision sync
 
-This architecture exists because the old app polled the **entire graph every 5 seconds**, and nested layout wrappers could multiply that into several full `/api/graph` reads per tick, enough to exceed D1 free-tier row-read limits.
+The old app polled the **entire graph every 5 seconds**, and nested layout wrappers could multiply that into several full reads per tick. Current architecture uses a cheap singleton revision row.
 
 ### Revision table
 
-Use a singleton D1 graph/data revision row (`graph_state`) as cheap stale detection.
 Conceptually:
 
 ```sql
@@ -346,11 +343,7 @@ Cheap endpoint:
 GET /api/graph/revision
 ```
 
-One revision row is much cheaper than repeatedly reading all people + relationships.
-
 ### Poll policy
-
-Current intended policy:
 
 ```text
 ACTIVE
@@ -368,32 +361,30 @@ focus / visible again
 → immediate revision check
 ```
 
-Mouse/pointer movement counts as activity.
-Never overlap revision requests.
+Mouse/pointer movement counts as activity. Never overlap revision requests.
 
 ### Reconciliation rate limit
 
-Revision discovery is fast, UI reconciliation is intentionally slower:
-
-- remote revision checks may see many changes;
-- coalesce them;
-- perform at most about **one graph reconciliation/redraw per 30 seconds** during a burst;
-- jump directly to the latest revision.
-
-A revision change does **not** automatically mean a graph layout is needed.
-If names/topology are unchanged and only metadata/media/faces changed, graph rendering should remain visually inert when possible.
+- coalesce remote revision changes;
+- perform at most about one graph reconciliation/redraw per 30 seconds during a burst;
+- jump directly to latest revision;
+- a revision change does **not** imply a topology layout if only metadata/media/faces changed.
 
 ### Cache role
 
 `public/graph-cache.js` is not outage-only; clean cached graph data is the normal local source.
-Full `/api/graph` reads occur when cache is missing, dirty, stale, or an authoritative reconciliation is required.
+Full `/api/graph` reads occur only when cache is missing, dirty, stale, or authoritative reconciliation is required.
+
+### M1 sync startup
+
+`public/graph-sync.js` keeps the same polling/reconciliation policy, but it no longer gets server-injected before the initial graph render.
+`public/runtime-bootstrap.js` starts sync **after** the first graph has been rendered/settled so revision reconciliation cannot become a competing first renderer.
+
+To preserve the existing efficient remote-reconcile behavior, runtime-bootstrap captures graph-view’s direct `loadTree` before layout wrappers, temporarily exposes that loader when graph-sync installs, then immediately restores the final authoritative wrapper. Graph-debug is loaded after graph-sync.
 
 ### Debug tray
 
-F1 toggles the graph/debug tray (with `Ctrl+Shift+D` fallback).
-Use it when diagnosing sync/render bugs.
-It shows revision state, frequencies, cache state, graph fetch counts, mutation details, reconciliation/layout metrics, etc.
-
+F1 toggles the graph/debug tray (`Ctrl+Shift+D` fallback).
 Relevant files:
 
 - `public/graph-cache.js`
@@ -402,14 +393,84 @@ Relevant files:
 - `public/graph-debug.js`
 - `public/revision-layout-guard.js`
 
-## 11. Rendering/layout architecture — IMPORTANT
+## 11. Runtime/bootstrap architecture — M1
 
-The app has accumulated several historical layout/refinement wrappers. This is the highest-risk area.
+M1 (2026-09-07) is a behavior-preserving runtime simplification. Domain rules, projection, layout algorithms, routing, sync frequencies, editing semantics, media/faces, and UI intent were not intentionally changed.
 
-Core/base geometry lives in `public/index.html`.
-Person-centric projection: `public/graph-view.js`.
-Then topology/layout refinements include:
+### Before M1
 
+Startup effectively passed through multiple live architectures:
+
+1. inline `index.html` legacy `/api/nodes` render;
+2. Worker-injected graph/refinement scripts;
+3. `node-hover.js` loaded 20+ more scripts;
+4. `import-export.js → interaction-refinement.js → mobile-refinement.js` formed another loader chain;
+5. layout/router wrappers installed asynchronously and were detected by polling function names;
+6. sync could reconcile before the final render stack was ready.
+
+That architecture produced timing races even when each individual refinement was locally correct.
+
+### M1 current startup
+
+`src/entry.js` now transforms the historical base HTML so:
+
+- the old 5-second full-tree poll does not run;
+- the legacy initial `loadTree(null, true)` does not run;
+- worker-injected early `import-export.js` is removed;
+- graph cache/status/resilience, revision guard and media resilience remain foundational pre-graph scripts;
+- `graph-sync.js` / `graph-debug.js` are **not** injected early;
+- `runtime-bootstrap.js` is appended as the single late runtime orchestrator.
+
+`public/runtime-bootstrap.js` then:
+
+1. installs `selection-controller.js` and restores URL/LocalStorage selection;
+2. installs import/export, interaction, mobile/presentation/multi-partner and feature modules in explicit order;
+3. installs planar core/layout → member order → bridge compaction → router;
+4. waits for the existing revision-layout guard;
+5. installs `graph-render-stability.js` as an M1 safety rail;
+6. installs `visual-roles.js`;
+7. **only then** calls `window.startFamilyGraph()`;
+8. synchronizes the actual rendered root and applies roles;
+9. after the initial graph settles, installs graph-sync and graph-debug;
+10. emits `family-runtime-ready`.
+
+Diagnostics:
+
+```js
+window.__familyRuntimeBootstrapDiagnostics
+window.__familySelectionDiagnostics
+window.__familyVisualRoleDiagnostics
+window.__familyRootContextDiagnostics
+```
+
+### M1 ownership boundaries
+
+- `node-hover.js`: card hover/default-placeholder polish only; no persistence, no runtime script loading.
+- `import-export.js`: import/export UI/operations only; no History wrapping, root persistence, graph startup, or downstream script loading.
+- `interaction-refinement.js`: pointer behavior + card center footer only; no graph fetch, History wrapping, visual-role computation, or corrective layout.
+- `selection-controller.js`: canonical selection URL/LocalStorage/events.
+- `visual-roles.js`: canonical refinement owner for root-relative dimming classes.
+- `runtime-bootstrap.js`: startup sequencing.
+
+Do not put those responsibilities back into feature modules.
+
+### Temporary M1 compatibility
+
+M1 deliberately keeps the current layout algorithms and stabilization guards. The following are still historical wrapper architecture and are targeted for M2, not to be casually removed during unrelated work:
+
+- `revision-layout-guard.js`
+- `graph-render-stability.js`
+- progressive `layoutAndRender` wrappers
+- function-name readiness checks inside the new bootstrap while those wrappers still initialize asynchronously
+- some presentation/pane History wrappers that observe selection changes but should not own canonical selection persistence
+
+## 12. Rendering/layout architecture — IMPORTANT
+
+Core/base geometry still lives in `public/index.html`.
+Person-centric projection is `public/graph-view.js`.
+Topology/layout refinements still include:
+
+- `public/layout-refinement.js`
 - `public/multi-partner-refinement.js`
 - `public/planar-layout.js`
 - `public/member-order-refinement.js`
@@ -424,111 +485,57 @@ window.__familyLayoutDiagnostics
 window.__familyMemberOrderDiagnostics
 window.__familyBridgeDiagnostics
 window.__familyRouteDiagnostics
+window.__familyRenderStabilityDiagnostics
 ```
 
 ### Historic failure pattern
 
-A structural edit/reroot could previously produce malformed transient/final renders:
-
-- missing nodes
-- connectors drawn from stale coordinates
-- shifted card layout
-- incomplete/incorrect multi-partner union geometry
-
-The underlying race was:
+A structural edit/reroot could produce missing nodes, stale connectors, shifted cards, or malformed multi-partner geometry because:
 
 1. graph-view replaced cards / started a render;
-2. some topology-aware wrappers had not refreshed their relationship indexes yet;
-3. old `requestAnimationFrame` callbacks from the previous graph/root were still queued;
-4. mutation duplicate-layout guards could suppress the later corrective layout because `dataSignature` looked the same;
-5. connector SVG could therefore be drawn against stale or intermediate coordinates.
+2. topology-aware wrappers had not all refreshed indexes;
+3. stale RAF callbacks from the prior graph/root remained queued;
+4. duplicate-layout guards could suppress the later corrective pass;
+5. SVG/card geometry could come from different render generations.
 
-Do not “fix” this by blindly adding more redraws.
+Do not “fix” this by adding another redraw, timer, observer, or wrapper.
 
 ### Current stabilization coordinator
 
-Current head introduced `public/graph-render-stability.js`.
-This is the authoritative coordinator for structural redraws and root-selection redraws.
-
-Its intended contract:
-
-- install only after the final planar/router stack is ready;
-- serialize structural graph redraws;
-- suppress intermediate layouts while wrapper/index refreshes settle;
-- drain stale RAF work;
-- run one authoritative final layout against coherent topology;
-- draw final connectors only after layout settles;
-- hide the canvas while a root-selection render is incomplete so intermediate centers are never painted;
-- center only after the graph is fully settled;
-- center around the selected/root node;
-- persist/recover the root through `family-tree.anchor-person`;
-- cancel/supersede stale selection transactions;
-- fold a root replacement that occurs during an active structural transaction into that same transaction rather than starting a competing redraw.
-
-Diagnostics:
-
-```js
-window.__familyRenderStabilityDiagnostics
-window.FamilyGraphRenderStability
-```
-
-The most recent rendering commits before this handoff were:
-
-```text
-c86c88de Serialize graph redraws and settle root centering
-...
-3b766345 Cancel superseded graph render transactions
-...
-5fe8afd0 Fold root replacement into active structural render
-```
-
-At the moment of writing this guide, `5fe8afd0...` was the code head immediately before adding `AGENTS.md`.
-
-### Centering invariant
+`public/graph-render-stability.js` remains the M1 authoritative coordinator for structural/reroot redraws while M2 is pending. Its contract is to serialize structural work, suppress intermediate layouts, drain stale RAF work, run one authoritative final layout, finalize connectors, reveal, and center the selected root.
 
 On any reroot/redraw:
 
 > Do not center while layout is still changing.
 
-The visible final frame should be centered on the chosen/root person **after** final card coordinates + connector geometry settle.
+Final visible frame must center on the chosen/root person after final coordinates + connectors settle.
 
-Do not let older `requestAnimationFrame` callbacks recenter a newer root.
-Do not center on an arbitrary family-unit heuristic when a selected/root person exists.
+## 13. Multi-partner / planar layout principles
 
-### Root source order
-
-For render stabilization, use the actual current root card / URL / LocalStorage coherently.
-`family-tree.anchor-person` must remain synchronized with selection.
-
-## 12. Multi-partner / planar layout principles
-
-For layout correctness, semantic topology outranks visual scoring heuristics.
-
-Important principles:
+Semantic topology outranks visual scoring heuristics.
 
 - children belong to explicit parent pairs/unions;
 - multi-partner spouse components can contain 3+ people;
-- different child groups for different unions must remain separable;
-- lineage-aware member ordering can be the final authority over simple alternating spouse order;
-- sibling/union blocks should stay contiguous when required;
+- child groups for different unions remain separable;
+- lineage-aware member ordering can outrank simple alternating spouse order;
+- sibling/union blocks remain contiguous when required;
 - bridge compaction may translate a self-contained branch only when graph-safe;
 - router validates/avoids connector crossings and card intersections;
 - explicit diagnostics/fallback are preferred over hidden score-only heuristics.
 
 Do not regress the ordinary one-partner visual case while improving multi-partner cases.
 
-## 13. Print / PDF
+## 14. Print / PDF
 
-Print/PDF uses the current visible family projection, one-page Letter landscape.
-There have been dedicated refinements for title typography, transparency, and face crop behavior.
-Before changing print behavior, refetch current print CSS/scripts because print-avatar behavior has changed historically.
-
+Print/PDF uses the current visible projection, one-page Letter landscape.
 Relevant:
 
 - `public/print-refinement.js`
 - `public/print-polish.js`
 
-## 14. Places / GeoNames
+Refetch current print code before changes because print/avatar behavior has changed historically.
+
+## 15. Places / GeoNames
 
 Autocomplete is conservative:
 
@@ -540,25 +547,21 @@ cache TTL: 30 days
 external limit guards: hourly/daily caps with headroom
 ```
 
-Places preserve human-entered text; a selected suggestion may additionally store country code, GeoNames ID, lat/long.
+Places preserve human-entered text; selected suggestions may additionally store country code, GeoNames ID, lat/long.
 
-## 15. Browser translation
+## 16. Browser translation
 
-Do not add application localization infrastructure.
-The product intentionally remains Hebrew and relies on browser translation if the user wants another language.
-
-HTML remains roughly:
+Do not add application localization infrastructure. Product intentionally remains Hebrew and relies on browser translation if desired.
 
 ```html
 <html lang="he" dir="rtl">
 ```
 
-No translation APIs, translation buttons, translation caches, etc.
+No translation APIs/buttons/caches.
 
-## 16. Cloudflare / deployment details
+## 17. Cloudflare / deployment
 
 `deploy.sh` injects build SHA/time into Worker vars and runs Wrangler.
-
 First-time media setup may need:
 
 ```bash
@@ -571,11 +574,11 @@ GeoNames credential may need:
 npx wrangler secret put GEONAMES_USERNAME
 ```
 
-The Worker injects/build-stamps refinement scripts and exposes build info.
+Worker exposes build info and stamps frontend assets.
 
-## 17. Tests
+## 18. Tests
 
-`npm test` currently runs unit tests and extensive syntax checks.
+`npm test` runs unit tests plus frontend/Worker syntax checks.
 Important suites include:
 
 - planar core
@@ -584,25 +587,52 @@ Important suites include:
 - person identity/disambiguation
 - graph invariants
 - faces
+- **selection-controller**
+- **visual-roles**
+- **runtime-ownership**
 
-It also syntax-checks the major Worker and frontend refinement files, including:
+M1 tests specifically guard:
 
-- graph sync/cache/resilience/debug
-- graph render stability
-- person pane/media/faces
-- parent/union actions
-- planar/member/bridge/router stack
+- stored selection restores into URL without relying on a stale DOM root;
+- explicit URL selection wins over LocalStorage;
+- rendered-root fallback repairs URL + storage;
+- selected root cannot remain gray;
+- selected-root siblings are primary;
+- spouse other-union descendants are contextual;
+- spouse ancestry depth classes remain correct;
+- node-hover/import-export/interaction do not reacquire runtime ownership;
+- final layout stack installs before first graph start;
+- graph-sync starts only after first graph render;
+- legacy root-context/selection-repair layers are not loaded by runtime-bootstrap.
 
-If adding a new significant frontend module, add a syntax check to `package.json`.
-If adding an invariant that can be isolated, add a unit test.
+If adding a significant frontend module, add a syntax check to `package.json`. If adding an isolatable invariant, add a unit test.
 
-## 18. High-value files to refetch before major work
+## 19. High-value files to refetch before major work
+
+For M1 runtime/selection work:
+
+```text
+src/entry.js
+public/runtime-bootstrap.js
+public/selection-controller.js
+public/visual-roles.js
+public/graph-view.js
+public/interaction-refinement.js
+public/node-hover.js
+public/import-export.js
+public/person-pane.js
+public/presentation-refinement.js
+public/graph-sync.js
+public/graph-render-stability.js
+public/revision-layout-guard.js
+```
 
 For graph/render work:
 
 ```text
 public/index.html
 public/graph-view.js
+public/layout-refinement.js
 public/multi-partner-refinement.js
 public/planar-layout.js
 public/member-order-refinement.js
@@ -610,10 +640,8 @@ public/bridge-compaction.js
 public/planar-router.js
 public/revision-layout-guard.js
 public/graph-render-stability.js
-public/graph-sync.js
-public/graph-cache.js
-public/graph-resilience.js
-public/node-hover.js
+public/node-face-footprint.js
+public/slice-a-geometry.js
 ```
 
 For mutations/invariants:
@@ -649,36 +677,52 @@ public/node-face-footprint.js
 public/media-resilience.js
 ```
 
-## 19. Current priority / handoff state
+## 20. Current priority / roadmap
 
-The immediate bug under investigation before this handoff was intermittent malformed rendering when:
+M1 runtime simplification is now implemented on `main` and should be browser-tested before M2.
+The intended sequence remains behavior-preserving:
 
-- selecting/rerooting on a person;
-- especially immediately after adding a child to a parent;
-- symptoms: connectors out of place, missing nodes, shifted layout.
+```text
+M1 (current)
+A deterministic bootstrap
+B canonical selection ownership
+C unified visual roles
 
-The latest code attempts to solve this at the transaction/order level with `graph-render-stability.js`, not by increasing redraw frequency.
+M2 (next, only after M1 validation)
+D explicit RenderController
+E flatten layout pipeline into named stages
+F retire duplicate-layout/render-stability repair guards when proven unnecessary
 
-Next agent should:
+M3
+G graph store/sync consolidation
+H replace internal MutationObserver communication with explicit events where practical
+I server/asset bootstrap cleanup
+J dead-code/remnant removal
+```
 
-1. Refetch current `main` and recent commits before touching anything.
-2. Read `public/graph-render-stability.js` completely.
-3. Reproduce the sequence: add child → structural graph write → reroot/select child or parent → final render.
-4. Use F1/debug plus `window.__familyRenderStabilityDiagnostics`, layout diagnostics, and route diagnostics.
-5. Verify only one authoritative final layout is visible for a structural operation.
-6. Verify old RAF callbacks cannot center/draw a superseded root.
-7. Verify final centering occurs after connectors/layout settle and is on the actual selected/root node.
-8. Verify LocalStorage root restoration works without starting a competing selection transaction.
-9. Avoid adding another independent layout timer or observer unless absolutely necessary.
-10. Prefer consolidating render ownership over stacking another wrapper.
+### M1 browser verification
 
-## 20. User preferences for interaction
+After deployment verify at least:
+
+1. Initial load/restored root: same person selected, right pane correct, graph centered.
+2. Select a gray contextual person once: immediately root + fully active, no second click.
+3. Rapidly select several people: final visible root is last selection, centered, connectors coherent.
+4. Add child / parent / spouse: layout remains generational, no missing cards, no stale lines.
+5. Multi-partner families: union-specific child groups/context styling unchanged.
+6. Right-pane edit: no unnecessary topology redraw.
+7. Remote revision: sync starts after app ready and retains existing polling/reconciliation behavior.
+8. Mobile selection and sheet behavior unchanged.
+9. F1 diagnostics show runtime bootstrap `phase: "ready"` and coherent selected root.
+
+Do not begin M2 by rewriting algorithms. First flatten the **existing final behavior** into explicit ownership/stages, then remove wrappers only after equivalence is demonstrated.
+
+## 21. User preferences for interaction
 
 - Answers should be concise and implementation-oriented.
 - When architecture is agreed and the user says “do it”, implement rather than only propose.
-- The user values clean invariants and natural UI behavior over special-case patches.
+- User values clean invariants and natural UI behavior over special-case patches.
 - Avoid unnecessary backward compatibility when the user explicitly says legacy data can be discarded.
-- Preserve the existing Hebrew-first product and browser-translation decision.
+- Preserve Hebrew-first product and browser-translation decision.
 
 ---
 
