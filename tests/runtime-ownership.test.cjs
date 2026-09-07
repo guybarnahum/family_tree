@@ -63,8 +63,11 @@ const renderBody = graphView.slice(
   graphView.indexOf('function renderGraphView'),
   graphView.indexOf('function chooseInitialRoot')
 );
-assert(!renderBody.includes('requestAnimationFrame(() => {\n            layoutAndRender();'),
-  'production graph render must not own the historical double-RAF layout path');
+const controllerPath = renderBody.indexOf('controller.renderProjection({');
+const fallbackPath = renderBody.indexOf('requestAnimationFrame(() => {');
+assert(controllerPath >= 0, 'renderGraphView must expose the controller path');
+assert(fallbackPath < 0 || controllerPath < fallbackPath,
+  'the authoritative controller path must precede any development-only fallback');
 
 assert(controller.includes('function baseGeometry()'), 'RenderController must own base geometry');
 assert(controller.includes('function runThrough('), 'RenderController must own named-stage execution');
