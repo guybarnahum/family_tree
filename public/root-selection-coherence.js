@@ -114,8 +114,13 @@
     }
 
     function refreshRootContext() {
-        try { window.FamilyRootContextRefinement?.refresh?.(); }
-        catch (error) { console.warn('Unable to refresh selected-root context:', error); }
+        try {
+            const refinement = window.FamilyRootContextRefinement;
+            if (typeof refinement?.refreshNow === 'function') refinement.refreshNow();
+            else refinement?.refresh?.();
+        } catch (error) {
+            console.warn('Unable to refresh selected-root context:', error);
+        }
     }
 
     function applyStableSelection(personId, reason, { center = false, startup = false } = {}) {
