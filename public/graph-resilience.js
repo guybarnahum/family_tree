@@ -1,6 +1,6 @@
-// Graph resilience controller. Intercepts only canonical /api/graph GETs so the existing
-// graph projection/layout code stays unchanged. Successful documents are cached; failed
-// requests fall back to the last good graph and surface a degraded-state status.
+// Graph resilience controller. Clean canonical graph reads are served from local cache;
+// D1 is touched only when the cache is missing, dirty/stale, or a retry/revision refresh
+// requires authoritative data. Failed authoritative reads fall back to the last good graph.
 (() => {
     if (window.__familyGraphResilienceInstalled) return;
     window.__familyGraphResilienceInstalled = true;
@@ -20,28 +20,36 @@
     let lastGraphFailure = null;
     const FAILURE_CLASSIFICATION_TTL_MS = 15000;
 
-    function isGraphRequest(input, init) {
+    function graphRequestInfo(input, init) {
         const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
-        if (method !== 'GET') return false;
+        if (method !== 'GET') return null;
         try {
             const raw = input instanceof Request ? input.url : String(input);
             const url = new URL(raw, window.location.href);
-            return url.origin === window.location.origin && url.pathname === '/api/graph';
+            if (url.origin !== window.location.origin || url.pathname !== '/api/graph') return null;
+            return { url };
         } catch (_) {
-            return false;
+            return null;
         }
+    }
+
+    function responseRevision(response) {
+        return Cache.finiteRevision?.(response?.headers?.get('X-Family-Graph-Revision')) || null;
+    }
+
+    function emitFetch(detail) {
+        window.dispatchEvent(new CustomEvent('family-graph-fetch', { detail }));
     }
 
     async function retryGraph() {
         if (retryInFlight) return;
         retryInFlight = true;
         try {
+            Cache.markStale();
             if (typeof window.startFamilyGraph === 'function') {
                 await window.startFamilyGraph();
                 return;
             }
-            // During very early startup graph-view may not have installed its entrypoint yet.
-            // A reload is the only safe fallback and is still preferable to a dead retry.
             window.location.reload();
         } finally {
             retryInFlight = false;
@@ -67,6 +75,7 @@
 
     function showFailure(classified, { cached = null, detail = '' } = {}) {
         rememberFailure(classified, detail);
+        if (cached) Cache.markStale(cached.serverRevision);
 
         const options = {
             kind: classified.kind,
@@ -92,15 +101,15 @@
         }
     }
 
-    function cachedResponse(entry) {
-        return new Response(JSON.stringify(entry.graph), {
-            status: 200,
-            headers: {
-                'Content-Type': 'application/json; charset=UTF-8',
-                'Cache-Control': 'no-store',
-                'X-Family-Graph-Stale': '1'
-            }
+    function cachedResponse(entry, { stale = false } = {}) {
+        const headers = new Headers({
+            'Content-Type': 'application/json; charset=UTF-8',
+            'Cache-Control': 'no-store',
+            'X-Family-Graph-Cache': stale ? 'fallback' : 'hit'
         });
+        if (entry.revision) headers.set('X-Family-Graph-Revision', String(entry.revision));
+        if (stale) headers.set('X-Family-Graph-Stale', '1');
+        return new Response(JSON.stringify(entry.graph), { status: 200, headers });
     }
 
     async function readSuccessfulGraph(response) {
@@ -113,16 +122,39 @@
     }
 
     window.fetch = async function resilientFetch(input, init) {
-        if (!isGraphRequest(input, init)) return nativeFetch(input, init);
+        const graphRequest = graphRequestInfo(input, init);
+        if (!graphRequest) return nativeFetch(input, init);
 
+        const cachedBefore = Cache.load();
+        if (cachedBefore && !cachedBefore.stale && !cachedBefore.dirty) {
+            emitFetch({
+                source: 'cache',
+                revision: cachedBefore.revision,
+                people: cachedBefore.graph.people.length,
+                relationships: cachedBefore.graph.relationships.length,
+                at: Date.now()
+            });
+            return cachedResponse(cachedBefore);
+        }
+
+        const started = performance.now();
         try {
             const response = await nativeFetch(input, init);
             if (response.ok) {
                 const graph = await readSuccessfulGraph(response);
                 if (graph) {
-                    Cache.save(graph);
+                    const revision = responseRevision(response) || cachedBefore?.serverRevision || cachedBefore?.revision || null;
+                    Cache.save(graph, { revision });
                     lastGraphFailure = null;
                     Status.clear();
+                    emitFetch({
+                        source: 'network',
+                        revision,
+                        people: graph.people.length,
+                        relationships: graph.relationships.length,
+                        latencyMs: Math.round(performance.now() - started),
+                        at: Date.now()
+                    });
                     return response;
                 }
 
@@ -130,7 +162,8 @@
                 const classified = Status.classify(malformed);
                 const cached = Cache.load();
                 showFailure(classified, { cached, detail: malformed.message });
-                return cached ? cachedResponse(cached) : response;
+                emitFetch({ source: 'error', kind: classified.kind, at: Date.now() });
+                return cached ? cachedResponse(cached, { stale: true }) : response;
             }
 
             let body = '';
@@ -142,20 +175,21 @@
             const classified = Status.classify(error);
             const cached = Cache.load();
             showFailure(classified, { cached, detail: body });
-            return cached ? cachedResponse(cached) : response;
+            emitFetch({ source: 'error', kind: classified.kind, status: response.status, at: Date.now() });
+            return cached ? cachedResponse(cached, { stale: true }) : response;
         } catch (error) {
             const classified = Status.classify(error);
             const cached = Cache.load();
             showFailure(classified, { cached });
-            if (cached) return cachedResponse(cached);
+            emitFetch({ source: 'error', kind: classified.kind, at: Date.now() });
+            if (cached) return cachedResponse(cached, { stale: true });
             throw error;
         }
     };
 
     // graph-view catches projection/layout/JSON failures internally and collapses them into
-    // one legacy Hebrew status string. If that string immediately follows a real /api/graph
-    // failure, preserve the real classification instead of incorrectly relabeling an infra
-    // outage as a logical/data bug. Only use `data` when no recent transport failure exists.
+    // one legacy Hebrew status string. Preserve a recent transport classification so an
+    // infra outage is not incorrectly relabeled as a logical/data bug.
     if (baseShowStatus) {
         window.showStatus = function resilientShowStatus(message, ...args) {
             if (String(message) === 'שגיאה בטעינת הגרף') {
