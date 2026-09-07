@@ -173,6 +173,18 @@
 
     function startSelection(rootId, reason = 'root-selection') {
         if (!rootId) return null;
+
+        // A structural transaction already owns visibility, final layout and final centering.
+        // Root replacement during that transaction (for example deleting the selected person)
+        // is folded into it instead of creating a competing selection generation.
+        if (structural) {
+            structural.pendingRootId = rootId;
+            persistRootId(rootId);
+            diagnostics.lastReason = `${reason}-during-structural`;
+            exposeDiagnostics();
+            return null;
+        }
+
         if (selection?.rootId === rootId) return selection;
         if (selection) cancelSelection('selection-superseded');
 
@@ -280,6 +292,7 @@
                 reason: 'structural-load',
                 suppressLayouts: true,
                 suppressedLayouts: 0,
+                pendingRootId: null,
                 startedAt: Date.now()
             };
             structural = transaction;
@@ -319,7 +332,7 @@
                 }
 
                 finalConnectorDraw();
-                const rootId = currentRootId();
+                const rootId = transaction.pendingRootId || currentRootId();
                 if (rootId) centerRoot(rootId);
                 diagnostics.lastSettledAt = Date.now();
                 diagnostics.lastSuppressedLayouts = transaction.suppressedLayouts;
