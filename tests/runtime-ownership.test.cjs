@@ -15,6 +15,9 @@ const store = read('public/graph-store.js');
 const sync = read('public/graph-sync.js');
 const visualRoles = read('public/visual-roles.js');
 const parentLimit = read('public/parent-limit.js');
+const identity = read('public/person-identity.js');
+const pickerRefresh = read('public/person-picker-refresh.js');
+const unionActions = read('public/union-child-actions.js');
 const entry = read('src/entry.js');
 
 assert(!nodeHover.includes('appendScript('), 'node-hover must not bootstrap runtime scripts');
@@ -85,10 +88,12 @@ assert(controller.includes('function completeVisualCommit('), 'RenderController 
 assert(controller.includes("window.dispatchEvent(new CustomEvent('family-graph-rendered'"),
   'RenderController must publish committed render generations');
 
-assert(store.includes('window.FamilyGraphStore = api'), 'GraphStore must own canonical client graph state');
+assert(store.includes('window.FamilyGraphStore = Object.freeze'), 'GraphStore must own canonical client graph state');
 assert(store.includes('window.fetch = async function graphStoreFetch'), 'GraphStore must own /api/graph read interception');
 assert(store.includes('peopleById') && store.includes('parentsByChild') && store.includes('spousesByPerson'),
   'GraphStore must own shared topology indexes');
+assert(!store.includes('FamilyGraphCache'), 'GraphStore must not expose a cache compatibility API');
+assert(!store.includes("family-graph-fetch'"), 'GraphStore must not emit the retired graph-fetch event');
 assert(!fs.existsSync('public/graph-cache.js'), 'old graph-cache file must be removed');
 assert(!fs.existsSync('public/graph-resilience.js'), 'old graph-resilience file must be removed');
 
@@ -107,6 +112,14 @@ assert(!visualRoles.includes('MutationObserver'), 'visual roles must use explici
 assert(visualRoles.includes('FamilyGraphStore'), 'visual roles must use shared Store indexes');
 assert(!parentLimit.includes('MutationObserver'), 'parent limit must use explicit lifecycle events');
 assert(parentLimit.includes('FamilyGraphStore'), 'parent limit must use shared Store indexes');
+assert(identity.includes('FamilyGraphStore'), 'identity must use GraphStore');
+assert(pickerRefresh.includes('FamilyGraphStore'), 'picker refresh must use GraphStore');
+assert(unionActions.includes('FamilyGraphStore'), 'union actions must use GraphStore');
+assert(!unionActions.includes('MutationObserver'), 'union actions must use explicit render/store lifecycle');
+assert(!unionActions.includes('unionChildAwareLayout'), 'union actions must not wrap layout ownership');
+for (const active of [sync, visualRoles, parentLimit, identity, pickerRefresh, unionActions]) {
+  assert(!active.includes('FamilyGraphCache'), 'active runtime modules must not reference FamilyGraphCache');
+}
 
 assert(entry.includes("'/graph-store.js'"), 'entry must install GraphStore foundation');
 assert(!entry.includes("'/graph-cache.js'"), 'entry must not install retired graph cache');
