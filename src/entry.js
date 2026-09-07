@@ -71,7 +71,13 @@ async function injectGraphResilience(response, env) {
   const contentType = response.headers.get('Content-Type') || '';
   if (!contentType.includes('text/html')) return response;
 
-  const html = await response.text();
+  const rawHtml = await response.text();
+  const legacyGraphPoll = `        // Poll for multi-client edits, but unchanged data does not cause a relayout.\n        setInterval(() => {\n            if (!isEditing) loadTree(null, false);\n        }, 5000);\n`;
+  const html = rawHtml.replace(
+    legacyGraphPoll,
+    '        // Multi-client synchronization is handled by graph-sync.js revision polling.\n'
+  );
+
   const hasGraphResilience = html.includes('data-family-graph-resilience');
   const hasGraphSync = html.includes('data-family-graph-sync');
   const hasGraphDebug = html.includes('data-family-graph-debug');
@@ -120,7 +126,7 @@ async function injectGraphResilience(response, env) {
   headers.set('Content-Type', 'text/html; charset=UTF-8');
   return new Response(refinedHtml, {
     status: response.status,
-    statusText: response.statusText,
+    statusText: response.status.statusText,
     headers
   });
 }
