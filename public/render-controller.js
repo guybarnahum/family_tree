@@ -20,7 +20,9 @@
     let frameId = 0;
     let pending = null;
     let runningStage = null;
+    let activeContext = null;
     let capturedRafs = [];
+    let prepareDepth = 0;
 
     const diagnostics = {
         generationsStarted: 0,
@@ -28,6 +30,7 @@
         generationsSuperseded: 0,
         externalLayouts: 0,
         prepareRuns: 0,
+        prepareLayoutRequestsSuppressed: 0,
         connectorRuns: 0,
         lastGeneration: 0,
         lastReason: '',
@@ -41,6 +44,14 @@
         lastError: null
     };
 
+    function orderedLayoutStages() {
+        return [...layoutStages.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    }
+
+    function orderedPrepareStages() {
+        return [...prepareStages.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    }
+
     function expose() {
         window.__familyRenderControllerDiagnostics = {
             ...diagnostics,
@@ -52,16 +63,9 @@
             prepareStages: orderedPrepareStages().map(stage => ({ name: stage.name, order: stage.order })),
             connectorStage: connectorStage?.name || null,
             pendingGeneration: pending?.id || null,
-            runningStage
+            runningStage,
+            preparing: prepareDepth > 0
         };
-    }
-
-    function orderedLayoutStages() {
-        return [...layoutStages.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
-    }
-
-    function orderedPrepareStages() {
-        return [...prepareStages.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
     }
 
     function registerLayoutStage({ name, order, run, ownsPrefix = false }) {
@@ -85,16 +89,22 @@
     async function prepare(context = {}) {
         const order = [];
         const durations = {};
-        for (const stage of orderedPrepareStages()) {
-            const started = performance.now();
-            await stage.run(context);
-            durations[stage.name] = Math.round((performance.now() - started) * 100) / 100;
-            order.push(stage.name);
-        }
-        diagnostics.prepareRuns += 1;
-        diagnostics.lastPrepareOrder = order;
-        diagnostics.lastPrepareDurationsMs = durations;
+        prepareDepth += 1;
         expose();
+        try {
+            for (const stage of orderedPrepareStages()) {
+                const started = performance.now();
+                await stage.run(context);
+                durations[stage.name] = Math.round((performance.now() - started) * 100) / 100;
+                order.push(stage.name);
+            }
+            diagnostics.prepareRuns += 1;
+            diagnostics.lastPrepareOrder = order;
+            diagnostics.lastPrepareDurationsMs = durations;
+        } finally {
+            prepareDepth = Math.max(0, prepareDepth - 1);
+            expose();
+        }
     }
 
     function baseGeometry() {
@@ -127,11 +137,15 @@
         }
     }
 
+    function addDuration(context, name, duration) {
+        context.stageDurations[name] = Math.round(((context.stageDurations[name] || 0) + duration) * 100) / 100;
+    }
+
     function invokeStage(stage, context) {
         runningStage = stage.name;
         const started = performance.now();
         const value = withCapturedAnimationFrames(stage.name, () => stage.run(context));
-        context.stageDurations[stage.name] = Math.round((performance.now() - started) * 100) / 100;
+        addDuration(context, stage.name, performance.now() - started);
         context.stageOrder.push(stage.name);
         runningStage = null;
         return value;
@@ -145,41 +159,47 @@
         if (targetName != null && targetIndex < 0) throw new Error(`Unknown layout stage: ${targetName}`);
 
         const selected = targetIndex < 0 ? [] : stages.slice(0, targetIndex + 1);
+        const isRootRun = !inheritedContext;
         const context = inheritedContext || {
             stageOrder: [],
-            stageDurations: {},
-            runThrough: name => runThrough(name, null)
+            stageDurations: {}
         };
-        context.runThrough = name => runThrough(name, context);
+        const previousActive = activeContext;
+        if (isRootRun) activeContext = context;
 
-        // Feedback stages (currently lineage member-order) intentionally own execution of the
-        // prefix because they may rerun it several times. Start at the last such stage, then run
-        // only later deltas. Without an owning stage, run base geometry once followed by deltas.
-        let ownerIndex = -1;
-        for (let i = 0; i < selected.length; i++) {
-            if (selected[i].ownsPrefix) ownerIndex = i;
-        }
+        try {
+            // Feedback stages (currently lineage member-order) intentionally own execution of
+            // the prefix because they may rerun it several times. Start at the last such stage,
+            // then run only later deltas. Without an owner, run base geometry then each delta.
+            let ownerIndex = -1;
+            for (let i = 0; i < selected.length; i++) {
+                if (selected[i].ownsPrefix) ownerIndex = i;
+            }
 
-        if (ownerIndex >= 0) {
-            invokeStage(selected[ownerIndex], context);
-            for (let i = ownerIndex + 1; i < selected.length; i++) invokeStage(selected[i], context);
-        } else {
-            runningStage = 'base-geometry';
-            const started = performance.now();
-            baseGeometry();
-            context.stageDurations['base-geometry'] = Math.round((performance.now() - started) * 100) / 100;
-            context.stageOrder.push('base-geometry');
-            runningStage = null;
-            for (const stage of selected) invokeStage(stage, context);
+            if (ownerIndex >= 0) {
+                invokeStage(selected[ownerIndex], context);
+                for (let i = ownerIndex + 1; i < selected.length; i++) invokeStage(selected[i], context);
+            } else {
+                runningStage = 'base-geometry';
+                const started = performance.now();
+                baseGeometry();
+                addDuration(context, 'base-geometry', performance.now() - started);
+                context.stageOrder.push('base-geometry');
+                runningStage = null;
+                for (const stage of selected) invokeStage(stage, context);
+            }
+            return context;
+        } finally {
+            if (isRootRun) activeContext = previousActive;
         }
-        return context;
     }
 
     function runDeferredDiagnostics() {
         // Old planar stage callbacks contain the useful planarity validator plus historical
         // connector/assert paints. Execute only the final planar callback with paint/assert
         // temporarily disabled, preserving diagnostics without creating another SVG generation.
-        const planar = capturedRafs.filter(item => item.stageName === 'planar').at(-1);
+        const planarCallbacks = capturedRafs.filter(item => item.stageName === 'planar');
+        const planar = planarCallbacks.length ? planarCallbacks[planarCallbacks.length - 1] : null;
         capturedRafs = [];
         if (!planar) return;
 
@@ -334,6 +354,11 @@
     }
 
     function controlledLayoutAndRender() {
+        if (prepareDepth > 0) {
+            diagnostics.prepareLayoutRequestsSuppressed += 1;
+            expose();
+            return;
+        }
         void requestLayout({ reason: 'layoutAndRender' });
     }
 
@@ -354,7 +379,7 @@
         centerRoot,
         installFacade,
         facade: () => controlledLayoutAndRender,
-        runThrough: name => runThrough(name),
+        runThrough: name => runThrough(name, activeContext),
         snapshot: () => ({ ...window.__familyRenderControllerDiagnostics })
     });
 
