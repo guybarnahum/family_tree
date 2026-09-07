@@ -161,9 +161,19 @@
         }
     }
 
+    function cancelSelection(reason = 'superseded') {
+        if (!selection) return;
+        reveal(`selection:${selection.id}`);
+        diagnostics.staleTransactionsDiscarded += 1;
+        diagnostics.lastReason = reason;
+        selection = null;
+        exposeDiagnostics();
+    }
+
     function startSelection(rootId, reason = 'root-selection') {
         if (!rootId) return null;
         if (selection?.rootId === rootId) return selection;
+        if (selection) cancelSelection('selection-superseded');
 
         const transaction = {
             id: ++serial,
@@ -261,6 +271,8 @@
             // Nested calls participate in the outer transaction; only the outermost call
             // performs the authoritative final layout and reveal.
             if (structural) return baseLoadTree(...args);
+
+            if (selection) cancelSelection('structural-superseded-selection');
 
             const transaction = {
                 id: ++serial,
