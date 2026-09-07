@@ -128,7 +128,7 @@
         <div class="family-graph-debug-foot">
             <span>revision endpoint: /api/graph/revision</span>
             <span>5s active · 30s max reconciliation · 15m idle</span>
-            <span>M2: one RenderController commit per visible generation</span>
+            <span>M3: one GraphStore · one RenderController</span>
             <span class="family-graph-debug-build"></span>
         </div>
     `;
@@ -147,13 +147,13 @@
         ['next', 'Next check'],
         ['revisions', 'Revisions', 'wide'],
         ['pending', 'Pending revision'],
-        ['cacheState', 'Cache state'],
-        ['cacheAge', 'Cache age'],
-        ['graphSize', 'Cached graph'],
+        ['storeState', 'Store state'],
+        ['storeAge', 'Store age'],
+        ['graphSize', 'Store graph'],
         ['checks', 'Revision checks'],
         ['reconciliations', 'Reconciliations'],
-        ['graphReads', 'Full graph fetches'],
-        ['cacheHits', 'Graph cache hits'],
+        ['graphReads', 'Network graph reads'],
+        ['storeHits', 'Store graph reads'],
         ['mutations', 'Data mutations'],
         ['renderState', 'Render controller'],
         ['renderCounts', 'Render generations'],
@@ -226,23 +226,23 @@
     function render() {
         if (!visible) return;
         const s = Sync.snapshot();
-        const cache = s.cache || {};
+        const store = s.store || {};
         const r = renderSnapshot();
-        const cacheState = !cache.present ? 'missing' : cache.dirty ? 'DIRTY' : cache.stale ? 'STALE' : 'clean';
+        const storeState = !store.present ? 'missing' : store.dirty ? 'DIRTY' : store.stale ? 'STALE' : 'clean';
 
         set('mode', String(s.mode || '—').toUpperCase());
         set('frequency', frequency(s));
         set('page', `${s.visible ? 'visible' : 'hidden'} / ${s.focused ? 'focused' : 'blurred'}`);
         set('next', s.nextCheckInMs == null ? '—' : duration(s.nextCheckInMs));
-        set('revisions', `known ${s.knownRevision ?? '—'} · server ${s.serverRevision ?? '—'} · cache ${cache.revision ?? '—'}`);
+        set('revisions', `known ${s.knownRevision ?? '—'} · server ${s.serverRevision ?? '—'} · store ${store.revision ?? '—'}`);
         set('pending', s.pendingRevision ? `rev ${s.pendingRevision} · ${s.pendingReason || '?'}` : 'none');
-        set('cacheState', cacheState);
-        set('cacheAge', duration(cache.ageMs));
-        set('graphSize', `${cache.people || 0} people · ${cache.relationships || 0} rels`);
+        set('storeState', storeState);
+        set('storeAge', duration(store.ageMs));
+        set('graphSize', `${store.people || 0} people · ${store.relationships || 0} rels · gen ${store.generation || 0}`);
         set('checks', String(s.revisionChecks || 0));
         set('reconciliations', String(s.reconciliations || 0));
         set('graphReads', String(s.graphNetworkFetches || 0));
-        set('cacheHits', String(s.graphCacheHits || 0));
+        set('storeHits', String(s.graphCacheHits || 0));
         set('mutations', `${s.dataMutations || 0} data · ${s.graphMutations || 0} graph`);
 
         const renderState = r.pendingGeneration ? `pending #${r.pendingGeneration}` : r.runningStage ? `running ${r.runningStage}` : 'idle';
@@ -306,6 +306,7 @@
     }, true);
 
     window.addEventListener('family-graph-sync-metrics', () => { if (visible) render(); });
+    window.addEventListener('family-graph-store-changed', () => { if (visible) render(); });
     window.addEventListener('family-graph-rendered', () => { if (visible) render(); });
 
     window.FamilyGraphDebug = Object.freeze({
