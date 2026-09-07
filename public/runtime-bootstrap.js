@@ -1,14 +1,15 @@
 // Deterministic browser bootstrap for the family graph runtime.
-// M2 owns the final render pipeline explicitly: legacy algorithm modules are loaded in a
-// capture harness, registered as named stages, and then relinquish global render ownership.
+// RenderController owns geometry; FamilyGraphStore owns canonical client graph state.
+// Historical algorithm modules are loaded in a capture harness, registered as named stages,
+// and immediately relinquish global render/load ownership.
 (() => {
     if (window.__familyRuntimeBootstrapInstalled) return;
     window.__familyRuntimeBootstrapInstalled = true;
 
     const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
     // graph-view is loaded immediately before this bootstrap. Its loadTree implementation is
-    // the canonical graph loader; M2 stage modules may temporarily replace it only while their
-    // historical prepare wrappers are being captured.
+    // the canonical projection loader; stage modules may replace it only while their historical
+    // prepare wrappers are being captured.
     const directGraphLoadTree = typeof window.loadTree === 'function' ? window.loadTree : null;
     const diagnostics = {
         phase: 'installing',
@@ -189,6 +190,7 @@
 
         await loadScript('/import-export.js', 'data-family-import-export');
         await loadScript('/interaction-refinement.js', 'data-family-interaction');
+        await loadScript('/node-hover.js', 'data-family-node-hover');
         await loadMobileStack();
 
         const features = [
@@ -216,8 +218,7 @@
         ];
         for (const [src, dataKey] of features) await loadScript(src, dataKey);
 
-        // Feature modules loaded during M1 may still contain historical layout wrappers. They
-        // may observe controller events, but the controller is the sole global render owner.
+        // Feature modules may request layout, but the controller remains the sole global owner.
         window.FamilyRenderController.installFacade();
     }
 
@@ -235,8 +236,6 @@
         });
         registerPrepare('multi-partner', 10, multi.prepare);
 
-        // Relationship compaction is a pure delta over base geometry when captured with a
-        // no-op predecessor.
         const relationship = await captureLegacyModule({
             src: '/layout-refinement.js',
             dataKey: 'data-family-layout-refinement',
@@ -269,9 +268,8 @@
         registerPrepare('planar', 30, planar.prepare);
         diagnostics.capturedStages.push('planar');
 
-        // Member-order is the one feedback stage: its historical BASE_LAYOUT callback is now
-        // an explicit call into the controller's named planar prefix. The optimizer can keep
-        // its exact multi-pass behavior without owning global layoutAndRender.
+        // Member-order is the feedback stage: its historical BASE_LAYOUT callback is an
+        // explicit call into the controller's named planar prefix.
         const member = await captureLegacyModule({
             src: '/member-order-refinement.js',
             dataKey: 'data-family-member-order',
@@ -323,9 +321,8 @@
     }
 
     async function installSyncStack() {
-        // Sync is installed only after the first controller-owned graph commit, so its initial
-        // revision check cannot become a competing renderer. With M2 there is no loadTree wrapper
-        // chain: graph-sync captures graph-view's canonical loader directly.
+        // Sync starts only after the first controller-owned graph commit. Restore graph-view's
+        // canonical loader before installing sync so reconciliation has one graph/projection path.
         await waitFor(() => document.readyState !== 'loading', 'DOM parsing');
         if (directGraphLoadTree) setLoadTree(directGraphLoadTree);
         window.FamilyRenderController?.installFacade?.();
@@ -362,6 +359,7 @@
             window.dispatchEvent(new CustomEvent('family-runtime-ready', {
                 detail: {
                     selectedPersonId: window.FamilySelectionController?.getSelectedPersonId?.() || null,
+                    graphStore: window.FamilyGraphStore?.snapshot?.() || null,
                     renderController: window.FamilyRenderController?.snapshot?.() || null
                 }
             }));
