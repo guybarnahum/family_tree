@@ -1,6 +1,7 @@
 // Person-pane interaction polish shared by Slice A-C:
 // - desktop pane starts directly with the editable name
 // - pane blur saves only when a value actually changed
+// - graph-card blur is also a no-op when the value did not change
 // - metadata edits never relayout the graph
 // - name edits relayout once because only name can change graph-card geometry
 // - title subtitle remains a generic navigation hint and search stays an empty search box
@@ -163,6 +164,25 @@
             if (field === 'name') restoreNamePresentation(id, original);
             showStatus('שגיאה בשמירה');
         }
+    }
+
+    // The legacy graph-card editor saves on every focusout, even when the text is unchanged.
+    // Wrap the final saveEdit chain so window/tab blur cannot create a no-op D1 write, bump
+    // graph_state, or trigger a needless graph refresh.
+    if (typeof saveEdit === 'function' && !saveEdit.__familyUnchangedGuard) {
+        const baseSaveEdit = saveEdit;
+        const guardedSaveEdit = async function unchangedGuardedSaveEdit(element, ...args) {
+            if (editableTarget(element) && !pane.contains(element)) {
+                const person = localPerson(element.dataset.id);
+                const field = element.dataset.field;
+                const value = fieldValue(element);
+                if (person && String(person[field] ?? '').trim() === value) return;
+            }
+            return baseSaveEdit(element, ...args);
+        };
+        guardedSaveEdit.__familyUnchangedGuard = true;
+        saveEdit = guardedSaveEdit;
+        window.saveEdit = guardedSaveEdit;
     }
 
     pane.addEventListener('focusin', event => {
