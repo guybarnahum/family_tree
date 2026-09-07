@@ -156,12 +156,15 @@
         ['graphSize', 'Cached graph'],
         ['checks', 'Revision checks'],
         ['rows', 'Est. revision rows'],
-        ['changes', 'Revision changes'],
+        ['changes', 'Server revision changes'],
+        ['bootstrap', 'Bootstrap refreshes'],
+        ['repairs', 'Local state repairs'],
         ['latency', 'Last check latency'],
         ['graphReads', 'Full graph fetches'],
         ['cacheHits', 'Graph cache hits'],
         ['graphRows', 'Est. full graph rows'],
         ['mutations', 'Graph mutations'],
+        ['lastMutation', 'Last graph mutation', 'wide'],
         ['activity', 'Last activity'],
         ['lastCheck', 'Last revision check'],
         ['lastGraph', 'Last graph fetch'],
@@ -238,11 +241,16 @@
         set('checks', String(s.revisionChecks || 0));
         set('rows', `~${s.estimatedRevisionRowsRead || 0}`);
         set('changes', String(s.revisionChanges || 0));
+        set('bootstrap', String(s.bootstrapRefreshes || 0));
+        set('repairs', String(s.stateRepairs || 0));
         set('latency', duration(s.lastRevisionLatencyMs));
         set('graphReads', String(s.graphNetworkFetches || 0));
         set('cacheHits', String(s.graphCacheHits || 0));
         set('graphRows', `~${s.estimatedFullGraphRowsRead || 0}`);
         set('mutations', String(s.graphMutations || 0));
+        set('lastMutation', s.lastMutationAt
+            ? `${s.lastMutationMethod || '?'} ${s.lastMutationPath || '?'} · rev ${s.lastMutationRevision ?? '—'} @ ${clock(s.lastMutationAt)}`
+            : 'none');
         set('activity', `${duration(s.activityAgeMs)} ago`);
         set('lastCheck', clock(s.lastRevisionCheckAt));
         set('lastGraph', s.lastGraphFetchAt
