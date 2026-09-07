@@ -88,7 +88,9 @@
     }
 
     markDefaultText(cardsLayer);
-    persistCurrentRoot();
+    // Do not persist the static/legacy DOM root here. If startup restored a saved person
+    // into ?person= above, graph-view.js must consume that request before DOM root state is
+    // allowed to become authoritative. The observers below persist the first projected root.
 
     cardsLayer.addEventListener('input', event => {
         const card = event.target.closest?.('.absolute-card');
