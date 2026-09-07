@@ -51,8 +51,6 @@ async function bumpGraphRevision(env) {
 
 function withRevisionHeader(response, revision) {
   const headers = new Headers(response.headers);
-  // Keep the historical graph header for browser-cache compatibility while also exposing
-  // the counter under its broader meaning: every user-visible data mutation advances it.
   headers.set('X-Family-Graph-Revision', String(revision));
   headers.set('X-Family-Revision', String(revision));
   headers.delete('Content-Length');
@@ -95,7 +93,6 @@ async function normalizeGraphMutationRequest(request, url) {
       body: JSON.stringify(normalized)
     });
   } catch (_) {
-    // Let worker.js return the canonical validation/parse error for malformed requests.
     return request;
   }
 }
@@ -117,10 +114,21 @@ async function injectGraphResilience(response, env) {
 
   const rawHtml = await response.text();
   const legacyGraphPoll = `        // Poll for multi-client edits, but unchanged data does not cause a relayout.\n        setInterval(() => {\n            if (!isEditing) loadTree(null, false);\n        }, 5000);\n`;
-  const html = rawHtml.replace(
-    legacyGraphPoll,
-    '        // Multi-client synchronization is handled by graph-sync.js revision polling.\n'
-  );
+  const legacyGraphStart = '        loadTree(null, true);\n';
+  const importExportPattern = /\s*<script src="\/import-export\.js(?:\?[^\"]*)?"[^>]*><\/script>/;
+
+  let html = rawHtml
+    .replace(
+      legacyGraphPoll,
+      '        // Multi-client synchronization is handled by graph-sync.js revision polling.\n'
+    )
+    .replace(
+      legacyGraphStart,
+      '        // Initial graph rendering is started by runtime-bootstrap.js after the final stack is installed.\n'
+    )
+    // worker.js still lists import-export for historical deployments. M1 moves it behind the
+    // deterministic bootstrap so it cannot start the graph before the final runtime is ready.
+    .replace(importExportPattern, '');
 
   const hasGraphResilience = html.includes('data-family-graph-resilience');
   const hasGraphSync = html.includes('data-family-graph-sync');
@@ -129,18 +137,6 @@ async function injectGraphResilience(response, env) {
   const hasPersonIdentity = html.includes('data-family-person-identity');
   const hasPersonPickerLabels = html.includes('data-family-person-picker-labels');
   const hasMediaResilience = html.includes('data-family-media-resilience');
-  if (
-    hasGraphResilience && hasGraphSync && hasGraphDebug && hasRevisionLayoutGuard &&
-    hasPersonIdentity && hasPersonPickerLabels && hasMediaResilience
-  ) {
-    const headers = new Headers(response.headers);
-    headers.delete('Content-Length');
-    return new Response(html, {
-      status: response.status,
-      statusText: response.statusText,
-      headers
-    });
-  }
 
   const build = typeof env.BUILD_SHA === 'string' && env.BUILD_SHA
     ? env.BUILD_SHA.slice(0, 8)
@@ -176,9 +172,14 @@ async function injectGraphResilience(response, env) {
   ].filter(Boolean).join('\n');
 
   const graphViewPattern = /<script src="\/graph-view\.js(?:\?[^\"]*)?"[^>]*><\/script>/;
-  const refinedHtml = graphViewPattern.test(html)
+  let refinedHtml = graphViewPattern.test(html)
     ? html.replace(graphViewPattern, match => `${scripts}\n${match}`)
     : html.replace('</body>', `${scripts}\n</body>`);
+
+  if (!refinedHtml.includes('data-family-runtime-bootstrap')) {
+    const runtimeBootstrap = `<script src="/runtime-bootstrap.js?v=${encodeURIComponent(build)}" data-family-runtime-bootstrap></script>`;
+    refinedHtml = refinedHtml.replace('</body>', `${runtimeBootstrap}\n</body>`);
+  }
 
   const headers = new Headers(response.headers);
   headers.delete('Content-Length');
