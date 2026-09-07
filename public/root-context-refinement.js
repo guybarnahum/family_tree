@@ -189,7 +189,7 @@
         }
     }).observe(cardsLayer, {
         childList: true,
-        subtree: false,
+        subtree: true,
         attributes: true,
         attributeFilter: ['class']
     });
