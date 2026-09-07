@@ -145,6 +145,7 @@
 
     window.addEventListener('family-faces-changed', () => void refresh());
     window.addEventListener('family-face-primary-changed', () => void refresh());
+    window.addEventListener('family-graph-synced', () => void refresh());
     window.addEventListener('family-person-pane-saved', event => {
         if (event.detail?.field === 'metadata') void refresh();
     });
