@@ -5,9 +5,7 @@ const fs = require('fs');
 const vm = require('vm');
 
 class ClassListStub {
-  constructor(values = []) {
-    this.values = new Set(values);
-  }
+  constructor(values = []) { this.values = new Set(values); }
   contains(value) { return this.values.has(value); }
   add(value) { this.values.add(value); }
   remove(value) { this.values.delete(value); }
@@ -26,10 +24,6 @@ class CardStub {
   }
 }
 
-class MutationObserverStub {
-  observe() {}
-}
-
 function relationship(type, person1Id, person2Id, index) {
   return { id: `${type}-${index}`, type, person1Id, person2Id };
 }
@@ -43,8 +37,6 @@ const spouse = (a, b) => relationships.push(
   relationship('spouse', a, b, ++relationIndex)
 );
 
-// R has sibling B and spouse S. S also has spouse O, and S+O have child C.
-// P/Q are S's parents/couple; D is one generation farther up S's ancestry.
 parent('X', 'R');
 parent('X', 'B');
 spouse('R', 'S');
@@ -69,10 +61,26 @@ const cardsLayer = {
     if (!selector.includes('graph-root')) return null;
     return cards.find(card => card.classList.contains('graph-root')) || null;
   },
-  querySelectorAll() {
-    return cards;
-  }
+  querySelectorAll() { return cards; }
 };
+
+function addSet(map, key, value) {
+  if (!map.has(key)) map.set(key, new Set());
+  map.get(key).add(value);
+}
+
+const parentsByChild = new Map();
+const childrenByParent = new Map();
+const spousesByPerson = new Map();
+for (const relation of relationships) {
+  if (relation.type === 'parent') {
+    addSet(parentsByChild, relation.person2Id, relation.person1Id);
+    addSet(childrenByParent, relation.person1Id, relation.person2Id);
+  } else if (relation.type === 'spouse') {
+    addSet(spousesByPerson, relation.person1Id, relation.person2Id);
+    addSet(spousesByPerson, relation.person2Id, relation.person1Id);
+  }
+}
 
 const listeners = new Map();
 const graph = { people: [], relationships };
@@ -80,15 +88,18 @@ const globalNodeMap = new Map(cards.map(card => [
   card.dataset.nodeId,
   {
     id: card.dataset.nodeId,
-    // Graph projection historically marks root siblings as context; unified roles must
-    // promote B back to sibling/primary for the selected root.
     viewRole: card.dataset.nodeId === 'B' ? 'context' : 'primary'
   }
 ]));
 
 const window = {
   location: { href: 'https://family.example/?person=R' },
-  FamilyGraphCache: { load: () => ({ graph }) },
+  FamilyGraphStore: {
+    snapshot: () => ({
+      graph,
+      indexes: { parentsByChild, childrenByParent, spousesByPerson, peopleById: new Map() }
+    })
+  },
   FamilySelectionController: { getSelectedPersonId: () => 'R' },
   addEventListener(type, handler) {
     if (!listeners.has(type)) listeners.set(type, []);
@@ -112,7 +123,6 @@ const context = {
   globalNodeMap,
   URL,
   localStorage: { getItem: () => null },
-  MutationObserver: MutationObserverStub,
   queueMicrotask,
   Number,
   Map,
