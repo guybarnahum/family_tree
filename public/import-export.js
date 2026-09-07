@@ -1,68 +1,8 @@
 // Human-readable JSON import/export controls for the global family graph.
+// Selection persistence and runtime boot are intentionally owned elsewhere.
 (() => {
-    const ANCHOR_STORAGE_KEY = 'family-tree.anchor-person';
-
-    function readStoredAnchor() {
-        try {
-            return localStorage.getItem(ANCHOR_STORAGE_KEY);
-        } catch (error) {
-            console.warn('Unable to read saved family anchor:', error);
-            return null;
-        }
-    }
-
-    function writeStoredAnchor(personId) {
-        if (!personId) return;
-        try {
-            localStorage.setItem(ANCHOR_STORAGE_KEY, personId);
-        } catch (error) {
-            console.warn('Unable to save family anchor:', error);
-        }
-    }
-
-    function persistAnchorFromLocation() {
-        const personId = new URL(window.location.href).searchParams.get('person');
-        if (personId) writeStoredAnchor(personId);
-    }
-
-    const startupUrl = new URL(window.location.href);
-    const explicitAnchor = startupUrl.searchParams.get('person');
-    if (explicitAnchor) {
-        writeStoredAnchor(explicitAnchor);
-    } else {
-        const storedAnchor = readStoredAnchor();
-        if (storedAnchor) {
-            startupUrl.searchParams.set('person', storedAnchor);
-            history.replaceState(null, '', startupUrl);
-        }
-    }
-
-    const nativeReplaceState = history.replaceState;
-    history.replaceState = function persistedReplaceState(...args) {
-        const result = nativeReplaceState.apply(this, args);
-        persistAnchorFromLocation();
-        return result;
-    };
-
-    const nativePushState = history.pushState;
-    history.pushState = function persistedPushState(...args) {
-        const result = nativePushState.apply(this, args);
-        persistAnchorFromLocation();
-        return result;
-    };
-
-    window.addEventListener('popstate', persistAnchorFromLocation);
-
-    const legacyCenterInitialTree = centerInitialTree;
-    centerInitialTree = function graphAwareInitialCenter() {
-        if (window.startFamilyGraph) {
-            window.startFamilyGraph();
-            return;
-        }
-        legacyCenterInitialTree();
-    };
-
-    window.startFamilyGraph?.();
+    if (window.__familyImportExportInstalled) return;
+    window.__familyImportExportInstalled = true;
 
     const title = document.querySelector('h1');
     const titleCard = title?.parentElement;
@@ -163,9 +103,7 @@
         const isLegacyV1 = value?.format === 'family-tree' && value?.version === 1 &&
             Array.isArray(value.people);
 
-        if (!isGraphV2 && !isLegacyV1) {
-            throw new Error('Unsupported family graph JSON format');
-        }
+        if (!isGraphV2 && !isLegacyV1) throw new Error('Unsupported family graph JSON format');
         return value;
     }
 
@@ -190,7 +128,6 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(documentValue)
             });
-
             if (!response.ok) throw new Error(await response.text());
 
             dataSignature = '';
@@ -208,24 +145,12 @@
     controls.addEventListener('click', event => {
         const button = event.target.closest('[data-tree-action]');
         if (!button) return;
-
-        if (button.dataset.treeAction === 'export') {
-            exportGraph();
-        } else if (button.dataset.treeAction === 'import') {
-            fileInput.click();
-        }
+        if (button.dataset.treeAction === 'export') exportGraph();
+        else if (button.dataset.treeAction === 'import') fileInput.click();
     });
 
     fileInput.addEventListener('change', () => {
         const file = fileInput.files?.[0];
         if (file) importFile(file);
     });
-
-    if (!document.querySelector('script[data-family-interaction]')) {
-        const interaction = document.createElement('script');
-        const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
-        interaction.src = `/interaction-refinement.js?v=${encodeURIComponent(build)}`;
-        interaction.dataset.familyInteraction = 'true';
-        document.body.appendChild(interaction);
-    }
 })();
