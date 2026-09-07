@@ -1,14 +1,13 @@
 // Union-aware child/parent actions.
 //
-// New structural writes are expressed as one canonical graph PUT so one logical action has
-// one revision. A person with multiple spouses cannot create an ambiguous one-parent child;
-// the child action moves to the specific spouse/union edge instead.
+// Structural writes are expressed as one canonical graph PUT so one logical action has one
+// revision. Canonical data comes from FamilyGraphStore; render/controller lifecycle is explicit.
 (() => {
     if (window.FamilyUnionChildActions) return;
 
     const cardsLayer = document.getElementById('cards-layer');
-    const Cache = window.FamilyGraphCache;
-    if (!cardsLayer || !Cache) return;
+    const Store = window.FamilyGraphStore;
+    if (!cardsLayer || !Store) return;
 
     const UNION_LANE_CLEARANCE = 18;
     const UNION_LANE_STEP = 16;
@@ -72,28 +71,11 @@
     `;
     document.head.appendChild(style);
 
-    function addSet(map, key, value) {
-        if (!map.has(key)) map.set(key, new Set());
-        map.get(key).add(value);
-    }
-
-    function rebuildIndexes(value) {
-        graph = value;
-        spouseMap = new Map();
-        parentsMap = new Map();
-        for (const relation of value?.relationships || []) {
-            if (relation.type === 'spouse') {
-                addSet(spouseMap, relation.person1Id, relation.person2Id);
-                addSet(spouseMap, relation.person2Id, relation.person1Id);
-            } else if (relation.type === 'parent') {
-                addSet(parentsMap, relation.person2Id, relation.person1Id);
-            }
-        }
-    }
-
-    function refreshFromCache() {
-        const entry = Cache.load();
-        if (entry?.graph) rebuildIndexes(entry.graph);
+    function refreshFromStore() {
+        const snapshot = Store.snapshot();
+        graph = snapshot.graph || null;
+        spouseMap = snapshot.indexes?.spousesByPerson || new Map();
+        parentsMap = snapshot.indexes?.parentsByChild || new Map();
         return graph;
     }
 
@@ -134,6 +116,8 @@
     }
 
     function currentRootId() {
+        const selected = window.FamilySelectionController?.getSelectedPersonId?.();
+        if (selected) return selected;
         const card = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
         if (card?.dataset.nodeId) return card.dataset.nodeId;
         const urlId = new URL(window.location.href).searchParams.get('person');
@@ -143,20 +127,15 @@
     }
 
     async function authoritativeGraph() {
-        // Structural writes must not be based on a projection that can intentionally lag a
-        // remote editor by up to 30 seconds. Force exactly one authoritative graph read first.
-        Cache.markStale();
-        const response = await fetch('/api/graph', { cache: 'no-store' });
-        if (!response.ok) throw new Error(await response.text());
-        if (response.headers.get('X-Family-Graph-Stale') === '1') {
-            throw new Error('Authoritative graph is unavailable');
-        }
-        const value = await response.json();
-        if (!value || !Array.isArray(value.people) || !Array.isArray(value.relationships)) {
-            throw new Error('Graph response is invalid');
-        }
-        rebuildIndexes(value);
-        return cloneGraph(value);
+        // Structural writes may not use the intentionally coalesced/stale remote view. Force one
+        // authoritative Store refresh first, then clone that exact canonical document for intent.
+        const snapshot = await Store.refresh({
+            authoritative: true,
+            reason: 'structural-intent'
+        });
+        if (!snapshot?.graph) throw new Error('Authoritative graph is unavailable');
+        refreshFromStore();
+        return cloneGraph(snapshot.graph);
     }
 
     async function putGraph(value, anchorId) {
@@ -174,15 +153,22 @@
         });
         if (!response.ok) throw new Error(await response.text());
 
-        // The mutation marks the graph cache dirty. One forced tree load refreshes the canonical
-        // document; the revision/layout guards coalesce the historical refinement wrappers.
+        const revision = Store.finiteRevision(
+            response.headers.get('X-Family-Revision') ||
+            response.headers.get('X-Family-Graph-Revision')
+        );
+        Store.noteMutation({ scope: 'graph', revision });
+
+        // One canonical graph load folds the server-normalized result into Store and performs
+        // the one controller-owned structural render generation.
         if (typeof loadTree === 'function') await loadTree(anchorId || null, true);
-        refreshFromCache();
+        else await Store.read({ refresh: true, reason: 'structural-write' });
+        refreshFromStore();
         queueSync();
     }
 
     function personName(id) {
-        const person = graph?.people?.find(candidate => candidate.id === id);
+        const person = Store.person(id) || graph?.people?.find(candidate => candidate.id === id);
         return String(person?.name || '').trim() || 'ללא שם';
     }
 
@@ -295,8 +281,6 @@
                 type: 'parent', person1Id: parentId, person2Id: childId
             });
 
-            // When this is the second explicit parent, the parent pair is the union. Do not
-            // leave two disconnected parents for the layout (or for future child creation).
             if (existingParents.length === 1) {
                 addRelationship(value, {
                     type: 'spouse', person1Id: existingParents[0], person2Id: parentId
@@ -329,7 +313,7 @@
     async function blankPersonHasMedia(personId) {
         try {
             const response = await fetch(`/api/media?person=${encodeURIComponent(personId)}`, { cache: 'no-store' });
-            if (!response.ok) return true; // fail safe: keep confirmation if media state is unknown
+            if (!response.ok) return true;
             const payload = await response.json();
             return Array.isArray(payload.items) && payload.items.length > 0;
         } catch (_) {
@@ -338,11 +322,10 @@
     }
 
     function deletionAnchor(id) {
-        refreshFromCache();
+        refreshFromStore();
         const parent = explicitParentIds(id)[0];
         if (parent) return parent;
-        const spouse = spouseIds(id)[0];
-        return spouse || null;
+        return spouseIds(id)[0] || null;
     }
 
     async function deleteWithoutPrompt(id) {
@@ -350,6 +333,10 @@
         showStatus('מוחק...');
         const response = await fetch(`/api/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' });
         if (!response.ok) return showStatus('שגיאה במחיקה');
+        const revision = Store.finiteRevision(
+            response.headers.get('X-Family-Revision') || response.headers.get('X-Family-Graph-Revision')
+        );
+        Store.noteMutation({ scope: 'graph', revision });
         await loadTree(anchorId, true);
         showStatus('נמחק');
     }
@@ -414,7 +401,7 @@
     }
 
     function syncUnionActions() {
-        refreshFromCache();
+        refreshFromStore();
         applyPersonChildPolicy();
         const overlay = ensureOverlay();
         overlay.replaceChildren();
@@ -469,7 +456,7 @@
             return;
         }
         installed = true;
-        refreshFromCache();
+        refreshFromStore();
 
         const baseDeleteNode = typeof deleteNode === 'function' ? deleteNode : null;
         addChild = unionAwareAddChild;
@@ -485,31 +472,19 @@
             };
         }
 
-        const baseLayout = typeof layoutAndRender === 'function' ? layoutAndRender : null;
-        if (baseLayout && !baseLayout.__familyUnionChildActions) {
-            const wrapped = function unionChildAwareLayout(...args) {
-                const result = baseLayout.apply(this, args);
-                queueSync();
-                return result;
-            };
-            wrapped.__familyUnionChildActions = true;
-            layoutAndRender = wrapped;
-            window.layoutAndRender = wrapped;
-        }
-
-        new MutationObserver(mutations => {
-            if (mutations.some(mutation => mutation.type === 'childList')) queueSync();
-        }).observe(cardsLayer, { childList: true });
-
-        window.addEventListener('family-graph-synced', queueSync);
+        // No layout wrapper and no card MutationObserver: RenderController explicitly calls
+        // FamilyUnionChildActions.refresh() after authoritative geometry, and store changes are
+        // communicated through a dedicated event.
+        window.addEventListener('family-graph-store-changed', queueSync);
+        window.addEventListener('family-graph-rendered', queueSync);
         window.addEventListener('family-person-disambiguation-updated', () => {
-            refreshFromCache();
+            refreshFromStore();
             refreshOpenPersonSearch();
             queueSync();
         });
         window.addEventListener('family-person-pane-saved', () => {
             queueMicrotask(() => {
-                refreshFromCache();
+                refreshFromStore();
                 refreshOpenPersonSearch();
                 queueSync();
             });
