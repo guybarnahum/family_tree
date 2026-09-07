@@ -108,78 +108,84 @@ async function attachMutationRevision(response, env, request, url) {
   }
 }
 
-async function injectGraphResilience(response, env) {
-  const contentType = response.headers.get('Content-Type') || '';
-  if (!contentType.includes('text/html')) return response;
+function buildInfo(env) {
+  const sha = typeof env.BUILD_SHA === 'string' && env.BUILD_SHA ? env.BUILD_SHA : 'unknown';
+  const deployedAt = typeof env.BUILD_TIME === 'string' && env.BUILD_TIME ? env.BUILD_TIME : null;
+  return { sha, short: sha.slice(0, 8), deployedAt };
+}
 
-  const rawHtml = await response.text();
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function stripLegacyInlineStartup(html) {
   const legacyGraphPoll = `        // Poll for multi-client edits, but unchanged data does not cause a relayout.\n        setInterval(() => {\n            if (!isEditing) loadTree(null, false);\n        }, 5000);\n`;
   const legacyGraphStart = '        loadTree(null, true);\n';
-  const importExportPattern = /\s*<script src="\/import-export\.js(?:\?[^\"]*)?"[^>]*><\/script>/;
-  const layoutRefinementPattern = /\s*<script src="\/layout-refinement\.js(?:\?[^\"]*)?"[^>]*><\/script>/;
-  const revisionGuardPattern = /\s*<script src="\/revision-layout-guard\.js(?:\?[^\"]*)?"[^>]*><\/script>/;
+  return html
+    .replace(legacyGraphPoll, '        // Multi-client synchronization is owned by graph-sync.js.\n')
+    .replace(legacyGraphStart, '        // runtime-bootstrap.js starts the first graph after the final runtime is installed.\n');
+}
 
-  let html = rawHtml
-    .replace(
-      legacyGraphPoll,
-      '        // Multi-client synchronization is handled by graph-sync.js revision polling.\n'
-    )
-    .replace(
-      legacyGraphStart,
-      '        // Initial graph rendering is started by runtime-bootstrap.js after the final stack is installed.\n'
-    )
-    // worker.js still lists these historical refinements. M2 loads layout-refinement as an
-    // explicitly captured RenderController stage, and import/export behind the bootstrap.
-    .replace(importExportPattern, '')
-    .replace(layoutRefinementPattern, '')
-    // The M1 duplicate-layout guard is retired from the active M2 runtime.
-    .replace(revisionGuardPattern, '');
+async function handleFrontendAsset(request, env) {
+  const assetResponse = await env.ASSETS.fetch(request);
+  const contentType = assetResponse.headers.get('Content-Type') || '';
+  const build = buildInfo(env);
 
-  const hasGraphResilience = html.includes('data-family-graph-resilience');
-  const hasPersonIdentity = html.includes('data-family-person-identity');
-  const hasPersonPickerLabels = html.includes('data-family-person-picker-labels');
-  const hasMediaResilience = html.includes('data-family-media-resilience');
-
-  const build = typeof env.BUILD_SHA === 'string' && env.BUILD_SHA
-    ? env.BUILD_SHA.slice(0, 8)
-    : 'dev';
-  const scripts = [
-    !hasGraphResilience
-      ? `<script src="/graph-cache.js?v=${encodeURIComponent(build)}" data-family-graph-cache></script>`
-      : '',
-    !hasPersonIdentity
-      ? `<script src="/person-identity.js?v=${encodeURIComponent(build)}" data-family-person-identity></script>`
-      : '',
-    !hasPersonPickerLabels
-      ? `<script src="/person-picker-labels.js?v=${encodeURIComponent(build)}" data-family-person-picker-labels></script>`
-      : '',
-    !hasGraphResilience
-      ? `<script src="/graph-status.js?v=${encodeURIComponent(build)}" data-family-graph-status></script>`
-      : '',
-    !hasGraphResilience
-      ? `<script src="/graph-resilience.js?v=${encodeURIComponent(build)}" data-family-graph-resilience></script>`
-      : '',
-    !hasMediaResilience
-      ? `<script src="/media-resilience.js?v=${encodeURIComponent(build)}" data-family-media-resilience></script>`
-      : ''
-  ].filter(Boolean).join('\n');
-
-  const graphViewPattern = /<script src="\/graph-view\.js(?:\?[^\"]*)?"[^>]*><\/script>/;
-  let refinedHtml = graphViewPattern.test(html)
-    ? html.replace(graphViewPattern, match => `${scripts}\n${match}`)
-    : html.replace('</body>', `${scripts}\n</body>`);
-
-  if (!refinedHtml.includes('data-family-runtime-bootstrap')) {
-    const runtimeBootstrap = `<script src="/runtime-bootstrap.js?v=${encodeURIComponent(build)}" data-family-runtime-bootstrap></script>`;
-    refinedHtml = refinedHtml.replace('</body>', `${runtimeBootstrap}\n</body>`);
+  if (!contentType.includes('text/html')) {
+    const headers = new Headers(assetResponse.headers);
+    headers.set('X-Family-Tree-Build', build.short);
+    return new Response(assetResponse.body, {
+      status: assetResponse.status,
+      statusText: assetResponse.statusText,
+      headers
+    });
   }
 
-  const headers = new Headers(response.headers);
+  let html = stripLegacyInlineStartup(await assetResponse.text());
+  const foundationalScripts = [
+    ['/graph-store.js', 'data-family-graph-store'],
+    ['/graph-status.js', 'data-family-graph-status'],
+    ['/person-identity.js', 'data-family-person-identity'],
+    ['/person-picker-labels.js', 'data-family-person-picker-labels'],
+    ['/media-resilience.js', 'data-family-media-resilience'],
+    ['/graph-view.js', 'data-family-graph-view'],
+    ['/runtime-bootstrap.js', 'data-family-runtime-bootstrap']
+  ];
+
+  const scripts = foundationalScripts
+    .filter(([path, dataKey]) => !html.includes(dataKey) && !html.includes(`src="${path}`))
+    .map(([path, dataKey]) => `<script src="${path}?v=${encodeURIComponent(build.short)}" ${dataKey}></script>`)
+    .join('\n');
+  if (scripts) html = html.replace('</body>', `${scripts}\n</body>`);
+
+  if (!html.includes('name="family-tree-build"')) {
+    html = html.replace(
+      '</head>',
+      `<meta name="family-tree-build" content="${escapeHtml(build.short)}">\n</head>`
+    );
+  }
+
+  if (!html.includes('id="family-tree-build"')) {
+    const buildTitle = build.deployedAt
+      ? `Build ${build.sha} · deployed ${build.deployedAt}`
+      : `Build ${build.sha}`;
+    const badge = `<div id="family-tree-build" title="${escapeHtml(buildTitle)}" style="position:fixed;right:10px;bottom:8px;z-index:9999;font:10px/1.2 Inter,sans-serif;color:#8b8b84;opacity:.72;pointer-events:none;direction:ltr">v ${escapeHtml(build.short)}</div>`;
+    html = html.replace('</body>', `${badge}\n</body>`);
+  }
+
+  const headers = new Headers(assetResponse.headers);
   headers.delete('Content-Length');
   headers.set('Content-Type', 'text/html; charset=UTF-8');
-  return new Response(refinedHtml, {
-    status: response.status,
-    statusText: response.statusText,
+  headers.set('Cache-Control', 'no-store');
+  headers.set('X-Family-Tree-Build', build.short);
+  return new Response(html, {
+    status: assetResponse.status,
+    statusText: assetResponse.statusText,
     headers
   });
 }
@@ -242,6 +248,10 @@ export default {
       }
     }
 
+    if (!url.pathname.startsWith('/api/')) {
+      return handleFrontendAsset(request, env);
+    }
+
     const effectiveRequest = await normalizeGraphMutationRequest(request, url);
     let response = await worker.fetch(effectiveRequest, env, ctx);
 
@@ -256,6 +266,6 @@ export default {
       }
     }
 
-    return injectGraphResilience(response, env);
+    return response;
   }
 };
