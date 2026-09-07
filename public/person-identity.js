@@ -1,5 +1,5 @@
 // Shared person-name normalization and collision disambiguation for every person picker.
-// Derived entirely from the canonical graph and rebuilt only when relevant graph data changes.
+// Derived from the canonical GraphStore document/indexes and rebuilt only when relevant data changes.
 (() => {
     if (window.FamilyPersonIdentity) return;
 
@@ -76,7 +76,6 @@
         const children = [...(indexes.childrenByParent.get(person.id) || [])].sort(byRelatedName);
         const spouses = [...(indexes.spousesByPerson.get(person.id) || [])].sort(byRelatedName);
 
-        // Prefer relationship context; all wording is neutral with respect to the person's gender.
         for (const parentId of parents) push(`הורה: ${relatedName(parentId)}`);
         if (parents.length > 1) push(`הורים: ${parents.map(relatedName).join(', ')}`);
         for (const childId of children) push(`הורה של ${relatedName(childId)}`);
@@ -93,8 +92,6 @@
         if (birthPlace) push(`מקום לידה: ${birthPlace}`);
         if (residence) push(`מגורים: ${residence}`);
 
-        // Pathological final fallback. This is intentionally last because internal IDs are
-        // implementation details, but it guarantees that every picker can distinguish rows.
         push(`מזהה: ${person.id}`);
         return candidates;
     }
@@ -137,16 +134,7 @@
         }));
     }
 
-    function build(graph) {
-        const people = (Array.isArray(graph?.people) ? graph.people : [])
-            .filter(person => person && typeof person.id === 'string' && person.id)
-            .map(person => ({ ...person, name: normalizePersonName(person.name) }));
-        const relationships = Array.isArray(graph?.relationships) ? graph.relationships : [];
-
-        peopleById = new Map(people.map(person => [person.id, person]));
-        labelsById = new Map();
-        collisionIds = new Set();
-
+    function fallbackIndexes(relationships) {
         const indexes = {
             parentsByChild: new Map(),
             childrenByParent: new Map(),
@@ -161,6 +149,19 @@
                 addSet(indexes.spousesByPerson, relation.person2Id, relation.person1Id);
             }
         }
+        return indexes;
+    }
+
+    function build(graph, sharedIndexes = null) {
+        const people = (Array.isArray(graph?.people) ? graph.people : [])
+            .filter(person => person && typeof person.id === 'string' && person.id)
+            .map(person => ({ ...person, name: normalizePersonName(person.name) }));
+        const relationships = Array.isArray(graph?.relationships) ? graph.relationships : [];
+
+        peopleById = new Map(people.map(person => [person.id, person]));
+        labelsById = new Map();
+        collisionIds = new Set();
+        const indexes = sharedIndexes || fallbackIndexes(relationships);
 
         const groups = new Map();
         for (const person of people) {
@@ -187,11 +188,11 @@
         }
     }
 
-    function setGraph(graph) {
+    function setGraph(graph, indexes = null) {
         const nextSignature = relevantSignature(graph);
         if (nextSignature === graphSignature) return false;
         graphSignature = nextSignature;
-        build(graph);
+        build(graph, indexes);
         if (typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
             window.dispatchEvent(new CustomEvent('family-person-disambiguation-updated'));
         }
@@ -217,9 +218,9 @@
         return normalizePersonName(`${item.name} ${item.qualifier}`);
     }
 
-    function refreshFromCache() {
-        const entry = window.FamilyGraphCache?.load?.();
-        if (entry?.graph) setGraph(entry.graph);
+    function refreshFromStore() {
+        const snapshot = window.FamilyGraphStore?.snapshot?.();
+        if (snapshot?.graph) setGraph(snapshot.graph, snapshot.indexes);
     }
 
     window.FamilyPersonIdentity = Object.freeze({
@@ -228,11 +229,9 @@
         describe,
         needsDisambiguation,
         searchText,
-        refreshFromCache
+        refreshFromStore
     });
 
-    // Normalize interactive name edits before any existing pane/card blur-save handler sees
-    // the value. This gives every current name editor one canonical whitespace rule.
     if (typeof document !== 'undefined') {
         document.addEventListener('focusout', event => {
             const target = event.target;
@@ -245,10 +244,8 @@
     }
 
     if (typeof window.addEventListener === 'function') {
-        window.addEventListener('family-graph-fetch', refreshFromCache);
-        window.addEventListener('family-graph-synced', refreshFromCache);
-        window.addEventListener('family-person-pane-saved', () => queueMicrotask(refreshFromCache));
+        window.addEventListener('family-graph-store-changed', refreshFromStore);
     }
 
-    refreshFromCache();
+    refreshFromStore();
 })();
