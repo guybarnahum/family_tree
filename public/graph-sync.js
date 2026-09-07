@@ -19,8 +19,6 @@
     const POINTER_MOVE_THROTTLE_MS = 1000;
     const REVISION_SESSION_KEY = 'family-tree.data-revision.v1';
 
-    // graph-resilience.js is already installed when this file loads. Keep that fetch wrapper
-    // as the transport beneath revision checks and mutation observation.
     const baseFetch = window.fetch.bind(window);
     const sessionStartedAt = Date.now();
     let lastActivityAt = Date.now();
@@ -43,7 +41,9 @@
     let pendingRevision = null;
     let pendingReason = '';
     let reconcileSerial = 0;
+    let mutationTokenSerial = 0;
     let lastMismatchRevision = null;
+    const suppressionSeen = new Map();
 
     const initialCache = Cache.load();
 
@@ -76,6 +76,8 @@
         revisionLayouts: 0,
         dataOnlyReconciliations: 0,
         suppressedLayouts: 0,
+        mutationSuppressedLayouts: 0,
+        noopResizeLayoutsSuppressed: 0,
         reconcileErrors: 0,
         graphNetworkFetches: 0,
         graphCacheHits: 0,
@@ -233,12 +235,45 @@
         return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     }
 
+    function settleRenderWindow() {
+        return Promise.race([
+            twoAnimationFrames(),
+            new Promise(resolve => setTimeout(resolve, 140))
+        ]);
+    }
+
     function clearReconcileTokenLater(token) {
         setTimeout(() => {
             if (window.__familyRevisionReconcileToken === token) {
                 window.__familyRevisionReconcileToken = null;
             }
         }, 320);
+    }
+
+    function armGraphMutationLayoutGuard() {
+        const now = performance.now();
+        let token = window.__familyGraphMutationLayoutToken;
+        if (!token || token.phase !== 'render' || !Number.isFinite(token.until) || now > token.until) {
+            token = {
+                id: `mutation-${++mutationTokenSerial}`,
+                kind: 'mutation',
+                phase: 'render',
+                until: now + 2000,
+                layoutCount: 0,
+                layoutSignature: '',
+                suppressedLayouts: 0
+            };
+            window.__familyGraphMutationLayoutToken = token;
+        } else {
+            token.until = now + 2000;
+        }
+
+        const expected = token;
+        setTimeout(() => {
+            if (window.__familyGraphMutationLayoutToken !== expected) return;
+            if (performance.now() <= expected.until) return;
+            window.__familyGraphMutationLayoutToken = null;
+        }, 2100);
     }
 
     async function reconcileNow() {
@@ -256,7 +291,8 @@
         metrics.lastReconcileReason = reason;
 
         const token = {
-            id: ++reconcileSerial,
+            id: `revision-${++reconcileSerial}`,
+            kind: 'revision',
             phase: 'fetch',
             until: Infinity,
             layoutCount: 0,
@@ -275,8 +311,6 @@
             if (directLoadTree) {
                 await directLoadTree(null, false);
             } else if (typeof window.startFamilyGraph === 'function') {
-                // Startup-only fallback. Under normal operation DOMContentLoaded captured the
-                // direct graph-view loader before any refinement wrappers were installed.
                 await window.startFamilyGraph();
             } else {
                 const response = await baseFetch('/api/graph', { cache: 'no-store' });
@@ -290,11 +324,11 @@
                 Cache.save(graph, { revision });
             }
 
-            // graph-view schedules its layout with requestAnimationFrame. Arm the duplicate
-            // layout guard after the fetch/load promise resolves but before that frame runs.
+            // graph-view schedules layout with requestAnimationFrame. Arm the duplicate-layout
+            // guard after the fetch/load promise resolves but before that frame runs.
             token.phase = 'render';
             token.until = performance.now() + 280;
-            await twoAnimationFrames();
+            await settleRenderWindow();
 
             const refreshed = Cache.load();
             if (!refreshed || refreshed.stale) {
@@ -312,7 +346,6 @@
                 (!!beforeDataSignature && !!afterDataSignature && beforeDataSignature !== afterDataSignature);
             if (rendered) metrics.revisionLayouts += 1;
             else metrics.dataOnlyReconciliations += 1;
-            metrics.suppressedLayouts += token.suppressedLayouts || 0;
 
             window.dispatchEvent(new CustomEvent('family-graph-synced', {
                 detail: {
@@ -333,8 +366,6 @@
         } catch (error) {
             metrics.reconcileErrors += 1;
             metrics.lastRevisionError = String(error?.message || error);
-            // Do not acknowledge a revision that we failed to reconcile. Keep the newest target
-            // pending so a later check/focus/retry can catch up without losing changes.
             if (!pendingRevision || targetRevision > pendingRevision) pendingRevision = targetRevision;
             if (!pendingReason) pendingReason = reason;
             showRevisionFailure(error);
@@ -368,8 +399,6 @@
             : lastReconcileAt + RECONCILE_MIN_INTERVAL_MS;
         const dueAt = Math.max(now, earliest);
 
-        // Keep an already scheduled earlier reconciliation; newer revisions simply replace the
-        // pending target and will be folded into that one fetch/render.
         if (reconcileTimer && nextReconcileAt && nextReconcileAt <= dueAt) {
             emitMetrics();
             return;
@@ -440,8 +469,8 @@
             } else {
                 lastMismatchRevision = null;
                 // Dirty/stale means a local graph write has not yet been folded into the cache,
-                // or a prior authoritative read failed. Do not erase the flag merely because
-                // the scalar revision matches; schedule one canonical reconciliation instead.
+                // or a prior authoritative read failed. Matching scalar revisions must not erase
+                // that evidence; schedule one canonical reconciliation instead.
                 if (cached?.dirty || cached?.stale) {
                     queueReconciliation(serverRevision, cached.dirty ? 'local-dirty' : 'stale-cache', {
                         immediate: reason === 'retry'
@@ -534,6 +563,10 @@
             if (mutation.scope === 'graph') {
                 Cache.markDirty(revision);
                 metrics.graphMutations += 1;
+                // Structural operations often consist of several writes followed by one
+                // loadTree(). Keep all duplicate refinement layouts in that burst behind one
+                // short token; a genuinely different dataSignature is still allowed through.
+                armGraphMutationLayoutGuard();
             }
             metrics.dataMutations += 1;
             metrics.lastMutationAt = Date.now();
@@ -584,8 +617,6 @@
         const revision = finiteRevision(detail.revision);
         if (revision) {
             metrics.serverRevision = Math.max(metrics.serverRevision || 0, revision);
-            // A successful authoritative graph fetch is itself a reconciliation point. Cache
-            // hits do not prove that the server is still at the cached revision.
             if (detail.source === 'network') {
                 knownRevision = revision;
                 writeSessionRevision(revision);
@@ -595,12 +626,22 @@
     });
 
     window.addEventListener('family-revision-layout-suppressed', event => {
+        const kind = String(event.detail?.kind || 'revision');
+        const tokenId = String(event.detail?.tokenId || 'unknown');
         const count = Number(event.detail?.suppressedLayouts);
-        if (Number.isFinite(count)) {
-            // The reconciliation token reports the cumulative count; the final reconciliation
-            // accounting records it exactly. Emit metrics here only for live debug visibility.
-            emitMetrics();
-        }
+        if (!Number.isFinite(count)) return;
+        const key = `${kind}:${tokenId}`;
+        const previous = suppressionSeen.get(key) || 0;
+        const delta = Math.max(0, count - previous);
+        suppressionSeen.set(key, count);
+        if (kind === 'mutation') metrics.mutationSuppressedLayouts += delta;
+        else metrics.suppressedLayouts += delta;
+        emitMetrics();
+    });
+
+    window.addEventListener('family-noop-resize-layout-suppressed', () => {
+        metrics.noopResizeLayoutsSuppressed += 1;
+        emitMetrics();
     });
 
     for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart']) {
