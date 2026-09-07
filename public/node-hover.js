@@ -179,6 +179,7 @@
         appendScript('/node-face-footprint.js', 'data-family-node-face-footprint', build);
         appendScript('/parent-limit.js', 'data-family-parent-limit', build);
         appendScript('/union-child-actions.js', 'data-family-union-child-actions', build);
+        appendScript('/root-context-refinement.js', 'data-family-root-context-refinement', build);
         appendScript('/person-pane-position.js', 'data-family-person-pane-position', build);
         appendScript('/mobile-chrome.js', 'data-family-mobile-chrome', build);
         appendScript('/slice-a-polish.js', 'data-family-slice-a-polish', build);
