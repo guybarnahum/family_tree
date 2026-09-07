@@ -1,14 +1,16 @@
-// Cheap stale detection for all family data. A one-row D1 revision check runs every 5s while
-// the user is active, every 15m while the visible page is idle, and never while blurred/hidden.
-// Revision discovery is intentionally faster than UI reconciliation: remote changes are
-// coalesced and the page catches up at most once every 30s during a burst of edits.
+// M3 revision synchronization for the canonical FamilyGraphStore.
+//
+// The revision endpoint remains cheap and frequent while graph reconciliation is coalesced.
+// Unlike the retired M1 architecture, sync does not arm layout tokens, wait for RAF settle
+// windows, or infer duplicate-layout suppression: graph-view already awaits the one
+// RenderController generation when topology actually changes.
 (() => {
     if (window.FamilyGraphSync) return;
 
-    const Cache = window.FamilyGraphCache;
+    const Store = window.FamilyGraphStore;
     const Status = window.FamilyGraphStatus;
-    if (!Cache) {
-        console.warn('Graph sync cache dependency did not load');
+    if (!Store) {
+        console.warn('Graph sync store dependency did not load');
         return;
     }
 
@@ -19,6 +21,8 @@
     const POINTER_MOVE_THROTTLE_MS = 1000;
     const REVISION_SESSION_KEY = 'family-tree.data-revision.v1';
 
+    // GraphStore already owns /api/graph reads. Sync wraps that fetch facade only to observe
+    // successful mutations and shared revision headers; GET behavior remains Store-owned.
     const baseFetch = window.fetch.bind(window);
     const sessionStartedAt = Date.now();
     let lastActivityAt = Date.now();
@@ -29,26 +33,16 @@
     let started = false;
     let revisionFailureVisible = false;
 
-    // Capture graph-view's direct loadTree before late layout refinements wrap it. Remote
-    // reconciliation can then update the canonical graph once without walking the historical
-    // loadTree wrapper chain that used to multiply layouts.
-    let directLoadTree = null;
-
     let reconcileTimer = null;
     let nextReconcileAt = null;
     let reconcileInFlight = false;
     let lastReconcileAt = 0;
     let pendingRevision = null;
     let pendingReason = '';
-    let reconcileSerial = 0;
-    let mutationTokenSerial = 0;
     let lastMismatchRevision = null;
-    const suppressionSeen = new Map();
-
-    const initialCache = Cache.load();
 
     function finiteRevision(value) {
-        return Cache.finiteRevision?.(value) || null;
+        return Store.finiteRevision?.(value) || null;
     }
 
     function readSessionRevision() {
@@ -56,28 +50,25 @@
         catch (_) { return null; }
     }
 
-    function writeSessionRevision(revision) {
-        const value = finiteRevision(revision);
-        if (!value) return;
-        try { sessionStorage.setItem(REVISION_SESSION_KEY, String(value)); }
+    function writeSessionRevision(value) {
+        const revision = finiteRevision(value);
+        if (!revision) return;
+        try { sessionStorage.setItem(REVISION_SESSION_KEY, String(revision)); }
         catch (_) {}
     }
 
-    let knownRevision = readSessionRevision() || initialCache?.revision || null;
+    const initialStore = Store.snapshot();
+    let knownRevision = readSessionRevision() || initialStore.revision || null;
 
     const metrics = {
         revisionChecks: 0,
         revisionChanges: 0,
         bootstrapRefreshes: 0,
-        stateRepairs: 0,
         revisionErrors: 0,
         reconciliations: 0,
         coalescedRevisionChanges: 0,
         revisionLayouts: 0,
         dataOnlyReconciliations: 0,
-        suppressedLayouts: 0,
-        mutationSuppressedLayouts: 0,
-        noopResizeLayoutsSuppressed: 0,
         reconcileErrors: 0,
         graphNetworkFetches: 0,
         graphCacheHits: 0,
@@ -98,7 +89,7 @@
         lastReconcileAt: null,
         lastReconcileRevision: null,
         lastReconcileReason: '',
-        serverRevision: initialCache?.serverRevision || initialCache?.revision || null
+        serverRevision: initialStore.serverRevision || initialStore.revision || null
     };
 
     function pageAvailable() {
@@ -116,25 +107,27 @@
         return null;
     }
 
-    function cacheSnapshot() {
-        const entry = Cache.load();
+    function storeSummary() {
+        const current = Store.snapshot();
         return {
-            present: !!entry,
-            savedAt: entry?.savedAt || null,
-            ageMs: entry ? Cache.ageMs(entry) : null,
-            revision: entry?.revision || null,
-            serverRevision: entry?.serverRevision || null,
-            stale: !!entry?.stale,
-            dirty: !!entry?.dirty,
-            people: entry?.graph?.people?.length || 0,
-            relationships: entry?.graph?.relationships?.length || 0
+            present: !!current.graph,
+            savedAt: current.savedAt || null,
+            ageMs: current.graph ? Store.ageMs(current) : null,
+            revision: current.revision || null,
+            serverRevision: current.serverRevision || null,
+            stale: !!current.stale,
+            dirty: !!current.dirty,
+            people: current.graph?.people?.length || 0,
+            relationships: current.graph?.relationships?.length || 0,
+            generation: current.generation || 0,
+            source: current.source || ''
         };
     }
 
     function snapshot() {
         const now = Date.now();
         const mode = modeAt(now);
-        const cache = cacheSnapshot();
+        const store = storeSummary();
         return {
             ...metrics,
             mode,
@@ -157,10 +150,12 @@
             reconcileInFlight,
             sessionStartedAt,
             sessionAgeMs: now - sessionStartedAt,
-            cache,
+            store,
+            // Compatibility shape for the existing F1 tray; M3 debug labels call this Store.
+            cache: store,
             estimatedRevisionRowsRead: metrics.revisionChecks,
             estimatedFullGraphRowsRead: metrics.graphNetworkFetches *
-                Math.max(0, cache.people + cache.relationships + 1)
+                Math.max(0, store.people + store.relationships + 1)
         };
     }
 
@@ -202,15 +197,15 @@
 
     function showRevisionFailure(error) {
         if (!Status) return;
-        const cached = Cache.load();
-        if (!cached) return;
+        const current = Store.snapshot();
+        if (!current.graph) return;
         const classified = Status.classify(error);
         Status.show({
             kind: classified.kind,
             mode: 'banner',
-            savedAt: cached.savedAt,
+            savedAt: current.savedAt,
             retry: () => checkRevision('retry'),
-            title: `מוצג עותק שמור ${Status.ageLabel(cached.savedAt)}`,
+            title: `מוצג עותק שמור ${Status.ageLabel(current.savedAt)}`,
             description: classified.kind === 'quota'
                 ? 'מסד הנתונים הגיע למגבלת השימוש; העץ המוצג הוא מהטעינה האחרונה.'
                 : 'לא ניתן לבדוק כרגע אם העץ השתנה; מוצג העותק האחרון שנשמר.',
@@ -219,61 +214,30 @@
         revisionFailureVisible = true;
     }
 
-    function captureDirectLoader() {
-        try {
-            if (typeof loadTree === 'function') directLoadTree = loadTree;
-        } catch (_) {}
-    }
+    async function reconcileGraph(targetRevision, reason) {
+        // The store marks the document stale, so graph-view's next /api/graph read is exactly
+        // one authoritative network refresh. All prepare stages then see that same Store graph.
+        Store.markStale(targetRevision);
+        const beforeDataSignature = typeof dataSignature === 'string' ? dataSignature : '';
+        let result = null;
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', captureDirectLoader, { once: true });
-    } else {
-        queueMicrotask(captureDirectLoader);
-    }
-
-    function twoAnimationFrames() {
-        return new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    }
-
-    function settleRenderWindow() {
-        return Promise.race([
-            twoAnimationFrames(),
-            new Promise(resolve => setTimeout(resolve, 140))
-        ]);
-    }
-
-    function clearReconcileTokenLater(token) {
-        setTimeout(() => {
-            if (window.__familyRevisionReconcileToken === token) {
-                window.__familyRevisionReconcileToken = null;
-            }
-        }, 320);
-    }
-
-    function armGraphMutationLayoutGuard() {
-        const now = performance.now();
-        let token = window.__familyGraphMutationLayoutToken;
-        if (!token || token.phase !== 'render' || !Number.isFinite(token.until) || now > token.until) {
-            token = {
-                id: `mutation-${++mutationTokenSerial}`,
-                kind: 'mutation',
-                phase: 'render',
-                until: now + 2000,
-                layoutCount: 0,
-                layoutSignature: '',
-                suppressedLayouts: 0
-            };
-            window.__familyGraphMutationLayoutToken = token;
+        if (typeof loadTree === 'function') {
+            result = await loadTree(null, false);
+        } else if (typeof window.startFamilyGraph === 'function') {
+            result = await window.startFamilyGraph();
         } else {
-            token.until = now + 2000;
+            await Store.read({ refresh: true, authoritative: false, reason: 'sync-reconcile' });
         }
 
-        const expected = token;
-        setTimeout(() => {
-            if (window.__familyGraphMutationLayoutToken !== expected) return;
-            if (performance.now() <= expected.until) return;
-            window.__familyGraphMutationLayoutToken = null;
-        }, 2100);
+        const refreshed = Store.snapshot();
+        if (!refreshed.graph || refreshed.stale) {
+            throw new Error('Graph reconciliation did not obtain a fresh canonical graph');
+        }
+
+        const afterDataSignature = typeof dataSignature === 'string' ? dataSignature : '';
+        const rendered = !!result?.committed ||
+            (!!beforeDataSignature && !!afterDataSignature && beforeDataSignature !== afterDataSignature);
+        return { refreshed, rendered };
     }
 
     async function reconcileNow() {
@@ -289,61 +253,15 @@
         metrics.lastReconcileAt = lastReconcileAt;
         metrics.lastReconcileRevision = targetRevision;
         metrics.lastReconcileReason = reason;
-
-        const token = {
-            id: `revision-${++reconcileSerial}`,
-            kind: 'revision',
-            phase: 'fetch',
-            until: Infinity,
-            layoutCount: 0,
-            layoutSignature: '',
-            suppressedLayouts: 0
-        };
-        window.__familyRevisionReconcileToken = token;
-        const beforeDataSignature = typeof dataSignature === 'string' ? dataSignature : '';
-
         emitMetrics();
+
         try {
-            // Mark stale only when the coalesced reconciliation actually runs. Merely seeing a
-            // newer revision must never make incidental /api/graph callers redraw early.
-            Cache.markStale(targetRevision);
-
-            if (directLoadTree) {
-                await directLoadTree(null, false);
-            } else if (typeof window.startFamilyGraph === 'function') {
-                await window.startFamilyGraph();
-            } else {
-                const response = await baseFetch('/api/graph', { cache: 'no-store' });
-                if (!response.ok) throw revisionError(await response.text(), response.status);
-                const graph = await response.json();
-                if (!Cache.isGraphDocument(graph)) throw new Error('Refreshed graph was malformed');
-                const revision = finiteRevision(
-                    response.headers.get('X-Family-Revision') ||
-                    response.headers.get('X-Family-Graph-Revision')
-                ) || targetRevision;
-                Cache.save(graph, { revision });
-            }
-
-            // graph-view schedules layout with requestAnimationFrame. Arm the duplicate-layout
-            // guard after the fetch/load promise resolves but before that frame runs.
-            token.phase = 'render';
-            token.until = performance.now() + 280;
-            await settleRenderWindow();
-
-            const refreshed = Cache.load();
-            if (!refreshed || refreshed.stale) {
-                throw new Error('Graph reconciliation did not obtain a fresh canonical graph');
-            }
-
+            const { refreshed, rendered } = await reconcileGraph(targetRevision, reason);
             const reconciledRevision = refreshed.revision || targetRevision;
             knownRevision = reconciledRevision;
             writeSessionRevision(knownRevision);
             metrics.serverRevision = Math.max(metrics.serverRevision || 0, reconciledRevision);
             metrics.reconciliations += 1;
-
-            const afterDataSignature = typeof dataSignature === 'string' ? dataSignature : '';
-            const rendered = (token.layoutCount || 0) > 0 ||
-                (!!beforeDataSignature && !!afterDataSignature && beforeDataSignature !== afterDataSignature);
             if (rendered) metrics.revisionLayouts += 1;
             else metrics.dataOnlyReconciliations += 1;
 
@@ -353,8 +271,7 @@
                     targetRevision,
                     reason: 'coalesced-revision',
                     sourceReason: reason,
-                    rendered,
-                    suppressedLayouts: token.suppressedLayouts || 0
+                    rendered
                 }
             }));
 
@@ -371,17 +288,14 @@
             showRevisionFailure(error);
             return null;
         } finally {
-            token.phase = 'render';
-            token.until = Math.max(token.until || 0, performance.now() + 120);
-            clearReconcileTokenLater(token);
             reconcileInFlight = false;
             if (pendingRevision && pageAvailable()) queueReconciliation(pendingRevision, pendingReason || 'coalesced');
             emitMetrics();
         }
     }
 
-    function queueReconciliation(revision, reason = 'remote-revision', { immediate = false } = {}) {
-        const next = finiteRevision(revision);
+    function queueReconciliation(value, reason = 'remote-revision', { immediate = false } = {}) {
+        const next = finiteRevision(value);
         if (!next) return;
 
         if (pendingRevision && next !== pendingRevision) metrics.coalescedRevisionChanges += 1;
@@ -438,46 +352,44 @@
             }
 
             const payload = await response.json();
-            const serverRevision = finiteRevision(
+            const server = finiteRevision(
                 payload?.revision ||
                 response.headers.get('X-Family-Revision') ||
                 response.headers.get('X-Family-Graph-Revision')
             );
-            if (!serverRevision) throw new Error('Graph revision response was invalid');
+            if (!server) throw new Error('Graph revision response was invalid');
 
-            metrics.serverRevision = serverRevision;
+            metrics.serverRevision = server;
             metrics.lastRevisionLatencyMs = Math.round(performance.now() - startedAt);
+            Store.acknowledgeRevision(server);
             if (revisionFailureVisible) {
                 Status?.clear();
                 revisionFailureVisible = false;
             }
 
-            const cached = Cache.load();
-            if (!knownRevision) knownRevision = cached?.revision || null;
+            const current = Store.snapshot();
+            if (!knownRevision) knownRevision = current.revision || null;
 
             if (!knownRevision) {
                 metrics.bootstrapRefreshes += 1;
-                queueReconciliation(serverRevision, 'bootstrap', { immediate: true });
-            } else if (knownRevision !== serverRevision) {
-                if (lastMismatchRevision !== serverRevision) {
+                queueReconciliation(server, 'bootstrap', { immediate: true });
+            } else if (knownRevision !== server) {
+                if (lastMismatchRevision !== server) {
                     metrics.revisionChanges += 1;
-                    lastMismatchRevision = serverRevision;
+                    lastMismatchRevision = server;
                 }
-                queueReconciliation(serverRevision, reason === 'retry' ? 'retry' : 'remote-revision', {
+                queueReconciliation(server, reason === 'retry' ? 'retry' : 'remote-revision', {
                     immediate: reason === 'retry'
                 });
             } else {
                 lastMismatchRevision = null;
-                // Dirty/stale means a local graph write has not yet been folded into the cache,
-                // or a prior authoritative read failed. Matching scalar revisions must not erase
-                // that evidence; schedule one canonical reconciliation instead.
-                if (cached?.dirty || cached?.stale) {
-                    queueReconciliation(serverRevision, cached.dirty ? 'local-dirty' : 'stale-cache', {
+                if (current.dirty || current.stale) {
+                    queueReconciliation(server, current.dirty ? 'local-dirty' : 'stale-store', {
                         immediate: reason === 'retry'
                     });
                 }
             }
-            return serverRevision;
+            return server;
         } catch (error) {
             metrics.revisionErrors += 1;
             metrics.lastRevisionLatencyMs = Math.round(performance.now() - startedAt);
@@ -544,33 +456,25 @@
         }
     }
 
-    // Every successful user-visible data write receives the shared revision header. A write in
-    // this tab is already known locally, so acknowledge that revision here rather than waiting
-    // for the next poll to rediscover our own change. Only graph writes dirty the graph cache.
     window.fetch = async function graphSyncFetch(input, init) {
         const mutation = mutationInfo(input, init);
         const response = await baseFetch(input, init);
         if (response.ok && mutation) {
-            const revision = finiteRevision(
+            const nextRevision = finiteRevision(
                 response.headers.get('X-Family-Revision') ||
                 response.headers.get('X-Family-Graph-Revision')
             );
-            if (revision) {
-                knownRevision = revision;
-                writeSessionRevision(revision);
-                metrics.serverRevision = revision;
+            if (nextRevision) {
+                knownRevision = nextRevision;
+                writeSessionRevision(nextRevision);
+                metrics.serverRevision = nextRevision;
             }
-            if (mutation.scope === 'graph') {
-                Cache.markDirty(revision);
-                metrics.graphMutations += 1;
-                // Structural operations often consist of several writes followed by one
-                // loadTree(). Keep all duplicate refinement layouts in that burst behind one
-                // short token; a genuinely different dataSignature is still allowed through.
-                armGraphMutationLayoutGuard();
-            }
+
+            Store.noteMutation({ scope: mutation.scope === 'graph' ? 'graph' : 'data', revision: nextRevision });
+            if (mutation.scope === 'graph') metrics.graphMutations += 1;
             metrics.dataMutations += 1;
             metrics.lastMutationAt = Date.now();
-            metrics.lastMutationRevision = revision;
+            metrics.lastMutationRevision = nextRevision;
             metrics.lastMutationMethod = mutation.method;
             metrics.lastMutationPath = mutation.path;
             metrics.lastMutationScope = mutation.scope;
@@ -579,68 +483,50 @@
         return response;
     };
 
-    // Right-pane edits already update the canonical graph object in memory. Once the PATCH
-    // succeeds, mirror that known change into the persistent cache and advance it to the
-    // returned revision. No graph download or redraw is necessary.
+    // Pane edits already know their exact local delta. Fold it directly into GraphStore and
+    // clear the dirty flag at the mutation revision; there is no reason to download the graph.
     window.addEventListener('family-person-pane-saved', event => {
         const detail = event.detail || {};
-        const revision = finiteRevision(metrics.lastMutationRevision);
-        const entry = Cache.load();
-        if (!entry || !revision || !detail.id) return;
-        const person = entry.graph?.people?.find(candidate => candidate.id === detail.id);
-        if (!person) return;
+        const nextRevision = finiteRevision(metrics.lastMutationRevision);
+        if (!nextRevision || !detail.id) return;
 
         if (detail.field === 'name') {
-            person.name = detail.value;
+            Store.updatePerson(detail.id, { name: detail.value }, {
+                revision: nextRevision,
+                reason: 'pane-name-saved'
+            });
         } else if (detail.field === 'metadata' && detail.metadata && typeof detail.metadata === 'object') {
-            person.metadata = { ...detail.metadata };
+            Store.updatePerson(detail.id, { metadata: { ...detail.metadata } }, {
+                revision: nextRevision,
+                reason: 'pane-metadata-saved'
+            });
         } else {
             return;
         }
 
-        Cache.save(entry.graph, { revision });
-        knownRevision = revision;
-        writeSessionRevision(revision);
-        metrics.serverRevision = revision;
+        knownRevision = nextRevision;
+        writeSessionRevision(nextRevision);
+        metrics.serverRevision = nextRevision;
         emitMetrics();
     });
 
-    window.addEventListener('family-graph-fetch', event => {
+    window.addEventListener('family-graph-store-fetch', event => {
         const detail = event.detail || {};
         metrics.lastGraphFetchAt = detail.at || Date.now();
         metrics.lastGraphFetchSource = detail.source || '';
         if (Number.isFinite(detail.latencyMs)) metrics.lastGraphFetchLatencyMs = detail.latencyMs;
         if (detail.source === 'network') metrics.graphNetworkFetches += 1;
-        else if (detail.source === 'cache') metrics.graphCacheHits += 1;
+        else if (detail.source === 'store') metrics.graphCacheHits += 1;
         else if (detail.source === 'error') metrics.graphFetchErrors += 1;
 
-        const revision = finiteRevision(detail.revision);
-        if (revision) {
-            metrics.serverRevision = Math.max(metrics.serverRevision || 0, revision);
+        const nextRevision = finiteRevision(detail.revision);
+        if (nextRevision) {
+            metrics.serverRevision = Math.max(metrics.serverRevision || 0, nextRevision);
             if (detail.source === 'network') {
-                knownRevision = revision;
-                writeSessionRevision(revision);
+                knownRevision = nextRevision;
+                writeSessionRevision(nextRevision);
             }
         }
-        emitMetrics();
-    });
-
-    window.addEventListener('family-revision-layout-suppressed', event => {
-        const kind = String(event.detail?.kind || 'revision');
-        const tokenId = String(event.detail?.tokenId || 'unknown');
-        const count = Number(event.detail?.suppressedLayouts);
-        if (!Number.isFinite(count)) return;
-        const key = `${kind}:${tokenId}`;
-        const previous = suppressionSeen.get(key) || 0;
-        const delta = Math.max(0, count - previous);
-        suppressionSeen.set(key, count);
-        if (kind === 'mutation') metrics.mutationSuppressedLayouts += delta;
-        else metrics.suppressedLayouts += delta;
-        emitMetrics();
-    });
-
-    window.addEventListener('family-noop-resize-layout-suppressed', () => {
-        metrics.noopResizeLayoutsSuppressed += 1;
         emitMetrics();
     });
 
@@ -660,7 +546,6 @@
     function start() {
         if (started) return;
         started = true;
-        captureDirectLoader();
         if (pageAvailable()) void checkRevision('startup');
         else pause();
     }
