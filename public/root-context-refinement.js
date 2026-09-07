@@ -213,6 +213,7 @@
 
     window.FamilyRootContextRefinement = Object.freeze({
         refresh: queueApply,
+        refreshNow: apply,
         diagnostics: () => window.__familyRootContextDiagnostics || null
     });
 
