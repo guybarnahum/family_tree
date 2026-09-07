@@ -39,10 +39,12 @@
     }
 
     function currentRootId() {
-        const root = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
-        if (root?.dataset.nodeId) return root.dataset.nodeId;
+        // URL is the selection intent and graph-view updates it synchronously before replacing
+        // cards. Prefer it over a .graph-root class that can still belong to the prior frame.
         const fromUrl = new URL(window.location.href).searchParams.get('person');
         if (fromUrl) return fromUrl;
+        const root = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
+        if (root?.dataset.nodeId) return root.dataset.nodeId;
         try { return localStorage.getItem('family-tree.anchor-person'); }
         catch (_) { return null; }
     }
@@ -139,6 +141,16 @@
             for (const card of cardsLayer.querySelectorAll('.absolute-card[data-node-id]')) {
                 const id = card.dataset.nodeId;
 
+                // Selection always wins over contextual styling, even while the DOM is between
+                // root generations. graph-context can be inherited from graph-view's prior root
+                // and may not carry our familyRootContextForced marker.
+                if (id === rootId) {
+                    card.classList.remove('graph-context');
+                    delete card.dataset.familyRootContextForced;
+                    delete card.dataset.familyRootContextRole;
+                    continue;
+                }
+
                 // If this layer had forced contextual styling for a previous root, undo only
                 // our own override. A fresh graph-view render may still classify the card as
                 // contextual for some other reason.
@@ -195,6 +207,7 @@
     });
 
     window.addEventListener('family-graph-synced', queueApply);
+    window.addEventListener('family-graph-render-stable', queueApply);
     window.addEventListener('family-person-pane-saved', queueApply);
     window.addEventListener('popstate', queueApply);
 
