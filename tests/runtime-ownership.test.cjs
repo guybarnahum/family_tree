@@ -27,16 +27,16 @@ assert(bootstrap.includes("'/selection-controller.js'"), 'bootstrap must install
 assert(bootstrap.includes("'/visual-roles.js'"), 'bootstrap must install visual roles');
 assert(bootstrap.includes("'/graph-sync.js'"), 'bootstrap must own sync startup');
 assert(bootstrap.includes('await window.startFamilyGraph()'), 'bootstrap must explicitly start the graph');
-assert(
-  bootstrap.indexOf("'/visual-roles.js'") < bootstrap.indexOf('await window.startFamilyGraph()'),
-  'visual roles must be installed before the first graph render'
-);
-assert(
-  bootstrap.indexOf('await window.startFamilyGraph()') < bootstrap.indexOf("'/graph-sync.js'"),
-  'sync must start only after the first committed graph render'
-);
 assert(!bootstrap.includes("'/root-context-refinement.js'"), 'legacy root-context layer must not load');
 assert(!bootstrap.includes("'/root-selection-coherence.js'"), 'legacy selection repair layer must not load');
+
+const startBody = bootstrap.slice(bootstrap.indexOf('async function start()'));
+const layoutInstall = startBody.indexOf('await installLayoutStack()');
+const graphStart = startBody.indexOf('await window.startFamilyGraph()');
+const syncInstall = startBody.indexOf('await installSyncStack()');
+assert(layoutInstall >= 0 && graphStart >= 0 && syncInstall >= 0, 'bootstrap start sequence must be explicit');
+assert(layoutInstall < graphStart, 'final layout stack must install before first graph render');
+assert(graphStart < syncInstall, 'sync must start only after the first committed graph render');
 
 assert(entry.includes("const legacyGraphStart = '        loadTree(null, true);\\n';"));
 assert(entry.includes('runtime-bootstrap.js'));
