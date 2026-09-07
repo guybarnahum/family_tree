@@ -43,8 +43,6 @@
                 };
                 existing.addEventListener('load', done, { once: true });
                 existing.addEventListener('error', () => reject(new Error(`Unable to load ${src}`)), { once: true });
-                // Existing server-injected scripts execute before this bootstrap. If their
-                // installation marker is already visible, do not wait for an already-fired load.
                 queueMicrotask(() => {
                     if (existing.dataset.familyBootstrapLoaded === 'true' ||
                         existing.readyState === 'complete' || existing.readyState === 'loaded') done();
@@ -174,8 +172,6 @@
             'planar router'
         );
 
-        // revision-layout-guard is still a safety rail in M1. It was loaded before graph-view
-        // and installs itself only after the final router becomes available.
         await waitFor(
             () => typeof layoutAndRender === 'function' && !!layoutAndRender.__familyRevisionLayoutGuard,
             'revision layout guard'
@@ -191,11 +187,10 @@
     }
 
     async function installSyncStack() {
-        // Never allow the startup revision check to become an alternate first renderer.
-        // Wait until the initial graph is committed, then load sync. Temporarily expose the
-        // graph-view loader captured before wrappers so graph-sync retains its existing direct
-        // reconciliation optimization; restore the authoritative final wrapper immediately.
-        await waitFor(() => document.readyState === 'complete', 'window load');
+        // The graph is already committed at this point. We only need parsing to be complete so
+        // graph-sync captures the direct loader immediately/microtask-safely; unrelated fonts,
+        // images, or CDN resources must not delay sync installation.
+        await waitFor(() => document.readyState !== 'loading', 'DOM parsing');
         const finalLoadTree = window.loadTree;
         try {
             if (directGraphLoadTree) {
