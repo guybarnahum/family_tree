@@ -2,6 +2,7 @@ import worker from './worker.js';
 import { handlePlacesApi } from './places.js';
 import { handleMediaApi } from './media.js';
 import { handleFacesApi } from './faces.js';
+import { normalizeParentUnions } from './graph-invariants.js';
 
 let graphRevisionSchemaPromise = null;
 
@@ -76,6 +77,27 @@ function isRevisionMutation(request, url) {
     url.pathname.startsWith('/api/media/') ||
     url.pathname === '/api/faces' ||
     url.pathname.startsWith('/api/faces/');
+}
+
+async function normalizeGraphMutationRequest(request, url) {
+  if (url.pathname !== '/api/graph' || request.method.toUpperCase() !== 'PUT') return request;
+  const contentType = request.headers.get('Content-Type') || '';
+  if (!contentType.includes('application/json')) return request;
+
+  try {
+    const payload = await request.clone().json();
+    const normalized = normalizeParentUnions(payload);
+    const headers = new Headers(request.headers);
+    headers.set('Content-Type', 'application/json');
+    headers.delete('Content-Length');
+    return new Request(request, {
+      headers,
+      body: JSON.stringify(normalized)
+    });
+  } catch (_) {
+    // Let worker.js return the canonical validation/parse error for malformed requests.
+    return request;
+  }
 }
 
 async function attachMutationRevision(response, env, request, url) {
@@ -226,11 +248,12 @@ export default {
       }
     }
 
-    let response = await worker.fetch(request, env, ctx);
+    const effectiveRequest = await normalizeGraphMutationRequest(request, url);
+    let response = await worker.fetch(effectiveRequest, env, ctx);
 
-    if (env.DB && response.ok && isRevisionMutation(request, url)) {
-      response = await attachMutationRevision(response, env, request, url);
-    } else if (env.DB && response.ok && url.pathname === '/api/graph' && request.method === 'GET') {
+    if (env.DB && response.ok && isRevisionMutation(effectiveRequest, url)) {
+      response = await attachMutationRevision(response, env, effectiveRequest, url);
+    } else if (env.DB && response.ok && url.pathname === '/api/graph' && effectiveRequest.method === 'GET') {
       try {
         const revision = await readGraphRevision(env);
         response = withRevisionHeader(response, revision);
