@@ -126,7 +126,7 @@ async function injectGraphResilience(response, env) {
   headers.set('Content-Type', 'text/html; charset=UTF-8');
   return new Response(refinedHtml, {
     status: response.status,
-    statusText: response.status.statusText,
+    statusText: response.statusText,
     headers
   });
 }
