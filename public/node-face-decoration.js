@@ -1,5 +1,5 @@
 // Slice F graph decoration: show a circular crop for the preferred (or fallback)
-// tagged face without changing card geometry or triggering a graph relayout.
+// tagged face. node-face-footprint.js accounts for the portrait's outside half-circle in layout.
 (() => {
     if (window.__familyNodeFaceDecorationInstalled) return;
     window.__familyNodeFaceDecorationInstalled = true;
@@ -15,7 +15,7 @@
     style.textContent = `
         #cards-layer .absolute-card .node-face-avatar {
             position: absolute;
-            left: -14px;
+            left: -20px;
             top: 50%;
             width: 40px;
             height: 40px;
@@ -30,7 +30,7 @@
             transform: translateY(-50%);
         }
         #cards-layer .absolute-card.graph-root .node-face-avatar {
-            left: -16px;
+            left: -22px;
             top: 50%;
             width: 44px;
             height: 44px;
