@@ -131,8 +131,6 @@ async function injectGraphResilience(response, env) {
     .replace(importExportPattern, '');
 
   const hasGraphResilience = html.includes('data-family-graph-resilience');
-  const hasGraphSync = html.includes('data-family-graph-sync');
-  const hasGraphDebug = html.includes('data-family-graph-debug');
   const hasRevisionLayoutGuard = html.includes('data-family-revision-layout-guard');
   const hasPersonIdentity = html.includes('data-family-person-identity');
   const hasPersonPickerLabels = html.includes('data-family-person-picker-labels');
@@ -156,12 +154,6 @@ async function injectGraphResilience(response, env) {
       : '',
     !hasGraphResilience
       ? `<script src="/graph-resilience.js?v=${encodeURIComponent(build)}" data-family-graph-resilience></script>`
-      : '',
-    !hasGraphSync
-      ? `<script src="/graph-sync.js?v=${encodeURIComponent(build)}" data-family-graph-sync></script>`
-      : '',
-    !hasGraphDebug
-      ? `<script src="/graph-debug.js?v=${encodeURIComponent(build)}" data-family-graph-debug></script>`
       : '',
     !hasRevisionLayoutGuard
       ? `<script src="/revision-layout-guard.js?v=${encodeURIComponent(build)}" data-family-revision-layout-guard></script>`
