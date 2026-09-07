@@ -6,7 +6,7 @@
     window.__familyVisualRolesInstalled = true;
 
     const cardsLayer = document.getElementById('cards-layer');
-    const Cache = window.FamilyGraphCache;
+    const Store = window.FamilyGraphStore;
     if (!cardsLayer) return;
 
     const style = document.createElement('style');
@@ -20,27 +20,6 @@
 
     let queued = false;
     let applying = false;
-
-    function addSet(map, key, value) {
-        if (!map.has(key)) map.set(key, new Set());
-        map.get(key).add(value);
-    }
-
-    function indexes(graph) {
-        const parentsByChild = new Map();
-        const childrenByParent = new Map();
-        const spousesByPerson = new Map();
-        for (const relation of graph?.relationships || []) {
-            if (relation.type === 'parent') {
-                addSet(parentsByChild, relation.person2Id, relation.person1Id);
-                addSet(childrenByParent, relation.person1Id, relation.person2Id);
-            } else if (relation.type === 'spouse') {
-                addSet(spousesByPerson, relation.person1Id, relation.person2Id);
-                addSet(spousesByPerson, relation.person2Id, relation.person1Id);
-            }
-        }
-        return { parentsByChild, childrenByParent, spousesByPerson };
-    }
 
     function currentRootId() {
         const selected = window.FamilySelectionController?.getSelectedPersonId?.();
@@ -81,17 +60,12 @@
         return [...aChildren].filter(id => bChildren.has(id));
     }
 
-    function rootContextPolicy(graph, rootId, graphIndexes) {
+    function rootContextPolicy(rootId, graphIndexes) {
         const { parentsByChild, childrenByParent, spousesByPerson } = graphIndexes;
         const rootSpouses = new Set(spousesByPerson.get(rootId) || []);
         const rootDescendants = descendants(rootId, childrenByParent);
         const rootSiblings = siblings(rootId, parentsByChild, childrenByParent);
-        const protectedIds = new Set([
-            rootId,
-            ...rootSpouses,
-            ...rootDescendants,
-            ...rootSiblings
-        ]);
+        const protectedIds = new Set([rootId, ...rootSpouses, ...rootDescendants, ...rootSiblings]);
         const context = new Set();
 
         for (const spouseId of rootSpouses) {
@@ -100,9 +74,7 @@
                 context.add(otherSpouseId);
                 for (const childId of sharedChildren(spouseId, otherSpouseId, childrenByParent)) {
                     context.add(childId);
-                    for (const descendantId of descendants(childId, childrenByParent)) {
-                        context.add(descendantId);
-                    }
+                    for (const descendantId of descendants(childId, childrenByParent)) context.add(descendantId);
                 }
             }
         }
@@ -130,9 +102,7 @@
 
         const queue = [];
         for (const spouseId of spousesByPerson.get(rootId) || []) {
-            for (const parentId of parentsByChild.get(spouseId) || []) {
-                queue.push({ id: parentId, depth: 1 });
-            }
+            for (const parentId of parentsByChild.get(spouseId) || []) queue.push({ id: parentId, depth: 1 });
         }
 
         const walked = new Set();
@@ -149,9 +119,7 @@
                 const spousePrevious = result.get(spouseId);
                 if (spousePrevious === undefined || depth < spousePrevious) result.set(spouseId, depth);
             }
-            for (const parentId of parentsByChild.get(id) || []) {
-                queue.push({ id: parentId, depth: depth + 1 });
-            }
+            for (const parentId of parentsByChild.get(id) || []) queue.push({ id: parentId, depth: depth + 1 });
         }
         return result;
     }
@@ -163,12 +131,17 @@
             const rootId = currentRootId();
             if (!rootId) return;
 
-            const graph = Cache?.load?.()?.graph || null;
-            const graphIndexes = indexes(graph);
-            const { context, rootSiblings } = graph
-                ? rootContextPolicy(graph, rootId, graphIndexes)
+            const snapshot = Store?.snapshot?.() || null;
+            const graphIndexes = snapshot?.indexes || {
+                parentsByChild: new Map(),
+                childrenByParent: new Map(),
+                spousesByPerson: new Map()
+            };
+            const hasGraph = !!snapshot?.graph;
+            const { context, rootSiblings } = hasGraph
+                ? rootContextPolicy(rootId, graphIndexes)
                 : { context: new Set(), rootSiblings: new Set() };
-            const spouseDepths = graph ? spouseAncestorDepths(rootId, graphIndexes) : new Map();
+            const spouseDepths = hasGraph ? spouseAncestorDepths(rootId, graphIndexes) : new Map();
             const roles = {};
 
             for (const card of cardsLayer.querySelectorAll('.absolute-card[data-node-id]')) {
@@ -211,19 +184,19 @@
                 roles[id] = card.dataset.familyVisualRole;
             }
 
-            const diagnostics = {
+            const appliedAt = new Date().toISOString();
+            window.__familyVisualRoleDiagnostics = {
                 rootId,
                 siblings: [...rootSiblings],
                 contextual: [...context],
                 roles,
-                appliedAt: new Date().toISOString()
+                appliedAt
             };
-            window.__familyVisualRoleDiagnostics = diagnostics;
             window.__familyRootContextDiagnostics = {
                 rootId,
                 siblings: [...rootSiblings],
                 contextual: [...context],
-                appliedAt: diagnostics.appliedAt
+                appliedAt
             };
         } finally {
             applying = false;
@@ -239,24 +212,18 @@
         });
     }
 
-    new MutationObserver(mutations => {
-        if (applying) return;
-        if (mutations.some(mutation => mutation.type === 'childList')) queueApply();
-    }).observe(cardsLayer, { childList: true, subtree: false });
-
+    // Card replacement is now communicated by RenderController/store/selection events rather
+    // than inferred by observing DOM child mutations.
     window.addEventListener('family-selection-changed', queueApply);
-    window.addEventListener('family-graph-synced', queueApply);
+    window.addEventListener('family-graph-store-changed', queueApply);
     window.addEventListener('family-person-pane-saved', queueApply);
-    window.addEventListener('family-graph-render-stable', apply);
+    window.addEventListener('family-graph-rendered', apply);
 
-    const api = Object.freeze({
+    window.FamilyVisualRoles = Object.freeze({
         refresh: queueApply,
         refreshNow: apply,
         diagnostics: () => window.__familyVisualRoleDiagnostics || null
     });
-    window.FamilyVisualRoles = api;
-    // Compatibility alias for modules/debugging that still know the old refinement name.
-    window.FamilyRootContextRefinement = api;
 
     queueApply();
 })();
