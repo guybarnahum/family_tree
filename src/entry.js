@@ -81,8 +81,13 @@ async function injectGraphResilience(response, env) {
   const hasGraphResilience = html.includes('data-family-graph-resilience');
   const hasGraphSync = html.includes('data-family-graph-sync');
   const hasGraphDebug = html.includes('data-family-graph-debug');
+  const hasPersonIdentity = html.includes('data-family-person-identity');
+  const hasPersonPickerLabels = html.includes('data-family-person-picker-labels');
   const hasMediaResilience = html.includes('data-family-media-resilience');
-  if (hasGraphResilience && hasGraphSync && hasGraphDebug && hasMediaResilience) {
+  if (
+    hasGraphResilience && hasGraphSync && hasGraphDebug &&
+    hasPersonIdentity && hasPersonPickerLabels && hasMediaResilience
+  ) {
     const headers = new Headers(response.headers);
     headers.delete('Content-Length');
     return new Response(html, {
@@ -98,6 +103,12 @@ async function injectGraphResilience(response, env) {
   const scripts = [
     !hasGraphResilience
       ? `<script src="/graph-cache.js?v=${encodeURIComponent(build)}" data-family-graph-cache></script>`
+      : '',
+    !hasPersonIdentity
+      ? `<script src="/person-identity.js?v=${encodeURIComponent(build)}" data-family-person-identity></script>`
+      : '',
+    !hasPersonPickerLabels
+      ? `<script src="/person-picker-labels.js?v=${encodeURIComponent(build)}" data-family-person-picker-labels></script>`
       : '',
     !hasGraphResilience
       ? `<script src="/graph-status.js?v=${encodeURIComponent(build)}" data-family-graph-status></script>`
