@@ -116,6 +116,8 @@ async function injectGraphResilience(response, env) {
   const legacyGraphPoll = `        // Poll for multi-client edits, but unchanged data does not cause a relayout.\n        setInterval(() => {\n            if (!isEditing) loadTree(null, false);\n        }, 5000);\n`;
   const legacyGraphStart = '        loadTree(null, true);\n';
   const importExportPattern = /\s*<script src="\/import-export\.js(?:\?[^\"]*)?"[^>]*><\/script>/;
+  const layoutRefinementPattern = /\s*<script src="\/layout-refinement\.js(?:\?[^\"]*)?"[^>]*><\/script>/;
+  const revisionGuardPattern = /\s*<script src="\/revision-layout-guard\.js(?:\?[^\"]*)?"[^>]*><\/script>/;
 
   let html = rawHtml
     .replace(
@@ -126,12 +128,14 @@ async function injectGraphResilience(response, env) {
       legacyGraphStart,
       '        // Initial graph rendering is started by runtime-bootstrap.js after the final stack is installed.\n'
     )
-    // worker.js still lists import-export for historical deployments. M1 moves it behind the
-    // deterministic bootstrap so it cannot start the graph before the final runtime is ready.
-    .replace(importExportPattern, '');
+    // worker.js still lists these historical refinements. M2 loads layout-refinement as an
+    // explicitly captured RenderController stage, and import/export behind the bootstrap.
+    .replace(importExportPattern, '')
+    .replace(layoutRefinementPattern, '')
+    // The M1 duplicate-layout guard is retired from the active M2 runtime.
+    .replace(revisionGuardPattern, '');
 
   const hasGraphResilience = html.includes('data-family-graph-resilience');
-  const hasRevisionLayoutGuard = html.includes('data-family-revision-layout-guard');
   const hasPersonIdentity = html.includes('data-family-person-identity');
   const hasPersonPickerLabels = html.includes('data-family-person-picker-labels');
   const hasMediaResilience = html.includes('data-family-media-resilience');
@@ -154,9 +158,6 @@ async function injectGraphResilience(response, env) {
       : '',
     !hasGraphResilience
       ? `<script src="/graph-resilience.js?v=${encodeURIComponent(build)}" data-family-graph-resilience></script>`
-      : '',
-    !hasRevisionLayoutGuard
-      ? `<script src="/revision-layout-guard.js?v=${encodeURIComponent(build)}" data-family-revision-layout-guard></script>`
       : '',
     !hasMediaResilience
       ? `<script src="/media-resilience.js?v=${encodeURIComponent(build)}" data-family-media-resilience></script>`
