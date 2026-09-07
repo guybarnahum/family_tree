@@ -31,13 +31,21 @@
     `;
     document.head.appendChild(style);
 
+    function itemSignature(item) {
+        return `${item.name}\u0000${item.qualifier || ''}`;
+    }
+
     function decorateSelectOption(option) {
         if (!(option instanceof HTMLOptionElement) || !option.value) return;
         const item = Identity.describe(option.value);
+        const signature = itemSignature(item);
+        if (option.dataset.personPickerSignature === signature) return;
+
         const next = item.display || item.name;
         if (option.textContent !== next) option.textContent = next;
         option.dataset.personName = item.name;
         option.dataset.personQualifier = item.qualifier || '';
+        option.dataset.personPickerSignature = signature;
     }
 
     function decorateResult(button) {
@@ -45,6 +53,8 @@
         const personId = button.dataset.personId;
         if (!personId) return;
         const item = Identity.describe(personId);
+        const signature = itemSignature(item);
+        if (button.dataset.personPickerSignature === signature) return;
 
         if (button.classList.contains('face-person-result')) {
             button.replaceChildren();
@@ -58,6 +68,7 @@
                 qualifier.textContent = item.qualifier;
                 button.appendChild(qualifier);
             }
+            button.dataset.personPickerSignature = signature;
             return;
         }
 
@@ -82,6 +93,7 @@
             } else {
                 qualifier?.remove();
             }
+            button.dataset.personPickerSignature = signature;
         }
     }
 
@@ -109,7 +121,12 @@
         if (mutations.some(mutation => mutation.type === 'childList')) queueDecorate();
     }).observe(document.body, { childList: true, subtree: true });
 
-    window.addEventListener('family-person-disambiguation-updated', queueDecorate);
+    window.addEventListener('family-person-disambiguation-updated', () => {
+        document.querySelectorAll('[data-person-picker-signature]').forEach(node => {
+            delete node.dataset.personPickerSignature;
+        });
+        queueDecorate();
+    });
 
     window.FamilyPersonPickerLabels = Object.freeze({ decorate, refresh: queueDecorate });
     decorate(document);
