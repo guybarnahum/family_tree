@@ -34,6 +34,7 @@
         networkErrors: 0,
         graphReplacements: 0,
         personUpdates: 0,
+        observedMutations: 0,
         lastFetchSource: '',
         lastFetchAt: null,
         lastFetchLatencyMs: null,
@@ -285,17 +286,37 @@
         return Number.isFinite(timestamp) ? Math.max(0, Date.now() - timestamp) : null;
     }
 
-    function graphRequestInfo(input, init) {
-        const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
-        if (method !== 'GET') return null;
+    function sameOriginUrl(input) {
         try {
             const raw = input instanceof Request ? input.url : String(input);
             const url = new URL(raw, window.location.href);
-            if (url.origin !== window.location.origin || url.pathname !== '/api/graph') return null;
-            return { url };
+            return url.origin === window.location.origin ? url : null;
         } catch (_) {
             return null;
         }
+    }
+
+    function graphRequestInfo(input, init) {
+        const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+        if (method !== 'GET') return null;
+        const url = sameOriginUrl(input);
+        return url?.pathname === '/api/graph' ? { url } : null;
+    }
+
+    function mutationRequestInfo(input, init) {
+        const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+        if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return null;
+        const url = sameOriginUrl(input);
+        if (!url) return null;
+
+        if (url.pathname === '/api/graph' || url.pathname === '/api/tree' || url.pathname.startsWith('/api/nodes')) {
+            return { scope: 'graph' };
+        }
+        if (url.pathname === '/api/media' || url.pathname.startsWith('/api/media/') ||
+            url.pathname === '/api/faces' || url.pathname.startsWith('/api/faces/')) {
+            return { scope: 'data' };
+        }
+        return null;
     }
 
     function revisionFromResponse(response) {
@@ -462,8 +483,16 @@
     loadPersisted();
 
     window.fetch = async function graphStoreFetch(input, init) {
-        if (!graphRequestInfo(input, init)) return nativeFetch(input, init);
-        return fetchGraph(input, init || { cache: 'no-store' });
+        const graphRead = graphRequestInfo(input, init);
+        if (graphRead) return fetchGraph(input, init || { cache: 'no-store' });
+
+        const mutation = mutationRequestInfo(input, init);
+        const response = await nativeFetch(input, init);
+        if (response.ok && mutation) {
+            diagnostics.observedMutations += 1;
+            noteMutation({ scope: mutation.scope, revision: revisionFromResponse(response) });
+        }
+        return response;
     };
 
     window.FamilyGraphStore = Object.freeze({
