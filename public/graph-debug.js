@@ -165,6 +165,10 @@
         ['revisionLayouts', 'Revision layouts'],
         ['dataOnly', 'Data-only reconciles'],
         ['suppressed', 'Duplicate layouts suppressed'],
+        ['renderState', 'Render transaction'],
+        ['renderCounts', 'Render transactions'],
+        ['renderSuppressed', 'Render layouts suppressed'],
+        ['renderLast', 'Last stable render', 'wide'],
         ['reconcileErrors', 'Reconcile errors'],
         ['latency', 'Last check latency'],
         ['graphReads', 'Full graph fetches'],
@@ -227,10 +231,20 @@
         return duration(snapshot.intervalMs);
     }
 
+    function renderStabilitySnapshot() {
+        try {
+            return window.FamilyGraphRenderStability?.snapshot?.() ||
+                window.__familyRenderStabilityDiagnostics || {};
+        } catch (_) {
+            return window.__familyRenderStabilityDiagnostics || {};
+        }
+    }
+
     function render() {
         if (!visible) return;
         const s = Sync.snapshot();
         const cache = s.cache || {};
+        const stable = renderStabilitySnapshot();
         const cacheState = !cache.present
             ? 'missing'
             : cache.dirty
@@ -261,6 +275,21 @@
         set('revisionLayouts', String(s.revisionLayouts || 0));
         set('dataOnly', String(s.dataOnlyReconciliations || 0));
         set('suppressed', String(s.suppressedLayouts || 0));
+
+        const renderState = stable.structuralActive
+            ? 'STRUCTURAL'
+            : stable.selectionActive
+                ? 'SELECTION'
+                : stable.hiddenReasons?.length
+                    ? 'SETTLING'
+                    : 'idle';
+        set('renderState', renderState);
+        set('renderCounts', `${stable.structuralTransactions || 0} structural · ${stable.selectionTransactions || 0} selection · ${stable.remoteSettles || 0} remote`);
+        set('renderSuppressed', `${stable.suppressedLayouts || 0} · ${stable.staleTransactionsDiscarded || 0} stale tx`);
+        set('renderLast', stable.lastSettledAt
+            ? `${stable.lastReason || '?'} · root ${stable.lastRootId || '—'} · ${stable.lastSuppressedLayouts || 0} suppressed @ ${clock(stable.lastSettledAt)}`
+            : 'none');
+
         set('reconcileErrors', String(s.reconcileErrors || 0));
         set('latency', duration(s.lastRevisionLatencyMs));
         set('graphReads', String(s.graphNetworkFetches || 0));
@@ -323,6 +352,9 @@
     }, true);
 
     window.addEventListener('family-graph-sync-metrics', () => {
+        if (visible) render();
+    });
+    window.addEventListener('family-graph-render-stable', () => {
         if (visible) render();
     });
 
