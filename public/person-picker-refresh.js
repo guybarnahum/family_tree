@@ -1,13 +1,13 @@
-// Keep every person picker synchronized with the latest canonical graph/cache.
-// This is especially important for long-lived face-tagging UI, whose native select can
-// otherwise keep the people list that existed when the photo editor first opened.
+// Keep every person picker synchronized with the canonical GraphStore document.
+// The observer below watches the face editor's own select lifecycle; graph-to-module
+// communication is explicit through store/identity events.
 (() => {
     if (window.__familyPersonPickerRefreshInstalled) return;
     window.__familyPersonPickerRefreshInstalled = true;
 
     const Identity = window.FamilyPersonIdentity;
-    const Cache = window.FamilyGraphCache;
-    if (!Cache) return;
+    const Store = window.FamilyGraphStore;
+    if (!Store) return;
 
     let queued = false;
     let rebuildingFaceSelect = false;
@@ -16,12 +16,12 @@
         return Identity?.normalizePersonName?.(person?.name) || String(person?.name || '').trim();
     }
 
-    function currentGraph() {
-        return Cache.load()?.graph || null;
+    function currentSnapshot() {
+        return Store.snapshot();
     }
 
-    function peopleForPicker() {
-        const graph = currentGraph();
+    function peopleForPicker(snapshot = currentSnapshot()) {
+        const graph = snapshot?.graph;
         return (Array.isArray(graph?.people) ? graph.people : [])
             .filter(person => person && person.id)
             .sort((a, b) =>
@@ -80,10 +80,10 @@
     }
 
     function refreshNow() {
-        const graph = currentGraph();
-        if (!graph) return;
-        Identity?.setGraph?.(graph);
-        const people = peopleForPicker();
+        const snapshot = currentSnapshot();
+        if (!snapshot?.graph) return;
+        Identity?.setGraph?.(snapshot.graph, snapshot.indexes);
+        const people = peopleForPicker(snapshot);
         document.querySelectorAll('.face-person-select').forEach(select => rebuildFaceSelect(select, people));
         window.FamilyPersonPickerLabels?.refresh?.();
         refreshGraphSearch();
@@ -101,6 +101,8 @@
         });
     }
 
+    // This observer is intentionally UI-local: face-tagging replaces options/select content
+    // internally. It does not discover canonical graph changes.
     new MutationObserver(mutations => {
         if (rebuildingFaceSelect) return;
         if (mutations.some(mutation =>
@@ -109,14 +111,8 @@
         )) queueRefresh();
     }).observe(document.body, { childList: true, subtree: true });
 
-    for (const type of [
-        'family-graph-fetch',
-        'family-graph-synced',
-        'family-person-pane-saved',
-        'family-person-disambiguation-updated'
-    ]) {
-        window.addEventListener(type, queueRefresh);
-    }
+    window.addEventListener('family-graph-store-changed', queueRefresh);
+    window.addEventListener('family-person-disambiguation-updated', queueRefresh);
 
     window.FamilyPersonPickerRefresh = Object.freeze({ refresh: queueRefresh });
     queueRefresh();
