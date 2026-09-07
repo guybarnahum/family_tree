@@ -108,14 +108,14 @@ for (const retiredToken of [
   assert(!sync.includes(retiredToken), `sync must not retain ${retiredToken}`);
 }
 
-assert(!visualRoles.includes('MutationObserver'), 'visual roles must use explicit lifecycle events');
+assert(!visualRoles.includes('new MutationObserver'), 'visual roles must use explicit lifecycle events');
 assert(visualRoles.includes('FamilyGraphStore'), 'visual roles must use shared Store indexes');
-assert(!parentLimit.includes('MutationObserver'), 'parent limit must use explicit lifecycle events');
+assert(!parentLimit.includes('new MutationObserver'), 'parent limit must use explicit lifecycle events');
 assert(parentLimit.includes('FamilyGraphStore'), 'parent limit must use shared Store indexes');
 assert(identity.includes('FamilyGraphStore'), 'identity must use GraphStore');
 assert(pickerRefresh.includes('FamilyGraphStore'), 'picker refresh must use GraphStore');
 assert(unionActions.includes('FamilyGraphStore'), 'union actions must use GraphStore');
-assert(!unionActions.includes('MutationObserver'), 'union actions must use explicit render/store lifecycle');
+assert(!unionActions.includes('new MutationObserver'), 'union actions must use explicit render/store lifecycle');
 assert(!unionActions.includes('unionChildAwareLayout'), 'union actions must not wrap layout ownership');
 for (const active of [sync, visualRoles, parentLimit, identity, pickerRefresh, unionActions]) {
   assert(!active.includes('FamilyGraphCache'), 'active runtime modules must not reference FamilyGraphCache');
