@@ -1,6 +1,6 @@
 // Cheap stale detection for the canonical graph. A one-row D1 revision check runs every
 // 5s while the user is active, every 15m while the visible page is idle, and never while
-// the page is blurred/hidden. Full graph data is fetched only when revisions differ.
+// the page is blurred/hidden. Full graph data is fetched only when revisions actually differ.
 (() => {
     if (window.FamilyGraphSync) return;
 
@@ -26,9 +26,12 @@
     let started = false;
     let revisionFailureVisible = false;
 
+    const initialCache = Cache.load();
     const metrics = {
         revisionChecks: 0,
         revisionChanges: 0,
+        bootstrapRefreshes: 0,
+        stateRepairs: 0,
         revisionErrors: 0,
         graphNetworkFetches: 0,
         graphCacheHits: 0,
@@ -42,7 +45,9 @@
         lastGraphFetchSource: '',
         lastMutationAt: null,
         lastMutationRevision: null,
-        serverRevision: Cache.load()?.serverRevision || Cache.load()?.revision || null
+        lastMutationMethod: '',
+        lastMutationPath: '',
+        serverRevision: initialCache?.serverRevision || initialCache?.revision || null
     };
 
     function finiteRevision(value) {
@@ -212,9 +217,19 @@
 
             const cached = Cache.load();
             const localRevision = cached?.revision || null;
-            if (!localRevision || localRevision !== serverRevision || cached?.stale || cached?.dirty) {
+
+            // A revision poll must be completely UI-inert unless the authoritative revision
+            // differs. Dirty/stale flags alone are not evidence that the graph changed. If
+            // revisions are equal, repair those flags locally instead of downloading/rendering.
+            if (!localRevision) {
+                metrics.bootstrapRefreshes += 1;
+                await refreshGraph(serverRevision);
+            } else if (localRevision !== serverRevision) {
                 metrics.revisionChanges += 1;
                 await refreshGraph(serverRevision);
+            } else if (cached?.stale || cached?.dirty || cached?.serverRevision !== serverRevision) {
+                Cache.markClean(serverRevision);
+                metrics.stateRepairs += 1;
             }
             return serverRevision;
         } catch (error) {
@@ -260,37 +275,64 @@
         void checkRevision(reason);
     }
 
-    function isGraphMutation(input, init) {
+    function mutationInfo(input, init) {
         const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
-        if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return false;
+        if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return null;
         try {
             const raw = input instanceof Request ? input.url : String(input);
             const url = new URL(raw, window.location.href);
-            if (url.origin !== window.location.origin) return false;
-            return url.pathname === '/api/graph' ||
+            if (url.origin !== window.location.origin) return null;
+            const graphMutation = url.pathname === '/api/graph' ||
                 url.pathname === '/api/tree' ||
-                url.pathname.startsWith('/api/nodes') ||
-                url.pathname.startsWith('/api/faces');
+                url.pathname.startsWith('/api/nodes');
+            return graphMutation ? { method, path: url.pathname } : null;
         } catch (_) {
-            return false;
+            return null;
         }
     }
 
-    // Observe successful local writes. The server returns the revision in a header; mark
-    // the cached graph dirty until the normal post-write graph refresh makes it clean.
+    // Observe successful graph-document writes. Face/media writes are intentionally not graph
+    // revisions; those subsystems have their own refresh events and should never dirty the graph.
     window.fetch = async function graphSyncFetch(input, init) {
+        const mutation = mutationInfo(input, init);
         const response = await baseFetch(input, init);
-        if (response.ok && isGraphMutation(input, init)) {
+        if (response.ok && mutation) {
             const revision = finiteRevision(response.headers.get('X-Family-Graph-Revision'));
             Cache.markDirty(revision);
             metrics.graphMutations += 1;
             metrics.lastMutationAt = Date.now();
             metrics.lastMutationRevision = revision;
+            metrics.lastMutationMethod = mutation.method;
+            metrics.lastMutationPath = mutation.path;
             if (revision) metrics.serverRevision = revision;
             emitMetrics();
         }
         return response;
     };
+
+    // Right-pane edits already update the canonical graph object in memory. Once the PATCH
+    // succeeds, mirror that known change into the persistent cache and advance it to the
+    // revision returned by the mutation. No graph download or redraw is necessary.
+    window.addEventListener('family-person-pane-saved', event => {
+        const detail = event.detail || {};
+        const revision = finiteRevision(metrics.lastMutationRevision);
+        const entry = Cache.load();
+        if (!entry || !revision || !detail.id) return;
+        const person = entry.graph?.people?.find(candidate => candidate.id === detail.id);
+        if (!person) return;
+
+        if (detail.field === 'name') {
+            person.name = detail.value;
+        } else if (detail.field === 'metadata' && detail.metadata && typeof detail.metadata === 'object') {
+            person.metadata = { ...detail.metadata };
+        } else {
+            return;
+        }
+
+        Cache.save(entry.graph, { revision });
+        metrics.serverRevision = revision;
+        emitMetrics();
+    });
 
     window.addEventListener('family-graph-fetch', event => {
         const detail = event.detail || {};
