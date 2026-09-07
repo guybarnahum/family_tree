@@ -1,17 +1,19 @@
 // Deterministic browser bootstrap for the family graph runtime.
-// The base HTML defines legacy geometry primitives only; no graph is rendered until this
-// module has installed the complete current refinement/layout stack in a known order.
+// M2 owns the final render pipeline explicitly: legacy algorithm modules are loaded in a
+// capture harness, registered as named stages, and then relinquish global render ownership.
 (() => {
     if (window.__familyRuntimeBootstrapInstalled) return;
     window.__familyRuntimeBootstrapInstalled = true;
 
     const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
-    // graph-view is loaded immediately before this bootstrap. Keep its direct loader so the
-    // later sync layer can preserve its efficient reconciliation path without booting early.
+    // graph-view is loaded immediately before this bootstrap. Its loadTree implementation is
+    // the canonical graph loader; M2 stage modules may temporarily replace it only while their
+    // historical prepare wrappers are being captured.
     const directGraphLoadTree = typeof window.loadTree === 'function' ? window.loadTree : null;
     const diagnostics = {
         phase: 'installing',
         loaded: [],
+        capturedStages: [],
         startedAt: new Date().toISOString(),
         graphStartedAt: null,
         syncStartedAt: null,
@@ -20,7 +22,11 @@
     };
 
     function expose() {
-        window.__familyRuntimeBootstrapDiagnostics = { ...diagnostics, loaded: [...diagnostics.loaded] };
+        window.__familyRuntimeBootstrapDiagnostics = {
+            ...diagnostics,
+            loaded: [...diagnostics.loaded],
+            capturedStages: [...diagnostics.capturedStages]
+        };
     }
 
     function scriptSelector(dataKey) {
@@ -37,7 +43,7 @@
                     if (settled) return;
                     settled = true;
                     existing.dataset.familyBootstrapLoaded = 'true';
-                    diagnostics.loaded.push(src);
+                    if (!diagnostics.loaded.includes(src)) diagnostics.loaded.push(src);
                     expose();
                     resolve(existing);
                 };
@@ -90,9 +96,77 @@
         for (let i = 0; i < count; i++) await nextFrame();
     }
 
+    function setLayout(fn) {
+        layoutAndRender = fn;
+        window.layoutAndRender = fn;
+    }
+
+    function setLoadTree(fn) {
+        loadTree = fn;
+        window.loadTree = fn;
+    }
+
+    async function noOpLoadTree() {}
+    function noOpLayoutAndRender() {}
+    function lineageAwareLayoutAndRender() {}
+    function crossingSafeLayoutAndRender() {
+        return window.FamilyRenderController?.runThrough?.('planar');
+    }
+
+    async function captureLegacyModule({
+        src,
+        dataKey,
+        layoutBase = null,
+        loadBase = noOpLoadTree,
+        expectedLayoutName = null,
+        expectedLoadName = null,
+        ready = null
+    }) {
+        const controller = window.FamilyRenderController;
+        if (!controller) throw new Error('RenderController must be installed before stage capture');
+
+        if (layoutBase) setLayout(layoutBase);
+        if (loadBase) setLoadTree(loadBase);
+
+        try {
+            await loadScript(src, dataKey);
+            if (ready) await waitFor(ready, `${src} readiness`);
+            if (expectedLayoutName) {
+                await waitFor(
+                    () => typeof layoutAndRender === 'function' && layoutAndRender.name === expectedLayoutName,
+                    `${src} layout capture`
+                );
+            }
+            if (expectedLoadName) {
+                await waitFor(
+                    () => typeof loadTree === 'function' && loadTree.name === expectedLoadName,
+                    `${src} prepare capture`
+                );
+            }
+
+            return {
+                layout: typeof layoutAndRender === 'function' ? layoutAndRender : null,
+                prepare: typeof loadTree === 'function' && loadTree !== loadBase ? loadTree : null,
+                connector: typeof drawSVGLines === 'function' ? drawSVGLines : null
+            };
+        } finally {
+            if (directGraphLoadTree) setLoadTree(directGraphLoadTree);
+            controller.installFacade();
+        }
+    }
+
+    function registerPrepare(name, order, fn) {
+        if (typeof fn !== 'function') return;
+        window.FamilyRenderController.registerPrepareStage({
+            name,
+            order,
+            run: context => fn(context?.anchorId || null, false)
+        });
+    }
+
     async function loadMobileStack() {
         // mobile-refinement historically self-loaded presentation + multi-partner. Temporary
-        // marker scripts suppress those nested loaders so this bootstrap owns exact order.
+        // marker scripts suppress those nested loaders so runtime-bootstrap owns exact order.
         const presentationSentinel = document.createElement('script');
         presentationSentinel.setAttribute('data-family-presentation', 'bootstrap-sentinel');
         const multiPartnerSentinel = document.createElement('script');
@@ -106,12 +180,11 @@
             multiPartnerSentinel.remove();
         }
         await loadScript('/presentation-refinement.js', 'data-family-presentation');
-        await loadScript('/multi-partner-refinement.js', 'data-family-multi-partner');
-        await waitFor(() => !!window.__familyMultiPartnerRefinement, 'multi-partner refinement');
     }
 
     async function installFeatureStack() {
         await loadScript('/selection-controller.js', 'data-family-selection-controller');
+        await loadScript('/render-controller.js', 'data-family-render-controller');
         window.FamilySelectionController?.restoreSelection?.();
 
         await loadScript('/import-export.js', 'data-family-import-export');
@@ -142,66 +215,121 @@
             ['/print-refinement.js', 'data-family-print']
         ];
         for (const [src, dataKey] of features) await loadScript(src, dataKey);
+
+        // Feature modules loaded during M1 may still contain historical layout wrappers. They
+        // may observe controller events, but the controller is the sole global render owner.
+        window.FamilyRenderController.installFacade();
     }
 
     async function installLayoutStack() {
+        const controller = window.FamilyRenderController;
+
+        // Multi-partner owns relationship-aware family-unit construction/positioning/card UX.
+        // Capture only its graph-refresh loadTree wrapper; its lower-level geometry overrides
+        // remain active and are consumed by the controller's base-geometry stage.
+        const multi = await captureLegacyModule({
+            src: '/multi-partner-refinement.js',
+            dataKey: 'data-family-multi-partner',
+            expectedLoadName: 'relationshipAwareLoadTree',
+            ready: () => !!window.__familyMultiPartnerRefinement
+        });
+        registerPrepare('multi-partner', 10, multi.prepare);
+
+        // Relationship compaction is a pure delta over base geometry when captured with a
+        // no-op predecessor.
+        const relationship = await captureLegacyModule({
+            src: '/layout-refinement.js',
+            dataKey: 'data-family-layout-refinement',
+            layoutBase: noOpLayoutAndRender,
+            loadBase: null,
+            expectedLayoutName: 'layoutAndRenderWithRelationshipCompaction'
+        });
+        controller.registerLayoutStage({
+            name: 'relationship-compaction',
+            order: 20,
+            run: () => relationship.layout()
+        });
+        diagnostics.capturedStages.push('relationship-compaction');
+
         await loadScript('/planar-core.js', 'data-family-planar-core');
-        await loadScript('/planar-layout.js', 'data-family-planar-layout');
-        await waitFor(
-            () => typeof layoutAndRender === 'function' && layoutAndRender.name === 'crossingSafeLayoutAndRender',
-            'planar layout wrapper'
-        );
 
-        await loadScript('/member-order-refinement.js', 'data-family-member-order');
-        await waitFor(
-            () => typeof layoutAndRender === 'function' && layoutAndRender.name === 'lineageAwareLayoutAndRender',
-            'member-order wrapper'
-        );
+        const planar = await captureLegacyModule({
+            src: '/planar-layout.js',
+            dataKey: 'data-family-planar-layout',
+            layoutBase: noOpLayoutAndRender,
+            expectedLayoutName: 'crossingSafeLayoutAndRender',
+            expectedLoadName: 'planarAwareLoadTree',
+            ready: () => !!window.__familyPlanarLayoutInstalled
+        });
+        controller.registerLayoutStage({
+            name: 'planar',
+            order: 30,
+            run: () => planar.layout()
+        });
+        registerPrepare('planar', 30, planar.prepare);
+        diagnostics.capturedStages.push('planar');
 
-        await loadScript('/bridge-compaction.js', 'data-family-bridge-compaction');
-        await waitFor(
-            () => typeof layoutAndRender === 'function' && layoutAndRender.name === 'bridgeCompactedLayoutAndRender',
-            'bridge-compaction wrapper'
-        );
+        // Member-order is the one feedback stage: its historical BASE_LAYOUT callback is now
+        // an explicit call into the controller's named planar prefix. The optimizer can keep
+        // its exact multi-pass behavior without owning global layoutAndRender.
+        const member = await captureLegacyModule({
+            src: '/member-order-refinement.js',
+            dataKey: 'data-family-member-order',
+            layoutBase: crossingSafeLayoutAndRender,
+            expectedLayoutName: 'lineageAwareLayoutAndRender',
+            expectedLoadName: 'lineageAwareLoadTree'
+        });
+        controller.registerLayoutStage({
+            name: 'member-order',
+            order: 40,
+            ownsPrefix: true,
+            run: () => member.layout()
+        });
+        registerPrepare('member-order', 40, member.prepare);
+        diagnostics.capturedStages.push('member-order');
 
-        await loadScript('/planar-router.js', 'data-family-planar-router');
-        await waitFor(
-            () => window.__familyPlanarRouterInstalled &&
-                typeof loadTree === 'function' && loadTree.name === 'routerAwareLoadTree' &&
-                typeof drawSVGLines === 'function' && drawSVGLines.name === 'crossingSafeDraw',
-            'planar router'
-        );
+        const bridge = await captureLegacyModule({
+            src: '/bridge-compaction.js',
+            dataKey: 'data-family-bridge-compaction',
+            layoutBase: lineageAwareLayoutAndRender,
+            expectedLayoutName: 'bridgeCompactedLayoutAndRender',
+            expectedLoadName: 'bridgeAwareLoadTree'
+        });
+        controller.registerLayoutStage({
+            name: 'bridge-compaction',
+            order: 50,
+            run: () => bridge.layout()
+        });
+        registerPrepare('bridge-compaction', 50, bridge.prepare);
+        diagnostics.capturedStages.push('bridge-compaction');
 
-        await waitFor(
-            () => typeof layoutAndRender === 'function' && !!layoutAndRender.__familyRevisionLayoutGuard,
-            'revision layout guard'
-        );
-
-        await loadScript('/graph-render-stability.js', 'data-family-graph-render-stability');
-        await waitFor(
-            () => typeof layoutAndRender === 'function' && layoutAndRender.name === 'stableGraphLayout',
-            'graph render stability coordinator'
-        );
+        const router = await captureLegacyModule({
+            src: '/planar-router.js',
+            dataKey: 'data-family-planar-router',
+            expectedLoadName: 'routerAwareLoadTree',
+            ready: () => !!window.__familyPlanarRouterInstalled &&
+                typeof drawSVGLines === 'function' && drawSVGLines.name === 'crossingSafeDraw'
+        });
+        registerPrepare('planar-router', 60, router.prepare);
+        controller.registerConnectorStage({
+            name: 'planar-router',
+            run: () => router.connector()
+        });
+        diagnostics.capturedStages.push('planar-router');
 
         await loadScript('/visual-roles.js', 'data-family-visual-roles');
+        controller.installFacade();
+        expose();
     }
 
     async function installSyncStack() {
-        // The graph is already committed at this point. We only need parsing to be complete so
-        // graph-sync captures the direct loader immediately/microtask-safely; unrelated fonts,
-        // images, or CDN resources must not delay sync installation.
+        // Sync is installed only after the first controller-owned graph commit, so its initial
+        // revision check cannot become a competing renderer. With M2 there is no loadTree wrapper
+        // chain: graph-sync captures graph-view's canonical loader directly.
         await waitFor(() => document.readyState !== 'loading', 'DOM parsing');
-        const finalLoadTree = window.loadTree;
-        try {
-            if (directGraphLoadTree) {
-                loadTree = directGraphLoadTree;
-                window.loadTree = directGraphLoadTree;
-            }
-            await loadScript('/graph-sync.js', 'data-family-graph-sync');
-        } finally {
-            loadTree = finalLoadTree;
-            window.loadTree = finalLoadTree;
-        }
+        if (directGraphLoadTree) setLoadTree(directGraphLoadTree);
+        window.FamilyRenderController?.installFacade?.();
+        await loadScript('/graph-sync.js', 'data-family-graph-sync');
         await loadScript('/graph-debug.js', 'data-family-graph-debug');
         diagnostics.syncStartedAt = new Date().toISOString();
         expose();
@@ -222,8 +350,7 @@
             expose();
             await window.startFamilyGraph();
             window.FamilySelectionController?.syncFromRenderedRoot?.({ source: 'initial-graph' });
-            window.FamilyVisualRoles?.refreshNow?.();
-            await settleFrames(4);
+            await settleFrames(1);
 
             diagnostics.phase = 'starting-sync';
             expose();
@@ -233,7 +360,10 @@
             diagnostics.readyAt = new Date().toISOString();
             expose();
             window.dispatchEvent(new CustomEvent('family-runtime-ready', {
-                detail: { selectedPersonId: window.FamilySelectionController?.getSelectedPersonId?.() || null }
+                detail: {
+                    selectedPersonId: window.FamilySelectionController?.getSelectedPersonId?.() || null,
+                    renderController: window.FamilyRenderController?.snapshot?.() || null
+                }
             }));
         } catch (error) {
             diagnostics.phase = 'failed';
