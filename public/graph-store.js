@@ -319,13 +319,25 @@
 
     function showFailure(error) {
         const Status = window.FamilyGraphStatus;
-        if (!Status || !graph) return;
+        if (!Status) return;
         const classified = Status.classify(error);
+        const retry = () => refresh({ authoritative: false, reason: 'retry' });
+
+        if (!graph) {
+            Status.show({
+                kind: classified.kind,
+                mode: 'full',
+                retry,
+                details: { status: classified, text: classified.text }
+            });
+            return;
+        }
+
         Status.show({
             kind: classified.kind,
             mode: 'banner',
             savedAt,
-            retry: () => refresh({ authoritative: false, reason: 'retry' }),
+            retry,
             title: `מוצג עותק שמור ${Status.ageLabel(savedAt)}`,
             description: classified.kind === 'quota'
                 ? 'מסד הנתונים הגיע למגבלת השימוש; העץ המוצג הוא מהטעינה האחרונה.'
@@ -388,11 +400,11 @@
                 if (graph) {
                     stale = true;
                     persist();
-                    showFailure(error);
                     diagnostics.fallbackReads += 1;
-                    emitFetch({ source: 'error', kind: window.FamilyGraphStatus?.classify?.(error)?.kind || 'network' });
-                    if (!authoritative) return graphResponse({ fallback: true });
                 }
+                showFailure(error);
+                emitFetch({ source: 'error', kind: window.FamilyGraphStatus?.classify?.(error)?.kind || 'network' });
+                if (graph && !authoritative) return graphResponse({ fallback: true });
                 throw error;
             } finally {
                 networkPromise = null;
