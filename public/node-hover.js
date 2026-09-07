@@ -166,15 +166,19 @@
 
         appendScript('/person-metadata.js', 'data-family-person-metadata', build);
         appendScript('/person-pane.js', 'data-family-person-pane', build);
+        appendScript('/new-person-focus.js', 'data-family-new-person-focus', build);
         appendScript('/place-autocomplete.js', 'data-family-place-autocomplete', build);
         appendScript('/pane-save-guard.js', 'data-family-pane-save-guard', build);
         appendScript('/person-media.js', 'data-family-person-media', build);
         appendScript('/face-tagging.js', 'data-family-face-tagging', build);
         appendScript('/face-tagging-ux.js', 'data-family-face-tagging-ux', build);
+        appendScript('/person-picker-refresh.js', 'data-family-person-picker-refresh', build);
         appendScript('/face-primary.js', 'data-family-face-primary', build);
         appendScript('/face-open-selection.js', 'data-family-face-open-selection', build);
         appendScript('/node-face-decoration.js', 'data-family-node-face-decoration', build);
+        appendScript('/node-face-footprint.js', 'data-family-node-face-footprint', build);
         appendScript('/parent-limit.js', 'data-family-parent-limit', build);
+        appendScript('/union-child-actions.js', 'data-family-union-child-actions', build);
         appendScript('/person-pane-position.js', 'data-family-person-pane-position', build);
         appendScript('/mobile-chrome.js', 'data-family-mobile-chrome', build);
         appendScript('/slice-a-polish.js', 'data-family-slice-a-polish', build);
