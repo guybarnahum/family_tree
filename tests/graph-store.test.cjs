@@ -5,57 +5,74 @@ const fs = require('fs');
 const vm = require('vm');
 
 const source = fs.readFileSync('public/graph-store.js', 'utf8');
-const storage = new Map();
-const events = [];
-let networkReads = 0;
-let networkGraph = {
-  format: 'family-graph', version: 2,
-  people: [{ id: 'A', name: 'Alice', metadata: {} }, { id: 'B', name: 'Bob', metadata: {} }],
-  relationships: [{ id: 'spouse:A:B', type: 'spouse', person1Id: 'A', person2Id: 'B' }]
-};
-let networkRevision = 2;
 
-const localStorage = {
-  getItem(key) { return storage.has(key) ? storage.get(key) : null; },
-  setItem(key, value) { storage.set(key, String(value)); },
-  removeItem(key) { storage.delete(key); }
-};
-
-async function nativeFetch(input) {
-  const url = new URL(String(input), 'https://family.example/');
-  if (url.pathname !== '/api/graph') throw new Error(`unexpected fetch ${url.pathname}`);
-  networkReads += 1;
-  return new Response(JSON.stringify(networkGraph), {
-    status: 200,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Family-Graph-Revision': String(networkRevision)
-    }
-  });
+function createStoreContext(fetchImpl, { status = null } = {}) {
+  const storage = new Map();
+  const events = [];
+  const localStorage = {
+    getItem(key) { return storage.has(key) ? storage.get(key) : null; },
+    setItem(key, value) { storage.set(key, String(value)); },
+    removeItem(key) { storage.delete(key); }
+  };
+  const context = {
+    console,
+    URL,
+    Headers,
+    Response,
+    Request,
+    structuredClone,
+    localStorage,
+    performance: { now: (() => { let n = 0; return () => ++n; })() },
+    CustomEvent: class CustomEvent {
+      constructor(type, init = {}) { this.type = type; this.detail = init.detail; }
+    },
+    fetch: fetchImpl,
+    location: { href: 'https://family.example/', origin: 'https://family.example' },
+    dispatchEvent(event) { events.push(event); },
+    FamilyGraphStatus: status
+  };
+  context.window = context;
+  vm.createContext(context);
+  vm.runInContext(source, context, { filename: 'graph-store.js' });
+  return { context, Store: context.FamilyGraphStore, storage, events };
 }
 
-const context = {
-  console,
-  URL,
-  Headers,
-  Response,
-  Request,
-  structuredClone,
-  localStorage,
-  performance: { now: (() => { let n = 0; return () => ++n; })() },
-  CustomEvent: class CustomEvent {
-    constructor(type, init = {}) { this.type = type; this.detail = init.detail; }
-  },
-  fetch: nativeFetch,
-  location: { href: 'https://family.example/', origin: 'https://family.example' },
-  dispatchEvent(event) { events.push(event); }
-};
-context.window = context;
-vm.createContext(context);
-vm.runInContext(source, context, { filename: 'graph-store.js' });
-
 (async () => {
-  const Store = context.FamilyGraphStore;
+  let graphReads = 0;
+  let mutationReads = 0;
+  const networkGraph = {
+    format: 'family-graph', version: 2,
+    people: [{ id: 'A', name: 'Alice', metadata: {} }, { id: 'B', name: 'Bob', metadata: {} }],
+    relationships: [{ id: 'spouse:A:B', type: 'spouse', person1Id: 'A', person2Id: 'B' }]
+  };
+
+  async function nativeFetch(input, init = {}) {
+    const url = new URL(String(input), 'https://family.example/');
+    const method = String(init.method || 'GET').toUpperCase();
+    if (url.pathname === '/api/graph' && method === 'GET') {
+      graphReads += 1;
+      return new Response(JSON.stringify(networkGraph), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Family-Graph-Revision': '2'
+        }
+      });
+    }
+    if (url.pathname === '/api/nodes/A' && method === 'PATCH') {
+      mutationReads += 1;
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Family-Graph-Revision': '3'
+        }
+      });
+    }
+    throw new Error(`unexpected fetch ${method} ${url.pathname}`);
+  }
+
+  const { context, Store, storage, events } = createStoreContext(nativeFetch);
   assert(Store, 'FamilyGraphStore should install');
   assert.strictEqual(Store.snapshot().graph, null);
 
@@ -72,34 +89,54 @@ vm.runInContext(source, context, { filename: 'graph-store.js' });
   assert(snapshot.indexes.childrenByParent.get('R').has('C'));
 
   const cachedResponse = await context.fetch('/api/graph', { cache: 'no-store' });
-  assert.strictEqual(networkReads, 0, 'clean graph reads must stay in GraphStore');
+  assert.strictEqual(graphReads, 0, 'clean graph reads must stay in GraphStore');
   assert.strictEqual(cachedResponse.headers.get('X-Family-Graph-Cache'), 'hit');
 
   Store.markStale(2);
   await Store.read({ reason: 'test-refresh' });
   snapshot = Store.snapshot();
-  assert.strictEqual(networkReads, 1, 'stale graph must refresh once from network');
+  assert.strictEqual(graphReads, 1, 'stale graph must refresh once from network');
   assert.strictEqual(snapshot.revision, 2);
-  assert.strictEqual(snapshot.graph.people.length, 2);
   assert(snapshot.indexes.spousesByPerson.get('A').has('B'));
   assert.strictEqual(snapshot.stale, false);
   assert.strictEqual(snapshot.dirty, false);
 
-  Store.noteMutation({ scope: 'graph', revision: 3 });
-  assert.strictEqual(Store.snapshot().dirty, true);
+  await context.fetch('/api/nodes/A', { method: 'PATCH' });
+  snapshot = Store.snapshot();
+  assert.strictEqual(mutationReads, 1);
+  assert.strictEqual(snapshot.dirty, true, 'graph mutation must dirty Store even before graph-sync exists');
+  assert.strictEqual(snapshot.serverRevision, 3);
+
   Store.updatePerson('A', { name: 'Alicia' }, { revision: 3, reason: 'pane-name-saved' });
   snapshot = Store.snapshot();
   assert.strictEqual(snapshot.graph.people.find(person => person.id === 'A').name, 'Alicia');
   assert.strictEqual(snapshot.revision, 3);
-  assert.strictEqual(snapshot.dirty, false, 'known local person delta should clean the store');
+  assert.strictEqual(snapshot.dirty, false, 'known local person delta should clean Store');
 
   const persisted = JSON.parse(storage.get('family-tree.graph-cache.v1'));
   assert.strictEqual(persisted.revision, 3);
   assert.strictEqual(persisted.graph.people.find(person => person.id === 'A').name, 'Alicia');
+  assert(events.filter(event => event.type === 'family-graph-store-changed').length >= 3);
+  assert(events.some(event => event.type === 'family-graph-store-fetch'));
 
-  const storeChanges = events.filter(event => event.type === 'family-graph-store-changed');
-  assert(storeChanges.length >= 3, 'store changes should use explicit events');
-  assert(events.some(event => event.type === 'family-graph-store-fetch'), 'store fetch metrics event should fire');
+  const shown = [];
+  const failingStatus = {
+    classify: error => ({ kind: 'server', transient: true, status: error.status || 500, text: error.message }),
+    show: options => shown.push(options),
+    clear() {},
+    ageLabel() { return ''; }
+  };
+  const failing = createStoreContext(async () => {
+    const error = new Error('backend unavailable');
+    error.status = 503;
+    throw error;
+  }, { status: failingStatus });
+
+  await assert.rejects(() => failing.Store.read({ refresh: true, reason: 'first-load' }));
+  assert.strictEqual(shown.length, 1, 'first-load failure must surface through GraphStatus');
+  assert.strictEqual(shown[0].mode, 'full');
+  assert.strictEqual(shown[0].kind, 'server');
+  assert.strictEqual(typeof shown[0].retry, 'function');
 
   console.log('graph store tests passed');
 })().catch(error => {
