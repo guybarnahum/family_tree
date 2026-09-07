@@ -1,5 +1,5 @@
-// Graph resilience: keep the last successfully fetched canonical graph locally so a
-// temporary network/D1 failure does not turn the family tree into a blank page.
+// Graph cache: keep the last canonical graph locally and track whether it is known clean,
+// locally dirty, or stale relative to the server revision.
 (() => {
     if (window.FamilyGraphCache) return;
 
@@ -8,6 +8,11 @@
     function isGraphDocument(value) {
         return !!value && typeof value === 'object' &&
             Array.isArray(value.people) && Array.isArray(value.relationships);
+    }
+
+    function finiteRevision(value) {
+        const revision = Number(value);
+        return Number.isInteger(revision) && revision >= 1 ? revision : null;
     }
 
     function load() {
@@ -19,23 +24,69 @@
                 localStorage.removeItem(STORAGE_KEY);
                 return null;
             }
-            return parsed;
+            return {
+                savedAt: parsed.savedAt,
+                revision: finiteRevision(parsed.revision),
+                serverRevision: finiteRevision(parsed.serverRevision),
+                stale: !!parsed.stale,
+                dirty: !!parsed.dirty,
+                graph: parsed.graph
+            };
         } catch (_) {
             return null;
         }
     }
 
-    function save(graph) {
-        if (!isGraphDocument(graph)) return false;
+    function write(entry) {
         try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                savedAt: Date.now(),
-                graph
-            }));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
             return true;
         } catch (_) {
             return false;
         }
+    }
+
+    function save(graph, { revision = null } = {}) {
+        if (!isGraphDocument(graph)) return false;
+        const previous = load();
+        const nextRevision = finiteRevision(revision) || previous?.revision || null;
+        return write({
+            savedAt: Date.now(),
+            revision: nextRevision,
+            serverRevision: nextRevision,
+            stale: false,
+            dirty: false,
+            graph
+        });
+    }
+
+    function markStale(serverRevision = null) {
+        const entry = load();
+        if (!entry) return false;
+        entry.stale = true;
+        const nextRevision = finiteRevision(serverRevision);
+        if (nextRevision) entry.serverRevision = nextRevision;
+        return write(entry);
+    }
+
+    function markDirty(serverRevision = null) {
+        const entry = load();
+        if (!entry) return false;
+        entry.dirty = true;
+        const nextRevision = finiteRevision(serverRevision);
+        if (nextRevision) entry.serverRevision = nextRevision;
+        return write(entry);
+    }
+
+    function markClean(revision = null) {
+        const entry = load();
+        if (!entry) return false;
+        const nextRevision = finiteRevision(revision) || entry.revision;
+        entry.revision = nextRevision;
+        entry.serverRevision = nextRevision;
+        entry.stale = false;
+        entry.dirty = false;
+        return write(entry);
     }
 
     function clear() {
@@ -49,5 +100,15 @@
             : null;
     }
 
-    window.FamilyGraphCache = Object.freeze({ load, save, clear, ageMs, isGraphDocument });
+    window.FamilyGraphCache = Object.freeze({
+        load,
+        save,
+        markStale,
+        markDirty,
+        markClean,
+        clear,
+        ageMs,
+        isGraphDocument,
+        finiteRevision
+    });
 })();
