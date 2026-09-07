@@ -35,6 +35,7 @@
     document.head.appendChild(style);
 
     let installed = false;
+    let authoritativeLayout = null;
     let serial = 0;
     let structural = null;
     let selection = null;
@@ -192,8 +193,7 @@
             id: ++serial,
             rootId,
             reason,
-            layoutCount: 0,
-            layoutSignature: '',
+            suppressLayouts: true,
             suppressedLayouts: 0,
             settleSerial: 0,
             startedAt: Date.now()
@@ -204,6 +204,7 @@
         diagnostics.lastStartedAt = transaction.startedAt;
         persistRootId(rootId);
         hide(`selection:${transaction.id}`);
+        void settleSelection(transaction);
         return transaction;
     }
 
@@ -214,25 +215,39 @@
             transaction.settleSerial === settleSerial &&
             !structural;
 
-        if (!(await waitFrames(SETTLE_FRAMES, stillCurrent))) return;
-        if (!stillCurrent()) return;
+        try {
+            // Root replacement is synchronous, but graph-view and several refinements still
+            // have queued RAF layouts from the prior generation. Drain those callers while
+            // the transaction gate is closed, then invoke the complete final stack ourselves.
+            if (!(await waitFrames(DRAIN_FRAMES, stillCurrent))) return;
+            if (!stillCurrent() || typeof authoritativeLayout !== 'function') return;
 
-        finalConnectorDraw();
-        centerRoot(transaction.rootId);
-        diagnostics.lastSettledAt = Date.now();
-        diagnostics.lastSuppressedLayouts = transaction.suppressedLayouts;
-        reveal(`selection:${transaction.id}`);
-        selection = null;
-        exposeDiagnostics();
+            authoritativeLayout();
+            diagnostics.finalLayouts += 1;
 
-        window.dispatchEvent(new CustomEvent('family-graph-render-stable', {
-            detail: {
-                kind: 'selection',
-                rootId: transaction.rootId,
-                transactionId: transaction.id,
-                suppressedLayouts: transaction.suppressedLayouts
-            }
-        }));
+            if (!(await waitFrames(SETTLE_FRAMES, stillCurrent))) return;
+            if (!stillCurrent()) return;
+
+            finalConnectorDraw();
+            centerRoot(transaction.rootId);
+            diagnostics.lastSettledAt = Date.now();
+            diagnostics.lastSuppressedLayouts = transaction.suppressedLayouts;
+
+            window.dispatchEvent(new CustomEvent('family-graph-render-stable', {
+                detail: {
+                    kind: 'selection',
+                    rootId: transaction.rootId,
+                    transactionId: transaction.id,
+                    suppressedLayouts: transaction.suppressedLayouts
+                }
+            }));
+        } catch (error) {
+            console.warn('Unable to settle root-selection render transaction:', error);
+        } finally {
+            if (selection === transaction) selection = null;
+            reveal(`selection:${transaction.id}`);
+            exposeDiagnostics();
+        }
     }
 
     function install() {
@@ -249,7 +264,7 @@
 
         installed = true;
         const baseLayout = layoutAndRender;
-        const authoritativeLayout = baseLayout.__familyRevisionLayoutBase || baseLayout;
+        authoritativeLayout = baseLayout.__familyRevisionLayoutBase || baseLayout;
         const baseLoadTree = loadTree;
 
         layoutAndRender = function stableGraphLayout(...args) {
@@ -260,20 +275,11 @@
                 return;
             }
 
-            const activeSelection = selection;
-            if (activeSelection) {
-                const signature = typeof dataSignature === 'string' ? dataSignature : '';
-                if (activeSelection.layoutCount > 0 && activeSelection.layoutSignature === signature) {
-                    activeSelection.suppressedLayouts += 1;
-                    diagnostics.suppressedLayouts += 1;
-                    exposeDiagnostics();
-                    return;
-                }
-                activeSelection.layoutCount += 1;
-                activeSelection.layoutSignature = signature;
-                const result = baseLayout.apply(this, args);
-                void settleSelection(activeSelection);
-                return result;
+            if (selection?.suppressLayouts) {
+                selection.suppressedLayouts += 1;
+                diagnostics.suppressedLayouts += 1;
+                exposeDiagnostics();
+                return;
             }
 
             return baseLayout.apply(this, args);
@@ -313,12 +319,9 @@
                     return result;
                 }
 
-                transaction.suppressLayouts = false;
-
-                // A local mutation token was designed to keep the first layout. Here the first
-                // layout was intentionally suppressed because its relationship indexes may be
-                // stale; the authoritative pass below must therefore bypass that historical
-                // guard and consume the now-coherent topology once.
+                // A local mutation token was designed to keep the first layout. Here every
+                // caller-driven layout remains intentionally suppressed; the authoritative
+                // pass below bypasses that historical guard and consumes coherent topology once.
                 if (window.__familyGraphMutationLayoutToken?.kind === 'mutation') {
                     window.__familyGraphMutationLayoutToken = null;
                 }
@@ -326,6 +329,9 @@
                 authoritativeLayout();
                 diagnostics.finalLayouts += 1;
 
+                // Keep the transaction gate closed while callbacks produced by the final stack
+                // settle. Any unrelated/stale global layout request during these frames is not
+                // allowed to mutate coordinates after the authoritative generation.
                 if (!(await waitFrames(SETTLE_FRAMES, current))) {
                     diagnostics.staleTransactionsDiscarded += 1;
                     return result;
