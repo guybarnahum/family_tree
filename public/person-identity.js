@@ -217,11 +217,38 @@
         return normalizePersonName(`${item.name} ${item.qualifier}`);
     }
 
+    function refreshFromCache() {
+        const entry = window.FamilyGraphCache?.load?.();
+        if (entry?.graph) setGraph(entry.graph);
+    }
+
     window.FamilyPersonIdentity = Object.freeze({
         normalizePersonName,
         setGraph,
         describe,
         needsDisambiguation,
-        searchText
+        searchText,
+        refreshFromCache
     });
+
+    // Normalize interactive name edits before any existing pane/card blur-save handler sees
+    // the value. This gives every current name editor one canonical whitespace rule.
+    if (typeof document !== 'undefined') {
+        document.addEventListener('focusout', event => {
+            const target = event.target;
+            if (!(target instanceof HTMLElement) ||
+                !target.hasAttribute('contenteditable') ||
+                target.dataset.field !== 'name') return;
+            const clean = normalizePersonName(target.innerText);
+            if (clean !== target.innerText) target.textContent = clean;
+        }, true);
+    }
+
+    if (typeof window.addEventListener === 'function') {
+        window.addEventListener('family-graph-fetch', refreshFromCache);
+        window.addEventListener('family-graph-synced', refreshFromCache);
+        window.addEventListener('family-person-pane-saved', () => queueMicrotask(refreshFromCache));
+    }
+
+    refreshFromCache();
 })();
