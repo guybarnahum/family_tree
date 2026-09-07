@@ -100,7 +100,6 @@
     `;
     document.head.appendChild(style);
 
-    let initialRelayoutDone = false;
     let decorateQueued = false;
 
     function selectedId() {
@@ -129,17 +128,10 @@
     }
 
     function decorate() {
+        // runtime-bootstrap installs this layer before the first graph render. MutationObserver
+        // delivery occurs before graph-view's RAF layout, so the footer is already present when
+        // cards are first measured; no corrective layout pass is necessary anymore.
         cardsLayerEl.querySelectorAll('.absolute-card[data-node-id]').forEach(ensureSelectZone);
-
-        // Only the first installation changes card footprint by adding the footer. Re-measure
-        // once; subsequent selection changes are class/text-only and do not own layout.
-        if (!initialRelayoutDone && cardsLayerEl.querySelector('.graph-select-zone')) {
-            initialRelayoutDone = true;
-            requestAnimationFrame(() => {
-                try { layoutAndRender(); }
-                catch (error) { console.warn('Unable to re-measure selection zones:', error); }
-            });
-        }
     }
 
     function queueDecorate() {
