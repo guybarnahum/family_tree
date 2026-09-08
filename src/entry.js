@@ -135,7 +135,6 @@ async function handleFrontendAsset(request, env) {
 
   let html = await assetResponse.text();
   const foundationalScripts = [
-    ['/legacy-symbols.js', 'data-family-legacy-symbols'],
     ['/family-core.js', 'data-family-core'],
     ['/selection-controller.js', 'data-family-selection-controller'],
     ['/family-api.js', 'data-family-api'],
