@@ -30,7 +30,7 @@
 
     const style = document.createElement('style');
     style.textContent = `
-        :root { --family-deceased: #2f3130; }
+        :root { --family-living: #588157; --family-deceased: #2f3130; }
 
         #cards-layer .absolute-card {
             padding: 11px 14px !important;
@@ -60,6 +60,10 @@
             pointer-events: auto !important;
         }
 
+        #cards-layer .absolute-card .node-face-avatar {
+            border-color: var(--family-living) !important;
+        }
+
         #cards-layer .absolute-card.graph-deceased {
             border-top-color: var(--family-deceased) !important;
         }
@@ -81,23 +85,19 @@
         #cards-layer .absolute-card.graph-deceased::after {
             content: '';
             position: absolute;
+            left: 10px;
+            right: 10px;
+            height: 2px;
             background: var(--family-deceased);
             pointer-events: none;
         }
 
         #cards-layer .absolute-card.graph-deceased::before {
-            left: 10px;
-            right: 10px;
             bottom: 0;
-            height: 2px;
         }
 
         #cards-layer .absolute-card.graph-deceased::after {
-            left: 50%;
-            top: 100%;
-            width: 2px;
-            height: 14px;
-            transform: translateX(-50%);
+            bottom: -5px;
         }
 
         #person-pane {
