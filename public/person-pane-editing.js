@@ -35,7 +35,6 @@
     document.head.appendChild(style);
 
     const originalValues = new WeakMap();
-    const NAV_HINT = 'דורות של אהבה • גרור כדי לנווט';
 
     function editableTarget(target) {
         return target instanceof HTMLElement &&
@@ -157,34 +156,4 @@
         const original = originalValues.get(event.target) ?? fieldValue(event.target);
         void savePaneField(event.target, original);
     }, true);
-
-    function cleanHeaderChrome() {
-        const titleCard = document.querySelector('.family-title-card') || document.querySelector('h1')?.parentElement;
-        const subtitle = titleCard?.querySelector('p');
-        if (subtitle && subtitle.textContent !== NAV_HINT) subtitle.textContent = NAV_HINT;
-        const search = document.querySelector('.graph-search-input');
-        if (search && document.activeElement !== search && search.value) search.value = '';
-    }
-
-    let cleanFrame = 0;
-    function queueChromeCleanup() {
-        if (cleanFrame) cancelAnimationFrame(cleanFrame);
-        cleanFrame = requestAnimationFrame(() => {
-            cleanFrame = 0;
-            cleanHeaderChrome();
-        });
-    }
-
-    const titleCard = document.querySelector('.family-title-card') || document.querySelector('h1')?.parentElement;
-    if (titleCard) {
-        new MutationObserver(queueChromeCleanup).observe(titleCard, {
-            childList: true,
-            subtree: true,
-            characterData: true
-        });
-    }
-    window.addEventListener('family-graph-rendered', queueChromeCleanup);
-    window.addEventListener('family-person-pane-saved', queueChromeCleanup);
-
-    queueChromeCleanup();
 })();
