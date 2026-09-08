@@ -1,45 +1,11 @@
-// Single root-relative visual-role pass for family cards.
-// GraphView owns projection semantics (root / primary / sibling / context); this module only
-// translates those committed roles plus spouse-ancestry policy into visual classes.
+// Translate committed GraphView roles plus spouse-ancestry policy into card classes.
 (() => {
     if (window.__familyVisualRolesInstalled) return;
     window.__familyVisualRolesInstalled = true;
 
     const cardsLayer = document.getElementById('cards-layer');
     const Store = window.FamilyGraphStore;
-    if (!cardsLayer) return;
-
-    const style = document.createElement('style');
-    style.textContent = `
-        #cards-layer .absolute-card.graph-root {
-            opacity: 1 !important;
-            filter: none !important;
-        }
-    `;
-    document.head.appendChild(style);
-
-    let queued = false;
-    let applying = false;
-
-    function selectedPersonId() {
-        const selected = window.FamilySelectionController?.getSelectedPersonId?.();
-        if (selected) return selected;
-        const urlId = new URL(window.location.href).searchParams.get('person');
-        if (urlId) return urlId;
-        try { return localStorage.getItem('family-tree.anchor-person'); }
-        catch (_) { return null; }
-    }
-
-    function currentRootId(committedRootId = null) {
-        const committed = String(committedRootId ?? '').trim();
-        if (committed) return committed;
-
-        // Outside an authoritative render commit, visual roles describe the currently rendered
-        // projection rather than pending selection intent.
-        const rendered = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
-        if (rendered?.dataset.nodeId) return rendered.dataset.nodeId;
-        return selectedPersonId();
-    }
+    if (!cardsLayer || !Store) return;
 
     function descendants(seedId, childrenByParent) {
         const result = new Set();
@@ -59,11 +25,9 @@
         return [...aChildren].filter(id => bChildren.has(id));
     }
 
-    function rootContextPolicy(rootId, graphIndexes) {
-        const { childrenByParent, spousesByPerson } = graphIndexes;
+    function rootContextPolicy(rootId, { childrenByParent, spousesByPerson }) {
         const rootSpouses = new Set(spousesByPerson.get(rootId) || []);
-        const rootDescendants = descendants(rootId, childrenByParent);
-        const protectedIds = new Set([rootId, ...rootSpouses, ...rootDescendants]);
+        const protectedIds = new Set([rootId, ...rootSpouses, ...descendants(rootId, childrenByParent)]);
         const context = new Set();
 
         for (const spouseId of rootSpouses) {
@@ -72,7 +36,7 @@
                 context.add(otherSpouseId);
                 for (const childId of sharedChildren(spouseId, otherSpouseId, childrenByParent)) {
                     context.add(childId);
-                    for (const descendantId of descendants(childId, childrenByParent)) context.add(descendantId);
+                    descendants(childId, childrenByParent).forEach(id => context.add(id));
                 }
             }
         }
@@ -89,15 +53,12 @@
             }
         }
 
-        for (const id of protectedIds) context.delete(id);
+        protectedIds.forEach(id => context.delete(id));
         return { context, protectedIds };
     }
 
-    function spouseAncestorDepths(rootId, graphIndexes) {
-        const { parentsByChild, spousesByPerson } = graphIndexes;
+    function spouseAncestorDepths(rootId, { parentsByChild, spousesByPerson }) {
         const result = new Map();
-        if (!rootId) return result;
-
         const queue = [];
         for (const spouseId of spousesByPerson.get(rootId) || []) {
             for (const parentId of parentsByChild.get(spouseId) || []) queue.push({ id: parentId, depth: 1 });
@@ -109,126 +70,70 @@
             const key = `${id}:${depth}`;
             if (walked.has(key)) continue;
             walked.add(key);
-
-            const previous = result.get(id);
-            if (previous === undefined || depth < previous) result.set(id, depth);
-
+            if (!result.has(id) || depth < result.get(id)) result.set(id, depth);
             for (const spouseId of spousesByPerson.get(id) || []) {
-                const spousePrevious = result.get(spouseId);
-                if (spousePrevious === undefined || depth < spousePrevious) result.set(spouseId, depth);
+                if (!result.has(spouseId) || depth < result.get(spouseId)) result.set(spouseId, depth);
             }
             for (const parentId of parentsByChild.get(id) || []) queue.push({ id: parentId, depth: depth + 1 });
         }
         return result;
     }
 
-    function apply(committedRootId = null) {
-        if (applying) return;
-        applying = true;
-        try {
-            const rootId = currentRootId(committedRootId);
-            if (!rootId) return;
+    function apply(committedRootId) {
+        const rootId = String(committedRootId ?? '').trim();
+        if (!rootId) return false;
 
-            const snapshot = Store?.snapshot?.() || null;
-            const graphIndexes = snapshot?.indexes || {
-                parentsByChild: new Map(),
-                childrenByParent: new Map(),
-                spousesByPerson: new Map()
-            };
-            const hasGraph = !!snapshot?.graph;
-            const { context, protectedIds } = hasGraph
-                ? rootContextPolicy(rootId, graphIndexes)
-                : { context: new Set(), protectedIds: new Set([rootId]) };
-            const spouseDepths = hasGraph ? spouseAncestorDepths(rootId, graphIndexes) : new Map();
-            const siblingIds = new Set();
-            const roles = {};
+        const snapshot = Store.snapshot();
+        const indexes = snapshot.indexes || {
+            parentsByChild: new Map(),
+            childrenByParent: new Map(),
+            spousesByPerson: new Map()
+        };
+        const { context, protectedIds } = snapshot.graph
+            ? rootContextPolicy(rootId, indexes)
+            : { context: new Set(), protectedIds: new Set([rootId]) };
+        const spouseDepths = snapshot.graph ? spouseAncestorDepths(rootId, indexes) : new Map();
+        const siblingIds = new Set();
+        const roles = {};
 
-            for (const card of cardsLayer.querySelectorAll('.absolute-card[data-node-id]')) {
-                const id = card.dataset.nodeId;
-                const node = globalNodeMap?.get?.(id) || null;
-                const isRoot = id === rootId;
-                const isSibling = node?.viewRole === 'sibling';
-                if (isSibling) siblingIds.add(id);
+        for (const card of cardsLayer.querySelectorAll('.absolute-card[data-node-id]')) {
+            const id = card.dataset.nodeId;
+            const node = globalNodeMap?.get?.(id) || null;
+            const isRoot = id === rootId;
+            const isSibling = node?.viewRole === 'sibling';
+            if (isSibling) siblingIds.add(id);
 
-                const protectedFromDimming = isRoot || isSibling || protectedIds.has(id);
-                const baseContext = node?.viewRole === 'context';
-                const contextual = !protectedFromDimming && (baseContext || context.has(id));
-                const depth = spouseDepths.get(id);
-                const spouseParent = !protectedFromDimming && depth === 1;
-                const spouseAncestorDeep = !protectedFromDimming && Number.isFinite(depth) && depth > 1;
+            const protectedFromDimming = isRoot || isSibling || protectedIds.has(id);
+            const contextual = !protectedFromDimming && (node?.viewRole === 'context' || context.has(id));
+            const depth = spouseDepths.get(id);
+            const spouseParent = !protectedFromDimming && depth === 1;
+            const spouseAncestorDeep = !protectedFromDimming && Number.isFinite(depth) && depth > 1;
 
-                card.classList.toggle('graph-context', contextual);
-                card.classList.toggle('graph-spouse-parent', spouseParent);
-                card.classList.toggle('graph-spouse-ancestor-deep', spouseAncestorDeep);
+            card.classList.toggle('graph-context', contextual);
+            card.classList.toggle('graph-spouse-parent', spouseParent);
+            card.classList.toggle('graph-spouse-ancestor-deep', spouseAncestorDeep);
 
-                delete card.dataset.familyRootContextForced;
-                if (isRoot) {
-                    delete card.dataset.familyRootContextRole;
-                    card.dataset.familyVisualRole = 'root';
-                } else if (isSibling) {
-                    card.dataset.familyRootContextRole = 'sibling';
-                    card.dataset.familyVisualRole = 'sibling';
-                } else if (context.has(id)) {
-                    card.dataset.familyRootContextRole = 'other-union';
-                    card.dataset.familyVisualRole = 'other-union-context';
-                } else if (spouseAncestorDeep) {
-                    delete card.dataset.familyRootContextRole;
-                    card.dataset.familyVisualRole = 'spouse-ancestor-deep';
-                } else if (spouseParent) {
-                    delete card.dataset.familyRootContextRole;
-                    card.dataset.familyVisualRole = 'spouse-parent';
-                } else if (contextual) {
-                    delete card.dataset.familyRootContextRole;
-                    card.dataset.familyVisualRole = 'context';
-                } else {
-                    delete card.dataset.familyRootContextRole;
-                    card.dataset.familyVisualRole = 'primary';
-                }
-                roles[id] = card.dataset.familyVisualRole;
-            }
-
-            const appliedAt = new Date().toISOString();
-            window.__familyVisualRoleDiagnostics = {
-                rootId,
-                selectedPersonId: selectedPersonId(),
-                siblings: [...siblingIds],
-                contextual: [...context],
-                roles,
-                appliedAt
-            };
-            window.__familyRootContextDiagnostics = {
-                rootId,
-                selectedPersonId: selectedPersonId(),
-                siblings: [...siblingIds],
-                contextual: [...context],
-                appliedAt
-            };
-        } finally {
-            applying = false;
+            const role = isRoot ? 'root'
+                : isSibling ? 'sibling'
+                    : context.has(id) ? 'other-union-context'
+                        : spouseAncestorDeep ? 'spouse-ancestor-deep'
+                            : spouseParent ? 'spouse-parent'
+                                : contextual ? 'context' : 'primary';
+            card.dataset.familyVisualRole = role;
+            roles[id] = role;
         }
-    }
 
-    function queueApply() {
-        if (queued) return;
-        queued = true;
-        queueMicrotask(() => {
-            queued = false;
-            apply();
-        });
+        window.__familyVisualRoleDiagnostics = {
+            rootId,
+            siblings: [...siblingIds],
+            contextual: [...context],
+            roles
+        };
+        return true;
     }
-
-    // Selection intent changes before graph-view commits the new projection. Do not style the
-    // old card set against that pending root. The authoritative render event carries the root
-    // ID for that exact generation, so the final role pass never has to infer it from DOM/history.
-    window.addEventListener('family-graph-store-changed', queueApply);
-    window.addEventListener('family-person-pane-saved', queueApply);
-    window.addEventListener('family-graph-rendered', event => apply(event.detail?.rootId || null));
 
     window.FamilyVisualRoles = Object.freeze({
-        refresh: queueApply,
         refreshNow: apply,
         diagnostics: () => window.__familyVisualRoleDiagnostics || null
     });
-
-    queueApply();
 })();
