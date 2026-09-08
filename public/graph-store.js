@@ -62,6 +62,20 @@
         }
     }
 
+    function sex(personId) {
+        const explicit = peopleById.get(personId)?.metadata?.sex;
+        if (explicit === 'male' || explicit === 'female') return explicit;
+        let inferred = null;
+        for (const spouseId of spousesByPerson.get(personId) || []) {
+            const spouseSex = peopleById.get(spouseId)?.metadata?.sex;
+            const candidate = spouseSex === 'male' ? 'female' : spouseSex === 'female' ? 'male' : null;
+            if (!candidate) continue;
+            if (inferred && inferred !== candidate) return null;
+            inferred = candidate;
+        }
+        return inferred;
+    }
+
     function snapshot() {
         return {
             graph, savedAt, revision, serverRevision, stale, dirty, source,
@@ -319,6 +333,7 @@
         snapshot, read, refresh, replace,
         indexes: () => snapshot().indexes,
         person: id => peopleById.get(id) || null,
+        sex,
         updatePerson, markStale, markDirty, markClean, acknowledgeRevision,
         noteMutation, clear, ageMs, isGraphDocument, finiteRevision
     });
