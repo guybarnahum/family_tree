@@ -87,7 +87,6 @@
             ['/face-tagging-ux.js', 'data-family-face-tagging-ux'],
             ['/face-primary.js', 'data-family-face-primary'],
             ['/node-face-decoration.js', 'data-family-node-face-decoration'],
-            ['/node-face-footprint.js', 'data-family-node-face-footprint'],
             ['/union-child-actions.js', 'data-family-union-child-actions'],
             ['/person-pane-position.js', 'data-family-person-pane-position'],
             ['/mobile-chrome.js', 'data-family-mobile-chrome'],
@@ -146,6 +145,7 @@
         expose();
         try {
             await installFeatureStack();
+            await window.FamilyNodeFaceDecoration?.ready;
             await installLayoutStack();
 
             if (typeof window.startFamilyGraph !== 'function') {
