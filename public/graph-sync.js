@@ -149,21 +149,15 @@
 
     async function reconcileGraph(targetRevision) {
         Store.markStale(targetRevision);
-        const before = typeof dataSignature === 'string' ? dataSignature : '';
-        let result = null;
-        if (typeof loadTree === 'function') result = await loadTree(null, false);
-        else if (typeof window.startFamilyGraph === 'function') result = await window.startFamilyGraph();
-        else await Store.read({ refresh: true, reason: 'sync-reconcile' });
+        const GraphView = window.FamilyGraphView;
+        if (!GraphView?.refresh) throw new Error('FamilyGraphView is required for graph reconciliation');
+        const result = await GraphView.refresh({ force: false, recenter: false });
 
         const refreshed = Store.snapshot();
         if (!refreshed.graph || refreshed.stale) {
             throw new Error('Graph reconciliation did not obtain a fresh canonical graph');
         }
-        const after = typeof dataSignature === 'string' ? dataSignature : '';
-        return {
-            refreshed,
-            rendered: !!result?.committed || (!!before && !!after && before !== after)
-        };
+        return { refreshed, rendered: !!result?.committed };
     }
 
     async function reconcileNow() {
