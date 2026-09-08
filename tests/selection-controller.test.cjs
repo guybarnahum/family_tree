@@ -129,6 +129,15 @@ function createHarness({ href = 'https://family.example/', stored = null } = {})
     harness.window.FamilySelectionController.getSelectedPersonId(),
     'person-d'
   );
+
+  // Legacy feature code may assign wrappers while bootstrap is still loading. Runtime-ready
+  // must restore the canonical history owner rather than leave a nested wrapper chain active.
+  harness.history.replaceState = function legacyFeatureReplaceState() {};
+  harness.history.pushState = function legacyFeaturePushState() {};
+  harness.window.dispatchEvent(new CustomEventStub('family-runtime-ready'));
+  assert.strictEqual(harness.history.replaceState.name, 'familySelectionReplaceState');
+  assert.strictEqual(harness.history.pushState.name, 'familySelectionPushState');
+  assert(harness.window.FamilySelectionController.diagnostics().historyOwnerInstallations >= 2);
 }
 
 {
