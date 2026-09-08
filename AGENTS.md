@@ -243,6 +243,10 @@ mobile top padding           150
 
 RenderController owns viewport commits. Mobile CSS must not apply `scroll-behavior:smooth` to `#scroll-viewport`; sequential `scrollLeft`/`scrollTop` writes must be immediate so a reroot is one deterministic center commit just like desktop.
 
+Viewport centering is also a direct RenderController responsibility. `#scroll-viewport` receives symmetric scrollable centering gutters equal to half the current viewport, which makes edge/top/bottom cards physically centerable instead of letting browser scroll limits clamp them off-center. Startup already calls `startFamilyGraph()` with `recenter:true`, so a valid URL/localStorage selection is centered on the first committed render; an invalid/missing selection falls back to the GraphView-chosen root. Resize recenters after the authoritative layout commit rather than preserving an off-center screen position.
+
+After 30 seconds with no UI interaction, RenderController directly recenters the selected person without relayout. Pointer/keyboard/wheel/touch/focus/input/viewport-scroll activity resets the idle timer. Idle recentering defers while the page is hidden, a render is pending/running, a text/select/contenteditable control is active, or the media modal is open. If the selected ID is missing or stale, centering falls back first to the last/current graph root and otherwise to the visible card nearest the graph's geometric center, so the graph remains visible instead of stranded off-canvas.
+
 `union-child-actions.js` is commit-only presentation. RenderController calls `FamilyUnionChildActions.refresh()` after final geometry; the module no longer listens to Store/render/pane/identity events or queues its own RAF pass.
 
 ## Person pane / mobile
@@ -303,13 +307,13 @@ There are no remaining face-stack MutationObservers. The former `person-picker-r
 
 Deletion-first does not mean “zero observers” or “zero timers.” Keep owner-local mechanisms when the browser/UI does not provide a better explicit lifecycle.
 
-The final M4 reachability sweep found no remaining known architectural repair MutationObserver or production debug loop. Remaining timing mechanisms are intentional boundaries/behaviors such as GraphSync polling/coalescing, autocomplete debounce/focus timing, RenderController batching, pane/presentation measurement, status fade, object-URL cleanup, upstream request timeout, and browser print timing.
+The final M4 reachability sweep found no remaining known architectural repair MutationObserver or production debug loop. Remaining timing mechanisms are intentional boundaries/behaviors such as GraphSync polling/coalescing, autocomplete debounce/focus timing, RenderController batching, pane/presentation measurement, status fade, object-URL cleanup, upstream request timeout, browser print timing, and RenderController's explicit idle recenter timer.
 
 M4 is closed. Future cleanup should be opportunistic stale-comment/naming removal or behavior-backed simplification, not another compatibility/ownership rewrite. Do not redesign the proven layout algorithms without a concrete product or correctness reason.
 
 ## Tests
 
-`npm test` runs behavioral/invariant suites plus syntax checks over `public/*.js` and `src/*.js`. High-value coverage includes topology/parent-union invariants, metadata/identity, faces, selection, FamilyApi, GraphStore, visual roles/sibling protection, placeholder classification, FamilyMutations, and RenderController generation/stage/router behavior.
+`npm test` runs behavioral/invariant suites plus syntax checks over `public/*.js` and `src/*.js`. High-value coverage includes topology/parent-union invariants, metadata/identity, faces, selection, FamilyApi, GraphStore, visual roles/sibling protection, placeholder classification, FamilyMutations, and RenderController generation/stage/router/viewport-centering behavior.
 
 Diagnostics of interest:
 
