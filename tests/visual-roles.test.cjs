@@ -87,9 +87,15 @@ const window = {
 };
 window.window = window;
 
+const document = {
+  head: { appendChild() {} },
+  createElement: () => ({ textContent: '' }),
+  getElementById: id => id === 'cards-layer' ? cardsLayer : null
+};
+
 const context = {
   window,
-  document: { getElementById: id => id === 'cards-layer' ? cardsLayer : null },
+  document,
   globalNodeMap,
   Number,
   Map,
