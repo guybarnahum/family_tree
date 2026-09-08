@@ -25,24 +25,14 @@ let loads = 0;
 let selected = 'A';
 const events = [];
 
-const cardsLayer = {
-  addEventListener() {}
-};
-
+const cardsLayer = { addEventListener() {} };
 const Store = {
-  async refresh() {
-    return { graph: structuredClone(graph) };
-  },
+  async refresh() { return { graph: structuredClone(graph) }; },
   finiteRevision(value) {
     const n = Number(value);
     return Number.isInteger(n) && n >= 1 ? n : null;
   },
-  noteMutation({ revision: next }) {
-    if (next) revision = next;
-  },
-  person(id) {
-    return graph.people.find(person => person.id === id) || null;
-  },
+  person(id) { return graph.people.find(person => person.id === id) || null; },
   updatePerson(id, patch, { revision: next }) {
     Object.assign(this.person(id), patch);
     if (next) revision = next;
@@ -50,7 +40,7 @@ const Store = {
   snapshot() { return { revision, graph }; }
 };
 
-async function fetchStub(input, init = {}) {
+async function requestStub(input, init = {}) {
   const url = new URL(String(input), 'https://family.example/');
   const method = String(init.method || 'GET').toUpperCase();
   if (url.pathname === '/api/graph' && method === 'PUT') {
@@ -70,10 +60,8 @@ async function fetchStub(input, init = {}) {
       headers: { 'X-Family-Graph-Revision': String(revision) }
     });
   }
-  if (url.pathname === '/api/media' && method === 'GET') {
-    return Response.json({ items: [] });
-  }
-  throw new Error(`unexpected fetch ${method} ${url.pathname}`);
+  if (url.pathname === '/api/media' && method === 'GET') return Response.json({ items: [] });
+  throw new Error(`unexpected request ${method} ${url.pathname}`);
 }
 
 const context = {
@@ -81,7 +69,6 @@ const context = {
   URL,
   Response,
   structuredClone,
-  fetch: fetchStub,
   confirm: () => true,
   showStatus() {},
   globalNodeMap: new Map(),
@@ -89,11 +76,17 @@ const context = {
   CustomEvent: class CustomEvent {
     constructor(type, init = {}) { this.type = type; this.detail = init.detail; }
   },
-  document: {
-    getElementById(id) { return id === 'cards-layer' ? cardsLayer : null; }
-  },
+  document: { getElementById(id) { return id === 'cards-layer' ? cardsLayer : null; } },
   dispatchEvent(event) { events.push(event); },
   FamilyGraphStore: Store,
+  FamilyApi: {
+    request: requestStub,
+    revisionFromResponse(response) {
+      return Store.finiteRevision(
+        response.headers.get('X-Family-Graph-Revision') || response.headers.get('X-Family-Revision')
+      );
+    }
+  },
   FamilySelectionController: {
     getSelectedPersonId: () => selected,
     selectPerson(id) { selected = id; return true; },
