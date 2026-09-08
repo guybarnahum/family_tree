@@ -420,6 +420,21 @@
         return person ? Metadata.normalize(Metadata.metadataObject(person.metadata)) : {};
     }
 
+    function youngerThan(person, years, today) {
+        const value = String(metadataForPerson(person).birthDate ?? '').trim();
+        const exact = value.match(/^(\d{4})-(0?[1-9]|1[0-2])-(0?[1-9]|[12]\d|3[01])$/);
+        if (exact) {
+            const month = Number(exact[2]);
+            const day = Number(exact[3]);
+            let age = today.getFullYear() - Number(exact[1]);
+            if (today.getMonth() + 1 < month ||
+                (today.getMonth() + 1 === month && today.getDate() < day)) age -= 1;
+            return age < years;
+        }
+        const year = value.match(/\b((?:19|20)\d{2})\b/);
+        return !!year && today.getFullYear() - Number(year[1]) <= years;
+    }
+
     function metadataFieldValue(metadata, key, kind) {
         return kind === 'place' ? Metadata.placeText(metadata[key]) : textValue(metadata[key]);
     }
@@ -644,8 +659,12 @@
     }
 
     function decorateCards() {
+        const parentsByChild = Store.snapshot().indexes?.parentsByChild || new Map();
+        const today = new Date();
         cardsLayer.querySelectorAll('.absolute-card[data-node-id]').forEach(card => {
-            const metadata = metadataForPerson(Store.person(card.dataset.nodeId));
+            const id = card.dataset.nodeId;
+            const person = Store.person(id);
+            const metadata = metadataForPerson(person);
             card.classList.toggle('graph-deceased', metadata.lifeStatus === 'dead');
             if (!card.querySelector('[data-action="add-parent"]')) {
                 ensureAction(card, 'add-parent', '+ הורה',
@@ -653,6 +672,10 @@
             }
             const spouse = card.querySelector('[data-action="add-spouse"]');
             if (spouse) {
+                const blocked = youngerThan(person, 16, today) ||
+                    [...(parentsByChild.get(id) || [])].some(parentId => youngerThan(Store.person(parentId), 36, today));
+                if (blocked) spouse.style.setProperty('display', 'none', 'important');
+                else spouse.style.removeProperty('display');
                 const sex = metadata.sex;
                 spouse.textContent = sex === 'male' ? '+ בת זוג' : sex === 'female' ? '+ בן זוג' : '+ בן/בת זוג';
             }
