@@ -1,9 +1,4 @@
-// Foundational graph DOM + geometry primitives.
-//
-// M4-D: index.html is a shell. This file intentionally contains no graph loading, polling,
-// persistence, structural mutations, selection ownership, or startup orchestration.
-// RenderController and the named layout stages own execution of these primitives.
-let isEditing = false; // compatibility only; M4-C persistence does not depend on it.
+// Foundational card and geometry primitives. Runtime execution belongs to RenderController.
 let globalNodes = [];
 let globalNodeMap = new Map();
 let globalUnits = [];
@@ -65,9 +60,7 @@ function restoreAnchor(anchor) {
 
 function createCardHTML(node) {
     const hasParent = !!node.parent_id && globalNodeMap.has(node.parent_id);
-    const hasSpouse = !!node.spouse_id && globalNodeMap.has(node.spouse_id);
     const id = escapeHTML(node.id);
-
     return `
         <div id="card-${id}" data-node-id="${id}"
              class="absolute-card pointer-events-auto bg-white px-3 py-2 w-max min-w-[140px] max-w-[200px] shadow-md border-t-[3px] border-leaf rounded-lg z-20">
@@ -77,10 +70,8 @@ function createCardHTML(node) {
                 <button data-action="add-parent" data-id="${id}"
                         class="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-leaf-light text-white text-[8px] px-2 py-0.5 rounded-full hover:bg-leaf shadow z-30 transition">+ הורה</button>
             ` : ''}
-            ${!hasSpouse ? `
-                <button data-action="add-spouse" data-id="${id}"
-                        class="absolute -top-2.5 right-1 bg-pink-100 text-pink-700 text-[8px] px-2 py-0.5 rounded-full hover:bg-pink-200 shadow z-30 transition">♥ זוג</button>
-            ` : ''}
+            <button data-action="add-spouse" data-id="${id}"
+                    class="absolute -top-2.5 right-1 bg-pink-100 text-pink-700 text-[8px] px-2 py-0.5 rounded-full hover:bg-pink-200 shadow z-30 transition whitespace-nowrap">+ בן/בת זוג</button>
 
             <h2 data-id="${id}" data-field="name"
                 class="font-script font-bold text-xl text-leaf-dark mt-1 mb-0.5 text-center break-words rounded min-h-[28px] leading-tight">${escapeHTML(node.name || 'שם')}</h2>
@@ -485,53 +476,6 @@ function roundedOrthogonalPath(points, radius = CONNECTOR_KNEE_RADIUS) {
     return d;
 }
 
-function drawSVGLines() {
-    let svgHTML = '';
-    for (const unit of globalUnits) {
-        if (unit.members.length !== 2) continue;
-        const [left, right] = unit.members;
-        const y = left.targetY + Math.min(32, Math.min(left.cardHeight, right.cardHeight) / 2);
-        const x1 = left.x + left.cardWidth / 2;
-        const x2 = right.x - right.cardWidth / 2;
-        svgHTML += svgPath(`M ${x1} ${y} L ${x2} ${y}`, 2.5);
-    }
-
-    for (const unit of globalUnits) {
-        const childNodes = globalNodes
-            .filter(child => {
-                if (!child.parent_id) return false;
-                const parentUnit = unitByNodeId.get(child.parent_id);
-                return parentUnit === unit && child.gen === unit.gen + 1;
-            })
-            .sort((a, b) => a.x - b.x);
-        if (!childNodes.length) continue;
-
-        let startX;
-        let startY;
-        if (unit.members.length === 2) {
-            const [left, right] = unit.members;
-            startX = unit.centerX;
-            startY = left.targetY + Math.min(32, Math.min(left.cardHeight, right.cardHeight) / 2);
-        } else {
-            const parent = unit.members[0];
-            startX = parent.x;
-            startY = parent.targetY + parent.cardHeight;
-        }
-        const childTop = Math.min(...childNodes.map(child => child.targetY));
-        const midY = startY + Math.max(48, (childTop - startY) * 0.52);
-        childNodes.forEach(child => {
-            if (Math.abs(child.x - startX) < 0.5) {
-                svgHTML += svgPath(`M ${startX} ${startY} L ${child.x} ${child.targetY}`);
-                return;
-            }
-            svgHTML += svgPath(roundedOrthogonalPath([
-                [startX, startY], [startX, midY], [child.x, midY], [child.x, child.targetY]
-            ]));
-        });
-    }
-    svgLayer.innerHTML = svgHTML;
-}
-
 function assertLayout() {
     const byGen = new Map();
     globalNodes.forEach(node => {
@@ -563,26 +507,6 @@ function assertLayout() {
         const actualGap = (b.x - b.cardWidth / 2) - (a.x + a.cardWidth / 2);
         if (Math.abs(actualGap - SPOUSE_EDGE_GAP) > 0.5) console.error('Spouse gap violated:', a.id, b.id, actualGap);
     }
-}
-
-function layoutAndRender() {
-    if (!globalNodes.length) {
-        cardsLayer.innerHTML = '';
-        svgLayer.innerHTML = '';
-        return;
-    }
-    measureCards();
-    buildFamilyUnits();
-    assignGenerations();
-    const byGen = layoutUnits();
-    assignVerticalPositions(byGen);
-    positionMembers();
-    updateCanvasBounds();
-    syncCardPositions();
-    requestAnimationFrame(() => {
-        drawSVGLines();
-        assertLayout();
-    });
 }
 
 function showStatus(msg) {
