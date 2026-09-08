@@ -295,8 +295,11 @@
         const cardRect = card?.getBoundingClientRect?.();
         const viewportRect = viewportEl.getBoundingClientRect?.();
         if (cardRect && viewportRect && Number.isFinite(cardRect.left) && Number.isFinite(viewportRect.left)) {
+            const avatarRect = card.querySelector?.('.node-face-avatar')?.getBoundingClientRect?.();
+            const visualLeft = Number.isFinite(avatarRect?.left) ? Math.min(cardRect.left, avatarRect.left) : cardRect.left;
+            const visualRight = Number.isFinite(avatarRect?.right) ? Math.max(cardRect.right, avatarRect.right) : cardRect.right;
             return {
-                left: Math.max(0, viewportEl.scrollLeft + cardRect.left + cardRect.width / 2 - viewportRect.left - viewportRect.width / 2),
+                left: Math.max(0, viewportEl.scrollLeft + (visualLeft + visualRight) / 2 - viewportRect.left - viewportRect.width / 2),
                 top: Math.max(0, viewportEl.scrollTop + cardRect.top + cardRect.height / 2 - viewportRect.top - viewportRect.height / 2),
                 visual: true
             };
