@@ -141,19 +141,27 @@
         return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     }
 
+    function normalize(metadata) {
+        const next = { ...metadataObject(metadata) };
+        if (next.sex !== 'female' && next.sex !== 'male') delete next.sex;
+        if (next.lifeStatus !== 'dead') delete next.lifeStatus;
+        if (String(next.deathDate ?? '').trim() || placeText(next.deathPlace)) next.lifeStatus = 'dead';
+        return next;
+    }
+
     function withField(metadata, key, value, kind = 'text') {
         const next = { ...metadataObject(metadata) };
         if (kind === 'place') {
             const place = placeFromText(value);
             if (place) next[key] = place;
             else delete next[key];
-            return next;
+            return normalize(next);
         }
 
         const text = String(value ?? '').trim();
         if (text) next[key] = text;
         else delete next[key];
-        return next;
+        return normalize(next);
     }
 
     return {
@@ -164,6 +172,7 @@
         placeCountryCode,
         placeFromText,
         metadataObject,
+        normalize,
         withField
     };
 });
