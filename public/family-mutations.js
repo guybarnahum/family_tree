@@ -5,8 +5,9 @@
 
     const Store = window.FamilyGraphStore;
     const Api = window.FamilyApi;
+    const Selection = window.FamilySelectionController;
     const cardsLayer = document.getElementById('cards-layer');
-    if (!Store || !Api || !cardsLayer) return;
+    if (!Store || !Api || !Selection || !cardsLayer) return;
 
     const diagnostics = {
         structuralWrites: 0,
@@ -69,12 +70,10 @@
         return cloneGraph(snapshot.graph);
     }
 
-    async function refreshAfterStructuralWrite(anchorId, reason) {
-        if (typeof loadTree === 'function') {
-            await loadTree(anchorId || null, true);
-        } else {
-            await Store.read({ refresh: true, reason });
-        }
+    async function refreshAfterStructuralWrite() {
+        const GraphView = window.FamilyGraphView;
+        if (!GraphView?.refresh) throw new Error('FamilyGraphView is required after structural writes');
+        await GraphView.refresh({ force: true, recenter: false });
     }
 
     async function putGraph(value, { anchorId = null, reason = 'structural-write' } = {}) {
@@ -95,7 +94,7 @@
         diagnostics.lastAction = reason;
         diagnostics.lastError = null;
         expose();
-        await refreshAfterStructuralWrite(anchorId, reason);
+        await refreshAfterStructuralWrite();
         window.dispatchEvent(new CustomEvent('family-graph-mutated', {
             detail: { reason, anchorId }
         }));
@@ -185,18 +184,12 @@
         }
     }
 
-    async function selectAndFocus(personId, reason = 'new-person') {
-        for (let attempt = 0; attempt < 16; attempt++) {
-            if (window.FamilySelectionController?.selectPerson?.(personId, { source: reason })) {
-                await new Promise(resolve => requestAnimationFrame(resolve));
-                window.dispatchEvent(new CustomEvent('family-focus-person-name', {
-                    detail: { id: personId, reason }
-                }));
-                return true;
-            }
-            await new Promise(resolve => requestAnimationFrame(resolve));
-        }
-        return false;
+    function selectAndFocus(personId, reason = 'new-person') {
+        if (!Selection.selectPerson?.(personId, { source: reason })) return false;
+        window.dispatchEvent(new CustomEvent('family-focus-person-name', {
+            detail: { id: personId, reason }
+        }));
+        return true;
     }
 
     async function addChildForParents(parentIds, anchorId, graphValue = null) {
@@ -222,7 +215,7 @@
             type: 'parent', person1Id: parentId, person2Id: childId
         }));
         await putGraph(value, { anchorId: anchorId || parents[0], reason: 'add-child' });
-        await selectAndFocus(childId, 'new-child');
+        selectAndFocus(childId, 'new-child');
         return childId;
     }
 
@@ -254,7 +247,7 @@
         try {
             const childId = await addChildForParents(
                 [a, b],
-                window.FamilySelectionController?.getSelectedPersonId?.() || a
+                Selection.getSelectedPersonId?.() || a
             );
             showStatus('נשמר בהצלחה');
             return childId;
@@ -304,8 +297,8 @@
                 relation.person1Id !== id && relation.person2Id !== id
             );
             const anchorId = relatedAnchor || value.people[0]?.id || null;
-            if (window.FamilySelectionController?.getSelectedPersonId?.() === id && anchorId) {
-                window.FamilySelectionController.replaceUrlPerson(anchorId, {
+            if (Selection.getSelectedPersonId?.() === id && anchorId) {
+                Selection.replaceUrlPerson(anchorId, {
                     source: 'delete-person',
                     persist: true,
                     notify: true
