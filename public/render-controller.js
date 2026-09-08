@@ -290,26 +290,12 @@
     }
 
     function centerTarget(node) {
-        const card = [...cardsLayerEl.querySelectorAll('.absolute-card[data-node-id]')]
-            .find(candidate => candidate.dataset.nodeId === node.id);
-        const cardRect = card?.getBoundingClientRect?.();
-        const viewportRect = viewportEl.getBoundingClientRect?.();
-        if (cardRect && viewportRect && Number.isFinite(cardRect.left) && Number.isFinite(viewportRect.left)) {
-            const avatarRect = card.querySelector?.('.node-face-avatar')?.getBoundingClientRect?.();
-            const visualLeft = Number.isFinite(avatarRect?.left) ? Math.min(cardRect.left, avatarRect.left) : cardRect.left;
-            const visualRight = Number.isFinite(avatarRect?.right) ? Math.max(cardRect.right, avatarRect.right) : cardRect.right;
-            return {
-                left: Math.max(0, viewportEl.scrollLeft + (visualLeft + visualRight) / 2 - viewportRect.left - viewportRect.width / 2),
-                top: Math.max(0, viewportEl.scrollTop + cardRect.top + cardRect.height / 2 - viewportRect.top - viewportRect.height / 2),
-                visual: true
-            };
-        }
-
+        const faceShift = Math.max(0, Number(node.cardFaceOutset) || 0) / 2;
         const nodeCenterY = node.targetY + (Number(node.cardHeight) || 0) / 2;
         return {
-            left: Math.max(0, centerInsetX + node.x - viewportEl.clientWidth / 2),
+            left: Math.max(0, centerInsetX + node.x - faceShift - viewportEl.clientWidth / 2),
             top: Math.max(0, centerInsetY + nodeCenterY - viewportEl.clientHeight / 2),
-            visual: false
+            visual: true
         };
     }
 
