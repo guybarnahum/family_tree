@@ -1,6 +1,5 @@
-// Canonical browser-side ownership for selected/root person persistence and selection events.
-// Graph-view still owns projection/reroot mechanics in M1; every URL/localStorage selection
-// transition flows through this controller so feature modules consume one coherent selection.
+// Canonical browser-side owner for selected-person persistence and history.
+// M4-A keeps one active history owner even while legacy feature modules are still loaded.
 (() => {
     if (window.__familySelectionControllerInstalled) return;
     window.__familySelectionControllerInstalled = true;
@@ -9,13 +8,15 @@
     const nativeReplaceState = history.replaceState.bind(history);
     const nativePushState = history.pushState.bind(history);
     let selectedId = null;
+    let historyOwnerInstallations = 0;
 
     const diagnostics = {
         changes: 0,
         restored: false,
         lastPersonId: null,
         lastSource: null,
-        lastChangedAt: null
+        lastChangedAt: null,
+        historyOwnerInstallations: 0
     };
 
     function normalizeId(value) {
@@ -52,11 +53,14 @@
     }
 
     function expose() {
+        diagnostics.historyOwnerInstallations = historyOwnerInstallations;
         window.__familySelectionDiagnostics = {
             ...diagnostics,
             selectedId,
             urlPersonId: locationPersonId(),
-            storedPersonId: readStored()
+            storedPersonId: readStored(),
+            activeReplaceOwner: history.replaceState?.name || '',
+            activePushOwner: history.pushState?.name || ''
         };
     }
 
@@ -82,7 +86,7 @@
         return true;
     }
 
-    function beforeHistoryChange(nextId, source) {
+    function beforeChange(nextId, source) {
         const previousId = selectedId || locationPersonId() || readStored();
         if (!nextId || nextId === previousId) return;
         dispatch('family-selection-will-change', {
@@ -92,21 +96,40 @@
         });
     }
 
-    history.replaceState = function familySelectionReplaceState(...args) {
+    function familySelectionReplaceState(...args) {
         const nextId = rootFromHistoryArgs(args);
-        beforeHistoryChange(nextId, 'replaceState');
+        beforeChange(nextId, 'replaceState');
         const result = nativeReplaceState(...args);
         if (nextId) commit(nextId, { source: 'replaceState' });
         return result;
-    };
+    }
 
-    history.pushState = function familySelectionPushState(...args) {
+    function familySelectionPushState(...args) {
         const nextId = rootFromHistoryArgs(args);
-        beforeHistoryChange(nextId, 'pushState');
+        beforeChange(nextId, 'pushState');
         const result = nativePushState(...args);
         if (nextId) commit(nextId, { source: 'pushState' });
         return result;
-    };
+    }
+
+    function installHistoryOwner() {
+        history.replaceState = familySelectionReplaceState;
+        history.pushState = familySelectionPushState;
+        historyOwnerInstallations += 1;
+        expose();
+    }
+
+    function replaceUrlPerson(personId, { source = 'selection-request', persist = true, notify = true } = {}) {
+        const id = normalizeId(personId);
+        if (!id) return false;
+        const previousId = selectedId || locationPersonId() || readStored();
+        if (id !== previousId) beforeChange(id, source);
+        const url = new URL(window.location.href);
+        url.searchParams.set('person', id);
+        nativeReplaceState(history.state, '', url);
+        commit(id, { source, persist, notify });
+        return true;
+    }
 
     function restoreSelection() {
         const explicit = locationPersonId();
@@ -142,11 +165,8 @@
     function syncFromRenderedRoot({ source = 'graph-render', updateUrl = true } = {}) {
         const rootId = renderedRootId();
         if (!rootId) return null;
-
         if (updateUrl && locationPersonId() !== rootId) {
-            const url = new URL(window.location.href);
-            url.searchParams.set('person', rootId);
-            history.replaceState(history.state, '', url);
+            replaceUrlPerson(rootId, { source });
         } else {
             commit(rootId, { source });
         }
@@ -154,14 +174,15 @@
     }
 
     function getSelectedPersonId() {
-        return selectedId || locationPersonId() || readStored() || renderedRootId();
+        return selectedId || locationPersonId() || readStored() || null;
     }
 
-    function selectPerson(personId) {
+    function selectPerson(personId, { source = 'explicit-select' } = {}) {
         const id = normalizeId(personId);
         if (!id) return false;
         const card = document.getElementById(`card-${id}`);
         if (!card) return false;
+        replaceUrlPerson(id, { source });
         card.dispatchEvent(new MouseEvent('click', {
             bubbles: true,
             cancelable: true,
@@ -170,10 +191,20 @@
         return true;
     }
 
+    // Capture ordinary card selection before graph-view's bubble listener. Selection intent,
+    // URL and LocalStorage therefore become coherent before projection/render starts.
+    document.getElementById('cards-layer')?.addEventListener('click', event => {
+        if (event.target.closest('[data-action], [data-graph-expand], [data-graph-collapse], .graph-frontier')) return;
+        if (event.target.closest('[contenteditable="true"]')) return;
+        const card = event.target.closest('.absolute-card[data-node-id]');
+        if (!card) return;
+        replaceUrlPerson(card.dataset.nodeId, { source: 'card-click' });
+    }, true);
+
     window.addEventListener('popstate', () => {
         const nextId = locationPersonId() || readStored();
         if (!nextId) return;
-        beforeHistoryChange(nextId, 'popstate');
+        beforeChange(nextId, 'popstate');
         commit(nextId, { source: 'popstate' });
     });
 
@@ -182,9 +213,13 @@
         syncFromRenderedRoot,
         getSelectedPersonId,
         selectPerson,
+        select: selectPerson,
+        replaceUrlPerson,
+        installHistoryOwner,
         persist: personId => commit(personId, { source: 'explicit-persist', notify: false }),
         diagnostics: () => ({ ...window.__familySelectionDiagnostics })
     });
 
+    installHistoryOwner();
     expose();
 })();
