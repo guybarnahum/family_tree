@@ -6,14 +6,15 @@
 
     const Api = window.FamilyApi;
     const modal = document.getElementById('person-media-modal');
-    const editor = modal?.querySelector('.face-editor');
-    const overlay = modal?.querySelector('.face-overlay');
-    const personSelect = modal?.querySelector('.face-person-select');
     const deleteButton = modal?.querySelector('.face-delete');
-    if (!Api || !modal || !editor || !overlay || !personSelect || !deleteButton) return;
+    if (!Api || !modal || !deleteButton) return;
 
     let preferredByPerson = new Map();
     let refreshSerial = 0;
+    let activeMediaId = null;
+    let activeFaceId = null;
+    let activePersonId = null;
+    let editorOpen = false;
 
     const style = document.createElement('style');
     style.textContent = `
@@ -39,19 +40,14 @@
     button.hidden = true;
     deleteButton.before(button);
 
-    const selectedFaceId = () => overlay.querySelector('.face-box.selected')?.dataset.faceId || null;
-    const selectedPersonId = () => personSelect.value || null;
-
     function syncButton() {
-        const faceId = selectedFaceId();
-        const personId = selectedPersonId();
-        if (!editor.classList.contains('open') || !faceId || !personId) {
+        if (!editorOpen || !activeFaceId || !activePersonId) {
             button.hidden = true;
             return;
         }
         button.hidden = false;
-        const preferred = preferredByPerson.get(personId);
-        const explicitlyPrimary = preferred?.explicit && preferred?.face?.id === faceId;
+        const preferred = preferredByPerson.get(activePersonId);
+        const explicitlyPrimary = preferred?.explicit && preferred?.face?.id === activeFaceId;
         button.classList.toggle('is-primary', !!explicitlyPrimary);
         button.disabled = !!explicitlyPrimary;
         button.textContent = explicitlyPrimary ? 'תמונה ראשית ✓' : 'קבע כתמונה ראשית';
@@ -75,8 +71,8 @@
     }
 
     button.addEventListener('click', async () => {
-        const faceId = selectedFaceId();
-        const personId = selectedPersonId();
+        const faceId = activeFaceId;
+        const personId = activePersonId;
         if (!faceId || !personId || button.disabled) return;
         button.disabled = true;
         try {
@@ -102,21 +98,22 @@
         }
     });
 
-    personSelect.addEventListener('change', syncButton);
+    window.addEventListener('family-face-editor-state', event => {
+        const detail = event.detail || {};
+        const nextMediaId = detail.mediaId || null;
+        const mediaChanged = nextMediaId !== activeMediaId;
+        activeMediaId = nextMediaId;
+        activeFaceId = detail.faceId || null;
+        activePersonId = detail.personId || null;
+        editorOpen = !!detail.open;
+        syncButton();
+        if (activeMediaId && mediaChanged) void refreshPreferred();
+    });
+
     window.addEventListener('family-api-mutation', event => {
         const detail = event.detail || {};
         if (detail.scope === 'faces' && !String(detail.path || '').endsWith('/preferred')) {
             void refreshPreferred({ notify: true });
         }
     });
-
-    new MutationObserver(syncButton).observe(overlay, {
-        childList: true, subtree: true, attributes: true, attributeFilter: ['class']
-    });
-    new MutationObserver(() => {
-        if (modal.classList.contains('open')) void refreshPreferred();
-        else button.hidden = true;
-    }).observe(modal, { attributes: true, attributeFilter: ['class'] });
-
-    if (modal.classList.contains('open')) void refreshPreferred();
 })();
