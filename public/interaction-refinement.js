@@ -1,17 +1,13 @@
 // Interaction/presentation refinements for the person-centric family graph.
-// Visual role ownership lives in visual-roles.js; this file only owns pointer behavior
-// and the small center-selection footer rendered inside each card.
 (() => {
     if (window.__familyInteractionRefinementInstalled) return;
     window.__familyInteractionRefinementInstalled = true;
 
     const viewportEl = document.getElementById('scroll-viewport');
     const cardsLayerEl = document.getElementById('cards-layer');
-    if (!viewportEl || !cardsLayerEl) return;
+    const Selection = window.FamilySelectionController;
+    if (!viewportEl || !cardsLayerEl || !Selection) return;
 
-    // The old page supported mouse-drag panning. In the person-centric view, clicking
-    // people is more important than drag-to-pan, so disable that handler while keeping
-    // ordinary wheel/trackpad/scrollbar navigation intact.
     viewportEl.style.cursor = 'default';
     viewportEl.addEventListener('mousedown', event => {
         try { isDragging = false; } catch (_) {}
@@ -21,13 +17,9 @@
     const style = document.createElement('style');
     style.textContent = `
         #scroll-viewport,
-        #scroll-viewport:active {
-            cursor: default !important;
-        }
+        #scroll-viewport:active { cursor: default !important; }
 
-        .absolute-card {
-            padding-bottom: 30px !important;
-        }
+        .absolute-card { padding-bottom: 30px !important; }
 
         .graph-select-zone {
             position: absolute;
@@ -100,17 +92,6 @@
     `;
     document.head.appendChild(style);
 
-    let decorateQueued = false;
-
-    function selectedId() {
-        return window.FamilySelectionController?.getSelectedPersonId?.() ||
-            new URL(window.location.href).searchParams.get('person') || null;
-    }
-
-    function setTextIfChanged(element, value) {
-        if (element.textContent !== value) element.textContent = value;
-    }
-
     function ensureSelectZone(card) {
         let zone = card.querySelector('.graph-select-zone');
         if (!zone) {
@@ -121,34 +102,16 @@
             card.appendChild(zone);
         }
 
-        const isRoot = card.classList.contains('graph-root') || card.dataset.nodeId === selectedId();
-        setTextIfChanged(zone, isRoot ? '● מרכז נוכחי' : '◎ מרכז כאן');
-        const nextTitle = isRoot ? 'Current center person' : 'Center family view on this person';
-        if (zone.title !== nextTitle) zone.title = nextTitle;
+        const isRoot = card.dataset.nodeId === Selection.getSelectedPersonId?.();
+        zone.textContent = isRoot ? '● מרכז נוכחי' : '◎ מרכז כאן';
+        zone.title = isRoot ? 'Current center person' : 'Center family view on this person';
     }
 
     function decorate() {
-        // runtime-bootstrap installs this layer before the first graph render. MutationObserver
-        // delivery occurs before graph-view's RAF layout, so the footer is already present when
-        // cards are first measured; no corrective layout pass is necessary anymore.
         cardsLayerEl.querySelectorAll('.absolute-card[data-node-id]').forEach(ensureSelectZone);
     }
 
-    function queueDecorate() {
-        if (decorateQueued) return;
-        decorateQueued = true;
-        queueMicrotask(() => {
-            decorateQueued = false;
-            decorate();
-        });
-    }
-
-    new MutationObserver(mutations => {
-        if (mutations.some(mutation => mutation.type === 'childList')) queueDecorate();
-    }).observe(cardsLayerEl, { childList: true, subtree: false });
-
-    window.addEventListener('family-selection-changed', queueDecorate);
-    window.addEventListener('family-graph-render-stable', queueDecorate);
-
-    queueDecorate();
+    window.addEventListener('family-selection-changed', decorate);
+    window.addEventListener('family-graph-rendered', decorate);
+    decorate();
 })();
