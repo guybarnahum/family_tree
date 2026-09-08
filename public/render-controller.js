@@ -3,7 +3,7 @@
 // One projection generation owns one geometry commit:
 //   projection/cards -> named layout stages -> final connector route -> assertions -> center/anchor.
 // Historical layout modules are captured as named stages by runtime-bootstrap. Their old
-// layoutAndRender callbacks are compatibility-only and are ignored after stage capture.
+// layoutAndRender/restoreAnchor callbacks are compatibility-only and are ignored after capture.
 (() => {
     if (window.FamilyRenderController) return;
 
@@ -13,6 +13,7 @@
     const svgLayerEl = document.getElementById('svg-layer');
     if (!viewportEl || !canvasEl || !cardsLayerEl || !svgLayerEl) return;
 
+    const nativeRestoreAnchor = typeof restoreAnchor === 'function' ? restoreAnchor : null;
     const layoutStages = new Map();
     const prepareStages = new Map();
     let connectorStage = null;
@@ -31,6 +32,7 @@
         externalLayouts: 0,
         explicitLayoutRequests: 0,
         legacyLayoutRequestsIgnored: 0,
+        legacyViewportRequestsIgnored: 0,
         prepareRuns: 0,
         prepareLayoutRequestsSuppressed: 0,
         connectorRuns: 0,
@@ -249,8 +251,8 @@
     }
 
     function restoreCommittedAnchor(anchor) {
-        if (!anchor || typeof restoreAnchor !== 'function') return false;
-        restoreAnchor(anchor);
+        if (!anchor || typeof nativeRestoreAnchor !== 'function') return false;
+        nativeRestoreAnchor(anchor);
         diagnostics.viewportCommits += 1;
         return true;
     }
@@ -396,9 +398,18 @@
         expose();
     }
 
+    function controlledRestoreAnchor() {
+        diagnostics.legacyViewportRequestsIgnored += 1;
+        expose();
+    }
+
     function installFacade() {
         layoutAndRender = controlledLayoutAndRender;
         window.layoutAndRender = controlledLayoutAndRender;
+        if (nativeRestoreAnchor) {
+            restoreAnchor = controlledRestoreAnchor;
+            window.restoreAnchor = controlledRestoreAnchor;
+        }
         expose();
         return controlledLayoutAndRender;
     }
