@@ -1,10 +1,5 @@
-// Responsive/touch refinements for the person-centric family graph.
-// This file also installs the shared generation-center vertical layout used by desktop.
+// Responsive/touch styling plus shared generation-centered vertical spacing.
 (() => {
-    const viewport = document.getElementById('scroll-viewport');
-    const cardsLayer = document.getElementById('cards-layer');
-    if (!viewport || !cardsLayer) return;
-
     const mobileQuery = window.matchMedia('(max-width: 768px), (hover: none) and (pointer: coarse)');
 
     const style = document.createElement('style');
@@ -134,12 +129,8 @@
                 line-height: 1.22 !important;
             }
 
-            .absolute-card:not(.graph-root) .graph-select-zone {
-                display: none !important;
-            }
+            .absolute-card:not(.graph-root) .graph-select-zone { display: none !important; }
 
-            /* The layout itself centers every card on its generation line, so the selected
-               card can grow naturally around its center without a separate visual lift. */
             #cards-layer .absolute-card.graph-root {
                 min-width: min(228px, calc(100vw - 46px)) !important;
                 width: min(264px, calc(100vw - 40px)) !important;
@@ -177,9 +168,7 @@
                 text-align: center !important;
             }
 
-            #cards-layer .absolute-card.graph-root .default-node-text {
-                opacity: 0.58 !important;
-            }
+            #cards-layer .absolute-card.graph-root .default-node-text { opacity: 0.58 !important; }
 
             .absolute-card [data-action] {
                 opacity: 0 !important;
@@ -307,24 +296,14 @@
     `;
     document.head.appendChild(style);
 
-    if (!document.querySelector('script[data-family-presentation]')) {
-        const presentation = document.createElement('script');
-        const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
-        presentation.src = `/presentation-refinement.js?v=${encodeURIComponent(build)}`;
-        presentation.dataset.familyPresentation = 'true';
-        document.body.appendChild(presentation);
-    }
-
     function installGenerationCenteredVerticalLayout(topPadding, generationGap, fallbackHeight) {
         assignVerticalPositions = function generationCenteredVerticalPositions(byGen) {
             const gens = [...byGen.keys()].sort((a, b) => a - b);
             let bandTop = topPadding;
-
             for (const gen of gens) {
                 const units = byGen.get(gen);
                 const bandHeight = Math.max(...units.map(unit => unit.height), fallbackHeight);
                 const centerY = bandTop + bandHeight / 2;
-
                 for (const unit of units) {
                     unit.generationCenterY = centerY;
                     for (const member of unit.members) {
@@ -332,115 +311,15 @@
                         member.targetY = centerY - member.cardHeight / 2;
                     }
                 }
-
                 bandTop += bandHeight + generationGap;
             }
         };
     }
 
-    function generationLineY(unit) {
-        if (Number.isFinite(unit?.generationCenterY)) return unit.generationCenterY;
-        const member = unit?.members?.[0];
-        if (!member) return 0;
-        return member.targetY + member.cardHeight / 2;
-    }
+    installGenerationCenteredVerticalLayout(CANVAS_PAD_TOP, GENERATION_GAP, CARD_FALLBACK_HEIGHT);
 
-    function generationCenteredDrawSVGLines() {
-        let svgHTML = '';
-
-        // Spouses always connect on the generation centerline. Different card heights are
-        // centered around that same line, so the marriage connector is always horizontal.
-        for (const unit of globalUnits) {
-            if (unit.members.length !== 2) continue;
-            const [left, right] = unit.members;
-            const y = generationLineY(unit);
-            const x1 = left.x + left.cardWidth / 2;
-            const x2 = right.x - right.cardWidth / 2;
-            svgHTML += svgPath(`M ${x1} ${y} L ${x2} ${y}`, 2.5);
-        }
-
-        for (const unit of globalUnits) {
-            const childNodes = globalNodes
-                .filter(child => {
-                    if (!child.parent_id) return false;
-                    const parentUnit = unitByNodeId.get(child.parent_id);
-                    return parentUnit === unit && child.gen === unit.gen + 1;
-                })
-                .sort((a, b) => a.x - b.x);
-
-            if (!childNodes.length) continue;
-
-            let startX;
-            let startY;
-            if (unit.members.length === 2) {
-                startX = unit.centerX;
-                startY = generationLineY(unit);
-            } else {
-                const parent = unit.members[0];
-                startX = parent.x;
-                startY = parent.targetY + parent.cardHeight;
-            }
-
-            const childTop = Math.min(...childNodes.map(child => child.targetY));
-            const midY = startY + Math.max(48, (childTop - startY) * 0.52);
-
-            childNodes.forEach(child => {
-                const childX = child.x;
-                const childY = child.targetY;
-
-                if (Math.abs(childX - startX) < 0.5) {
-                    svgHTML += svgPath(`M ${startX} ${startY} L ${childX} ${childY}`);
-                    return;
-                }
-
-                svgHTML += svgPath(roundedOrthogonalPath([
-                    [startX, startY],
-                    [startX, midY],
-                    [childX, midY],
-                    [childX, childY]
-                ]));
-            });
-        }
-
-        svgLayer.innerHTML = svgHTML;
-    }
-
-    // Install the shared desktop rule before the mobile early-return. Mobile replaces only
-    // the spacing constants below; both devices use the same generation-center semantics.
-    try {
-        installGenerationCenteredVerticalLayout(CANVAS_PAD_TOP, GENERATION_GAP, CARD_FALLBACK_HEIGHT);
-        drawSVGLines = generationCenteredDrawSVGLines;
-    } catch (error) {
-        console.warn('Unable to install generation-centered layout:', error);
-    }
-
-    // Load after the shared generation-center hooks are installed. Dynamic classic scripts
-    // with async=false execute in insertion order after this script completes, so the
-    // relationship layer can safely extend (rather than race) the ordinary/mobile layout.
-    if (!document.querySelector('script[data-family-multi-partner]')) {
-        const multiPartner = document.createElement('script');
-        const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
-        multiPartner.src = `/multi-partner-refinement.js?v=${encodeURIComponent(build)}`;
-        multiPartner.dataset.familyMultiPartner = 'true';
-        multiPartner.async = false;
-        document.body.appendChild(multiPartner);
-    }
-
-    if (!mobileQuery.matches) {
-        if (globalNodes?.length) {
-            requestAnimationFrame(() => requestAnimationFrame(() => {
-                try { layoutAndRender(); }
-                catch (error) { console.warn('Unable to reflow centered generations:', error); }
-            }));
-        }
-        return;
-    }
-
-    try {
-        unitSeparation = function mobileUnitSeparation(left, right) {
-            return left.width / 2 + 48 + right.width / 2;
-        };
-
+    if (mobileQuery.matches) {
+        unitSeparation = (left, right) => left.width / 2 + 48 + right.width / 2;
         simplePack = function mobileSimplePack(units) {
             if (!units.length) return;
             const gap = 48;
@@ -452,58 +331,6 @@
             const total = cursor - gap;
             units.forEach(unit => unit.centerX -= total / 2);
         };
-
         installGenerationCenteredVerticalLayout(150, 112, 92);
-    } catch (error) {
-        console.warn('Unable to install compact mobile layout:', error);
     }
-
-    function rootId() {
-        const fromUrl = new URL(window.location.href).searchParams.get('person');
-        if (fromUrl) return fromUrl;
-        try { return localStorage.getItem('family-tree.anchor-person'); }
-        catch (_) { return null; }
-    }
-
-    let redispatching = false;
-    cardsLayer.addEventListener('click', event => {
-        if (redispatching) return;
-        if (event.target.closest('[data-action], [data-graph-expand], [data-graph-collapse], .graph-frontier')) return;
-
-        const editable = event.target.closest('[contenteditable="true"]');
-        if (!editable) return;
-
-        const card = editable.closest('.absolute-card[data-node-id]');
-        if (!card || card.dataset.nodeId === rootId()) return;
-
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        try {
-            redispatching = true;
-            card.dispatchEvent(new MouseEvent('click', {
-                bubbles: true,
-                cancelable: true,
-                view: window
-            }));
-        } finally {
-            redispatching = false;
-        }
-    }, true);
-
-    requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-            try {
-                layoutAndRender();
-                const root = globalNodeMap.get(rootId());
-                if (root?.x != null && root?.targetY != null) {
-                    viewport.scrollLeft = Math.max(0, root.x - viewport.clientWidth / 2);
-                    const rootCenterY = root.targetY + root.cardHeight / 2;
-                    const headerClearance = Math.min(150, viewport.clientHeight * 0.22);
-                    viewport.scrollTop = Math.max(0, rootCenterY - viewport.clientHeight / 2 + headerClearance / 2);
-                }
-            } catch (error) {
-                console.warn('Unable to apply mobile family layout:', error);
-            }
-        });
-    });
 })();
