@@ -142,12 +142,12 @@ async function handleFrontendAsset(request, env) {
   const foundationalScripts = [
     ['/legacy-symbols.js', 'data-family-legacy-symbols'],
     ['/family-core.js', 'data-family-core'],
+    ['/family-api.js', 'data-family-api'],
     ['/graph-store.js', 'data-family-graph-store'],
     ['/graph-status.js', 'data-family-graph-status'],
     ['/family-mutations.js', 'data-family-mutations'],
     ['/person-identity.js', 'data-family-person-identity'],
     ['/person-picker-labels.js', 'data-family-person-picker-labels'],
-    ['/media-resilience.js', 'data-family-media-resilience'],
     ['/graph-view.js', 'data-family-graph-view'],
     ['/runtime-bootstrap.js', 'data-family-runtime-bootstrap']
   ];
