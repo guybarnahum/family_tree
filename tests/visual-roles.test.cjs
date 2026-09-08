@@ -166,8 +166,17 @@ assert.strictEqual(card('R').dataset.familyVisualRole, 'root');
 assert.strictEqual(card('R').classList.contains('graph-context'), false);
 assert.strictEqual(card('O').classList.contains('graph-context'), true);
 
-// Once the projection commits, the rendered root becomes authoritative. Even if the node carried
-// a contextual viewRole in the previous projection, the new root may never remain dimmed.
+// The committed render generation is stronger evidence than either pending selection or a stale
+// DOM root marker. This is the exact boundary used by M2/M3 after projection/layout commit.
+window.dispatchEvent({ type: 'family-graph-rendered', detail: { rootId: 'O', generation: 2 } });
+assert.strictEqual(window.__familyVisualRoleDiagnostics.rootId, 'O');
+assert.strictEqual(card('O').dataset.familyVisualRole, 'root');
+assert.strictEqual(card('O').classList.contains('graph-context'), false);
+assert.strictEqual(card('O').classList.contains('graph-spouse-parent'), false);
+assert.strictEqual(card('O').classList.contains('graph-spouse-ancestor-deep'), false);
+assert.notStrictEqual(card('R').dataset.familyVisualRole, 'root');
+
+// Once the projected DOM root marker catches up, ordinary refreshes continue to use it.
 card('R').classList.remove('graph-root');
 card('O').classList.add('graph-root');
 window.FamilyVisualRoles.refreshNow();
