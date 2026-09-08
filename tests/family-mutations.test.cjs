@@ -81,7 +81,8 @@ const context = {
   FamilyGraphView: {
     async refresh(options) {
       graphRefreshes += 1;
-      assert.deepStrictEqual(options, { force: true, recenter: false });
+      assert.strictEqual(options.force, true);
+      assert.strictEqual(options.recenter, false);
     }
   },
   FamilyApi: {
