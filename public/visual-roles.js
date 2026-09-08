@@ -7,6 +7,38 @@
     const Store = window.FamilyGraphStore;
     if (!cardsLayer || !Store) return;
 
+    const style = document.createElement('style');
+    style.textContent = `
+        .absolute-card.graph-root {
+            outline: 3px solid rgba(88, 129, 87, 0.58) !important;
+            outline-offset: 3px;
+            box-shadow: 0 12px 28px rgba(52, 78, 65, 0.24) !important;
+            border-top-color: #344e41 !important;
+            background: #fff !important;
+            opacity: 1 !important;
+            filter: none !important;
+        }
+
+        .absolute-card.graph-spouse-parent {
+            opacity: 0.60;
+            filter: saturate(0.58);
+        }
+
+        .absolute-card.graph-spouse-ancestor-deep {
+            opacity: 0.34;
+            filter: saturate(0.38);
+        }
+
+        .absolute-card.graph-spouse-parent:hover,
+        .absolute-card.graph-spouse-parent:focus-within,
+        .absolute-card.graph-spouse-ancestor-deep:hover,
+        .absolute-card.graph-spouse-ancestor-deep:focus-within {
+            opacity: 0.88;
+            filter: saturate(0.78);
+        }
+    `;
+    document.head.appendChild(style);
+
     function descendants(seedId, childrenByParent) {
         const result = new Set();
         const queue = [...(childrenByParent.get(seedId) || [])];
