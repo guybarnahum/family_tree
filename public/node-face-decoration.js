@@ -1,5 +1,5 @@
 // Graph card decoration for the preferred (or deterministic fallback) tagged face.
-// Data comes through FamilyApi; card lifecycle comes from committed graph renders.
+// Data comes through FamilyApi; RenderController applies decoration before card measurement.
 (() => {
     if (window.__familyNodeFaceDecorationInstalled) return;
     window.__familyNodeFaceDecorationInstalled = true;
@@ -80,8 +80,31 @@
         }
     }
 
-    async function refresh() {
+    function extendMeasurements() {
+        for (const node of globalNodes || []) {
+            const card = document.getElementById(`card-${node.id}`);
+            if (!card) continue;
+            const bodyWidth = Math.max(1, Number(node.cardWidth) || 1);
+            const avatar = card.querySelector('.node-face-avatar');
+            const width = avatar ? parseFloat(getComputedStyle(avatar).width) : 0;
+            const outset = Number.isFinite(width) && width > 0 ? width / 2 : 0;
+            node.cardBodyWidth = bodyWidth;
+            node.cardFaceOutset = outset;
+            node.cardWidth = bodyWidth + outset;
+        }
+    }
+
+    function visibleAvatarSignature() {
+        return [...cardsLayer.querySelectorAll('.absolute-card[data-node-id]')]
+            .filter(card => card.querySelector('.node-face-avatar'))
+            .map(card => card.dataset.nodeId)
+            .sort()
+            .join('|');
+    }
+
+    async function refresh({ relayout = false } = {}) {
         const serial = ++refreshSerial;
+        const before = relayout ? visibleAvatarSignature() : '';
         try {
             const response = await Api.request('/api/faces/preferred', { cache: 'no-store' });
             if (!response.ok) throw new Error(await response.text());
@@ -91,15 +114,22 @@
                 (Array.isArray(payload.items) ? payload.items : []).map(item => [item.personId, item])
             );
             apply();
+            if (relayout && before !== visibleAvatarSignature() && globalNodes?.length) {
+                void window.FamilyRenderController?.requestLayout?.({
+                    reason: 'portrait-presence',
+                    preserveAnchor: true
+                });
+            }
         } catch (error) {
             console.warn('Unable to load preferred faces:', error);
         }
     }
 
-    window.addEventListener('family-graph-rendered', apply);
-    window.addEventListener('family-faces-changed', () => void refresh());
-    window.addEventListener('family-face-primary-changed', () => void refresh());
-    window.addEventListener('family-graph-synced', () => void refresh());
+    const ready = refresh();
+    window.FamilyNodeFaceDecoration = Object.freeze({ apply, extendMeasurements, ready });
 
-    void refresh();
+    window.addEventListener('family-graph-rendered', apply);
+    window.addEventListener('family-faces-changed', () => void refresh({ relayout: true }));
+    window.addEventListener('family-face-primary-changed', () => void refresh({ relayout: true }));
+    window.addEventListener('family-graph-synced', () => void refresh({ relayout: true }));
 })();
