@@ -40,6 +40,7 @@
                 .map(person => [
                     person?.id || '',
                     normalizePersonName(person?.name),
+                    metadataValue(person, 'sex'),
                     metadataValue(person, 'birthDate'),
                     metadataValue(person, 'deathDate'),
                     metadataValue(person, 'birthPlace'),
@@ -75,8 +76,11 @@
         const parents = [...(indexes.parentsByChild.get(person.id) || [])].sort(byRelatedName);
         const children = [...(indexes.childrenByParent.get(person.id) || [])].sort(byRelatedName);
         const spouses = [...(indexes.spousesByPerson.get(person.id) || [])].sort(byRelatedName);
+        const childOf = person?.metadata?.sex === 'male'
+            ? 'בן של'
+            : person?.metadata?.sex === 'female' ? 'בת של' : 'ילד/ה של';
 
-        for (const parentId of parents) push(`הורה: ${relatedName(parentId)}`);
+        for (const parentId of parents) push(`${childOf} ${relatedName(parentId)}`);
         if (parents.length > 1) push(`הורים: ${parents.map(relatedName).join(', ')}`);
         for (const childId of children) push(`הורה של ${relatedName(childId)}`);
         for (const spouseId of spouses) push(`בן/בת זוג: ${relatedName(spouseId)}`);
