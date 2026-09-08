@@ -30,11 +30,12 @@
         catch (_) { return null; }
     }
 
-    function currentRootId() {
-        // Visual roles describe the committed projection, not pending selection intent.
-        // During reroot, SelectionController updates before graph-view replaces the cards.
-        // Using that pending ID against the old projection can temporarily classify the
-        // entire visible graph relative to a person that is not yet the rendered root.
+    function currentRootId(committedRootId = null) {
+        const committed = String(committedRootId ?? '').trim();
+        if (committed) return committed;
+
+        // Outside an authoritative render commit, visual roles describe the currently rendered
+        // projection rather than pending selection intent.
         const rendered = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
         if (rendered?.dataset.nodeId) return rendered.dataset.nodeId;
         return selectedPersonId();
@@ -132,11 +133,11 @@
         return result;
     }
 
-    function apply() {
+    function apply(committedRootId = null) {
         if (applying) return;
         applying = true;
         try {
-            const rootId = currentRootId();
+            const rootId = currentRootId(committedRootId);
             if (!rootId) return;
 
             const snapshot = Store?.snapshot?.() || null;
@@ -155,7 +156,7 @@
             for (const card of cardsLayer.querySelectorAll('.absolute-card[data-node-id]')) {
                 const id = card.dataset.nodeId;
                 const node = globalNodeMap?.get?.(id) || null;
-                const isRoot = id === rootId || card.classList.contains('graph-root');
+                const isRoot = id === rootId;
                 const baseContext = node?.viewRole === 'context';
                 const contextual = !isRoot && !rootSiblings.has(id) && (baseContext || context.has(id));
                 const depth = spouseDepths.get(id);
@@ -223,11 +224,11 @@
     }
 
     // Selection intent changes before graph-view commits the new projection. Do not style the
-    // old card set against that pending root. RenderController calls refreshNow() during the
-    // authoritative commit and then emits family-graph-rendered.
+    // old card set against that pending root. The authoritative render event carries the root
+    // ID for that exact generation, so the final role pass never has to infer it from DOM/history.
     window.addEventListener('family-graph-store-changed', queueApply);
     window.addEventListener('family-person-pane-saved', queueApply);
-    window.addEventListener('family-graph-rendered', apply);
+    window.addEventListener('family-graph-rendered', event => apply(event.detail?.rootId || null));
 
     window.FamilyVisualRoles = Object.freeze({
         refresh: queueApply,
