@@ -22,7 +22,6 @@ async function ensureGraphRevisionSchema(env) {
       `)
     ]);
   }
-
   try {
     await graphRevisionSchemaPromise;
   } catch (error) {
@@ -81,17 +80,13 @@ async function normalizeGraphMutationRequest(request, url) {
   if (url.pathname !== '/api/graph' || request.method.toUpperCase() !== 'PUT') return request;
   const contentType = request.headers.get('Content-Type') || '';
   if (!contentType.includes('application/json')) return request;
-
   try {
     const payload = await request.clone().json();
     const normalized = normalizeParentUnions(payload);
     const headers = new Headers(request.headers);
     headers.set('Content-Type', 'application/json');
     headers.delete('Content-Length');
-    return new Request(request, {
-      headers,
-      body: JSON.stringify(normalized)
-    });
+    return new Request(request, { headers, body: JSON.stringify(normalized) });
   } catch (_) {
     return request;
   }
@@ -142,6 +137,7 @@ async function handleFrontendAsset(request, env) {
   const foundationalScripts = [
     ['/legacy-symbols.js', 'data-family-legacy-symbols'],
     ['/family-core.js', 'data-family-core'],
+    ['/selection-controller.js', 'data-family-selection-controller'],
     ['/family-api.js', 'data-family-api'],
     ['/graph-store.js', 'data-family-graph-store'],
     ['/graph-status.js', 'data-family-graph-status'],
@@ -154,7 +150,9 @@ async function handleFrontendAsset(request, env) {
 
   const scripts = foundationalScripts
     .filter(([path, dataKey]) => !html.includes(dataKey) && !html.includes(`src="${path}`))
-    .map(([path, dataKey]) => `<script src="${path}?v=${encodeURIComponent(build.short)}" ${dataKey}></script>`)
+    .map(([path, dataKey]) =>
+      `<script src="${path}?v=${encodeURIComponent(build.short)}" ${dataKey} data-family-bootstrap-loaded="true"></script>`
+    )
     .join('\n');
   if (scripts) html = html.replace('</body>', `${scripts}\n</body>`);
 
@@ -260,7 +258,6 @@ export default {
         console.error('Unable to attach graph revision:', error);
       }
     }
-
     return response;
   }
 };
