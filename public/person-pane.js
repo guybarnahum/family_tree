@@ -10,6 +10,7 @@
 
     const Metadata = window.FamilyPersonMetadata || {
         metadataObject: value => value && typeof value === 'object' && !Array.isArray(value) ? value : {},
+        normalize: value => value && typeof value === 'object' && !Array.isArray(value) ? value : {},
         placeText: value => typeof value === 'string' ? value.trim() : String(value?.text ?? '').trim(),
         inferCountryCode: () => null,
         flagEmoji: () => '',
@@ -124,6 +125,37 @@
             margin: 0 -5px 18px;
             border-radius: 7px;
             min-height: 38px;
+        }
+
+        .person-pane-attributes {
+            display: flex;
+            gap: 6px;
+            direction: ltr;
+            margin: -12px 0 14px;
+        }
+
+        .person-pane-attribute {
+            width: 28px;
+            height: 24px;
+            padding: 0;
+            border: 1px solid rgba(163, 177, 138, 0.24);
+            border-radius: 999px;
+            background: rgba(163, 177, 138, 0.05);
+            color: #9aa39a;
+            font: 500 14px/1 Inter, sans-serif;
+            cursor: pointer;
+        }
+
+        .person-pane-attribute.is-set {
+            color: #588157;
+            border-color: rgba(88, 129, 87, 0.30);
+            background: rgba(163, 177, 138, 0.11);
+        }
+
+        .person-pane-attribute:hover,
+        .person-pane-attribute:focus-visible {
+            background: rgba(163, 177, 138, 0.17);
+            outline: none;
         }
 
         .person-pane-section {
@@ -351,7 +383,7 @@
     const textValue = value => value == null ? '' : String(value).trim();
 
     function metadataForPerson(person) {
-        return person ? Metadata.metadataObject(person.metadata) : {};
+        return person ? Metadata.normalize(Metadata.metadataObject(person.metadata)) : {};
     }
 
     function metadataFieldValue(metadata, key, kind) {
@@ -370,6 +402,23 @@
         element.dataset.placeholder = placeholder;
         element.textContent = value;
         return element;
+    }
+
+    function attributeButton(person, key, value) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `person-pane-attribute${value ? ' is-set' : ''}`;
+        button.dataset.id = person.id;
+        button.dataset.personAttribute = key;
+        if (key === 'sex') {
+            button.textContent = value === 'female' ? '♀' : value === 'male' ? '♂' : '–';
+            button.title = `מין: ${value === 'female' ? 'נקבה' : value === 'male' ? 'זכר' : 'לא הוגדר'}`;
+        } else {
+            button.textContent = value === 'dead' ? '●' : '–';
+            button.title = value === 'dead' ? 'נפטר/ה' : 'מצב חיים: לא הוגדר';
+        }
+        button.setAttribute('aria-label', button.title);
+        return button;
     }
 
     function updatePlaceFlag(editor) {
@@ -493,6 +542,14 @@
         name.dataset.placeholder = 'שם';
         name.textContent = nameValue;
         body.appendChild(name);
+
+        const attributes = document.createElement('div');
+        attributes.className = 'person-pane-attributes';
+        attributes.append(
+            attributeButton(person, 'sex', metadata.sex),
+            attributeButton(person, 'lifeStatus', metadata.lifeStatus)
+        );
+        body.appendChild(attributes);
 
         const birthRows = [];
         if (fieldVisible(metadata, 'birthDate', focusField)) {
