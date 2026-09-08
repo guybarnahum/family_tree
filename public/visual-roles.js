@@ -1,6 +1,6 @@
 // Single root-relative visual-role pass for family cards.
-// Projection supplies node.viewRole; this module is the only refinement layer that converts
-// canonical graph context into graph-context / spouse-ancestry dimming classes.
+// GraphView owns projection semantics (root / primary / sibling / context); this module only
+// translates those committed roles plus spouse-ancestry policy into visual classes.
 (() => {
     if (window.__familyVisualRolesInstalled) return;
     window.__familyVisualRolesInstalled = true;
@@ -53,36 +53,6 @@
         return result;
     }
 
-    function siblings(personId, parentsByChild, childrenByParent) {
-        const result = new Set();
-        for (const parentId of parentsByChild.get(personId) || []) {
-            for (const childId of childrenByParent.get(parentId) || []) {
-                if (childId !== personId) result.add(childId);
-            }
-        }
-        return result;
-    }
-
-    // The committed projection can contain conservative, view-only co-parent inference for
-    // legacy one-parent rows. Those inferred family units are intentionally absent from the
-    // canonical Store indexes, so derive sibling protection from the projection as well.
-    function projectionSiblings(rootId) {
-        const map = typeof globalNodeMap !== 'undefined' ? globalNodeMap : null;
-        const root = map?.get?.(rootId) || null;
-        if (!root?.parent_id) return new Set();
-
-        const parentUnit = new Set([root.parent_id]);
-        const projectedParent = map.get(root.parent_id) || null;
-        if (projectedParent?.spouse_id) parentUnit.add(projectedParent.spouse_id);
-
-        const result = new Set();
-        for (const [id, node] of map) {
-            if (id === rootId || !node?.parent_id) continue;
-            if (parentUnit.has(node.parent_id)) result.add(id);
-        }
-        return result;
-    }
-
     function sharedChildren(a, b, childrenByParent) {
         const aChildren = childrenByParent.get(a) || new Set();
         const bChildren = childrenByParent.get(b) || new Set();
@@ -90,11 +60,10 @@
     }
 
     function rootContextPolicy(rootId, graphIndexes) {
-        const { parentsByChild, childrenByParent, spousesByPerson } = graphIndexes;
+        const { childrenByParent, spousesByPerson } = graphIndexes;
         const rootSpouses = new Set(spousesByPerson.get(rootId) || []);
         const rootDescendants = descendants(rootId, childrenByParent);
-        const rootSiblings = siblings(rootId, parentsByChild, childrenByParent);
-        const protectedIds = new Set([rootId, ...rootSpouses, ...rootDescendants, ...rootSiblings]);
+        const protectedIds = new Set([rootId, ...rootSpouses, ...rootDescendants]);
         const context = new Set();
 
         for (const spouseId of rootSpouses) {
@@ -121,7 +90,7 @@
         }
 
         for (const id of protectedIds) context.delete(id);
-        return { context, rootSiblings, protectedIds };
+        return { context, protectedIds };
     }
 
     function spouseAncestorDepths(rootId, graphIndexes) {
@@ -167,25 +136,21 @@
                 spousesByPerson: new Map()
             };
             const hasGraph = !!snapshot?.graph;
-            const { context, rootSiblings, protectedIds } = hasGraph
+            const { context, protectedIds } = hasGraph
                 ? rootContextPolicy(rootId, graphIndexes)
-                : { context: new Set(), rootSiblings: new Set(), protectedIds: new Set([rootId]) };
-            const canonicalSiblings = new Set(rootSiblings);
-            const projectedSiblings = projectionSiblings(rootId);
-            for (const id of projectedSiblings) {
-                rootSiblings.add(id);
-                protectedIds.add(id);
-                context.delete(id);
-            }
-
+                : { context: new Set(), protectedIds: new Set([rootId]) };
             const spouseDepths = hasGraph ? spouseAncestorDepths(rootId, graphIndexes) : new Map();
+            const siblingIds = new Set();
             const roles = {};
 
             for (const card of cardsLayer.querySelectorAll('.absolute-card[data-node-id]')) {
                 const id = card.dataset.nodeId;
                 const node = globalNodeMap?.get?.(id) || null;
                 const isRoot = id === rootId;
-                const protectedFromDimming = protectedIds.has(id);
+                const isSibling = node?.viewRole === 'sibling';
+                if (isSibling) siblingIds.add(id);
+
+                const protectedFromDimming = isRoot || isSibling || protectedIds.has(id);
                 const baseContext = node?.viewRole === 'context';
                 const contextual = !protectedFromDimming && (baseContext || context.has(id));
                 const depth = spouseDepths.get(id);
@@ -200,7 +165,7 @@
                 if (isRoot) {
                     delete card.dataset.familyRootContextRole;
                     card.dataset.familyVisualRole = 'root';
-                } else if (rootSiblings.has(id)) {
+                } else if (isSibling) {
                     card.dataset.familyRootContextRole = 'sibling';
                     card.dataset.familyVisualRole = 'sibling';
                 } else if (context.has(id)) {
@@ -226,9 +191,7 @@
             window.__familyVisualRoleDiagnostics = {
                 rootId,
                 selectedPersonId: selectedPersonId(),
-                siblings: [...rootSiblings],
-                canonicalSiblings: [...canonicalSiblings],
-                projectionSiblings: [...projectedSiblings],
+                siblings: [...siblingIds],
                 contextual: [...context],
                 roles,
                 appliedAt
@@ -236,9 +199,7 @@
             window.__familyRootContextDiagnostics = {
                 rootId,
                 selectedPersonId: selectedPersonId(),
-                siblings: [...rootSiblings],
-                canonicalSiblings: [...canonicalSiblings],
-                projectionSiblings: [...projectedSiblings],
+                siblings: [...siblingIds],
                 contextual: [...context],
                 appliedAt
             };
