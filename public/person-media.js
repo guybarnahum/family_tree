@@ -378,13 +378,24 @@
         updateModalFlag();
         modal.classList.add('open');
         modal.setAttribute('aria-hidden', 'false');
+        window.dispatchEvent(new CustomEvent('family-person-media-opened', {
+            detail: { mediaId: item.id, personId: section.dataset.personId || null }
+        }));
     }
 
     function closeMedia() {
+        const item = selectedItem;
+        const wasOpen = modal.classList.contains('open');
+        const personId = item?._section?.dataset.personId || null;
         selectedItem = null;
         modal.classList.remove('open');
         modal.setAttribute('aria-hidden', 'true');
         modalImage.removeAttribute('src');
+        if (wasOpen) {
+            window.dispatchEvent(new CustomEvent('family-person-media-closed', {
+                detail: { mediaId: item?.id || null, personId }
+            }));
+        }
     }
 
     async function patchSelected(field, value, element, original) {
