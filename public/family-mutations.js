@@ -1,14 +1,12 @@
-// M4-C canonical graph/person mutation owner.
-//
-// UI modules express intent here. Structural writes use one authoritative graph snapshot and
-// one transactional PUT /api/graph; person detail edits use one PATCH /api/nodes/:id. This
-// module owns action dispatch, Store mutation bookkeeping and the one post-write graph refresh.
+// Canonical graph/person mutation owner.
+// UI modules express intent here; FamilyApi owns transport and GraphStore owns graph state.
 (() => {
     if (window.FamilyMutations) return;
 
     const Store = window.FamilyGraphStore;
+    const Api = window.FamilyApi;
     const cardsLayer = document.getElementById('cards-layer');
-    if (!Store || !cardsLayer) return;
+    if (!Store || !Api || !cardsLayer) return;
 
     const diagnostics = {
         structuralWrites: 0,
@@ -71,13 +69,6 @@
         return cloneGraph(snapshot.graph);
     }
 
-    function revisionFrom(response) {
-        return Store.finiteRevision(
-            response.headers.get('X-Family-Revision') ||
-            response.headers.get('X-Family-Graph-Revision')
-        );
-    }
-
     async function refreshAfterStructuralWrite(anchorId, reason) {
         if (typeof loadTree === 'function') {
             await loadTree(anchorId || null, true);
@@ -94,13 +85,12 @@
             people: value.people || [],
             relationships: value.relationships || []
         };
-        const response = await fetch('/api/graph', {
+        const response = await Api.request('/api/graph', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
         });
         if (!response.ok) throw new Error(await response.text());
-        Store.noteMutation({ scope: 'graph', revision: revisionFrom(response) });
         diagnostics.structuralWrites += 1;
         diagnostics.lastAction = reason;
         diagnostics.lastError = null;
@@ -130,13 +120,13 @@
         }
         if (fields.length !== 1) throw new Error('Person update expects exactly one field');
 
-        const response = await fetch(`/api/nodes/${encodeURIComponent(id)}`, {
+        const response = await Api.request(`/api/nodes/${encodeURIComponent(id)}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(effective)
         });
         if (!response.ok) throw new Error(await response.text());
-        const revision = revisionFrom(response);
+        const revision = Api.revisionFromResponse(response);
         Store.updatePerson(id, effective, { revision, reason });
         diagnostics.personWrites += 1;
         diagnostics.lastAction = reason;
@@ -262,7 +252,10 @@
     async function addChildToUnion(a, b) {
         showStatus('מוסיף ילד...');
         try {
-            const childId = await addChildForParents([a, b], window.FamilySelectionController?.getSelectedPersonId?.() || a);
+            const childId = await addChildForParents(
+                [a, b],
+                window.FamilySelectionController?.getSelectedPersonId?.() || a
+            );
             showStatus('נשמר בהצלחה');
             return childId;
         } catch (error) {
@@ -284,7 +277,7 @@
 
     async function hasMedia(personId) {
         try {
-            const response = await fetch(`/api/media?person=${encodeURIComponent(personId)}`, { cache: 'no-store' });
+            const response = await Api.request(`/api/media?person=${encodeURIComponent(personId)}`, { cache: 'no-store' });
             if (!response.ok) return true;
             const payload = await response.json();
             return Array.isArray(payload.items) && payload.items.length > 0;
