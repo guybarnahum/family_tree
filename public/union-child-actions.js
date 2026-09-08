@@ -1,23 +1,17 @@
-// Union-aware child/parent actions.
-//
-// Structural writes are expressed as one canonical graph PUT so one logical action has one
-// revision. Canonical data comes from FamilyGraphStore; render/controller lifecycle is explicit.
+// Union-aware child action presentation.
+// Structural mutation ownership lives in FamilyMutations; this module only renders union buttons.
 (() => {
     if (window.FamilyUnionChildActions) return;
 
     const cardsLayer = document.getElementById('cards-layer');
     const Store = window.FamilyGraphStore;
-    if (!cardsLayer || !Store) return;
+    const Mutations = window.FamilyMutations;
+    if (!cardsLayer || !Store || !Mutations) return;
 
     const UNION_LANE_CLEARANCE = 18;
     const UNION_LANE_STEP = 16;
-    const MAX_FOCUS_ATTEMPTS = 16;
-
-    let graph = null;
     let spouseMap = new Map();
-    let parentsMap = new Map();
     let syncQueued = false;
-    let installed = false;
 
     const style = document.createElement('style');
     style.textContent = `
@@ -65,280 +59,28 @@
             }
         }
 
-        @media print {
-            #family-union-child-actions { display: none !important; }
-        }
+        @media print { #family-union-child-actions { display: none !important; } }
     `;
     document.head.appendChild(style);
 
     function refreshFromStore() {
-        const snapshot = Store.snapshot();
-        graph = snapshot.graph || null;
-        spouseMap = snapshot.indexes?.spousesByPerson || new Map();
-        parentsMap = snapshot.indexes?.parentsByChild || new Map();
-        return graph;
+        spouseMap = Store.snapshot().indexes?.spousesByPerson || new Map();
     }
 
     function spouseIds(personId) {
         return [...(spouseMap.get(personId) || [])];
     }
 
-    function explicitParentIds(childId) {
-        return [...(parentsMap.get(childId) || [])];
-    }
-
     function pairKey(a, b) {
         return a < b ? `${a}|${b}` : `${b}|${a}`;
     }
 
-    function sameRelationship(a, b) {
-        if (a.type !== b.type) return false;
-        if (a.type === 'spouse') {
-            return (a.person1Id === b.person1Id && a.person2Id === b.person2Id) ||
-                (a.person1Id === b.person2Id && a.person2Id === b.person1Id);
-        }
-        return a.person1Id === b.person1Id && a.person2Id === b.person2Id;
-    }
-
-    function addRelationship(value, relation) {
-        if (!value.relationships.some(existing => sameRelationship(existing, relation))) {
-            value.relationships.push(relation);
-        }
-    }
-
-    function cloneGraph(value) {
-        if (typeof structuredClone === 'function') return structuredClone(value);
-        return JSON.parse(JSON.stringify(value));
-    }
-
-    function nextPersonId() {
-        return 'node_' + Math.random().toString(36).slice(2, 11);
-    }
-
     function currentRootId() {
-        const selected = window.FamilySelectionController?.getSelectedPersonId?.();
-        if (selected) return selected;
-        const card = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
-        if (card?.dataset.nodeId) return card.dataset.nodeId;
-        const urlId = new URL(window.location.href).searchParams.get('person');
-        if (urlId) return urlId;
-        try { return localStorage.getItem('family-tree.anchor-person'); }
-        catch (_) { return null; }
-    }
-
-    async function authoritativeGraph() {
-        // Structural writes may not use the intentionally coalesced/stale remote view. Force one
-        // authoritative Store refresh first, then clone that exact canonical document for intent.
-        const snapshot = await Store.refresh({
-            authoritative: true,
-            reason: 'structural-intent'
-        });
-        if (!snapshot?.graph) throw new Error('Authoritative graph is unavailable');
-        refreshFromStore();
-        return cloneGraph(snapshot.graph);
-    }
-
-    async function putGraph(value, anchorId) {
-        const payload = {
-            ...value,
-            format: 'family-graph',
-            version: 2,
-            people: value.people || [],
-            relationships: value.relationships || []
-        };
-        const response = await fetch('/api/graph', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        if (!response.ok) throw new Error(await response.text());
-
-        const revision = Store.finiteRevision(
-            response.headers.get('X-Family-Revision') ||
-            response.headers.get('X-Family-Graph-Revision')
-        );
-        Store.noteMutation({ scope: 'graph', revision });
-
-        // One canonical graph load folds the server-normalized result into Store and performs
-        // the one controller-owned structural render generation.
-        if (typeof loadTree === 'function') await loadTree(anchorId || null, true);
-        else await Store.read({ refresh: true, reason: 'structural-write' });
-        refreshFromStore();
-        queueSync();
+        return window.FamilySelectionController?.getSelectedPersonId?.() || null;
     }
 
     function personName(id) {
-        const person = Store.person(id) || graph?.people?.find(candidate => candidate.id === id);
-        return String(person?.name || '').trim() || 'ללא שם';
-    }
-
-    async function selectAndFocusNewPerson(personId) {
-        for (let attempt = 0; attempt < MAX_FOCUS_ATTEMPTS; attempt++) {
-            const card = cardsLayer.querySelector(`.absolute-card[data-node-id="${CSS.escape(personId)}"]`);
-            if (card) {
-                card.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                await new Promise(resolve => requestAnimationFrame(resolve));
-                window.dispatchEvent(new CustomEvent('family-focus-person-name', {
-                    detail: { id: personId, reason: 'new-child' }
-                }));
-                return true;
-            }
-            await new Promise(resolve => requestAnimationFrame(resolve));
-        }
-        return false;
-    }
-
-    async function addChildForParents(parentIds, anchorId) {
-        const uniqueParents = [...new Set(parentIds.filter(Boolean))];
-        if (!uniqueParents.length || uniqueParents.length > 2) {
-            throw new Error('Child creation requires one or two explicit parents');
-        }
-
-        const value = await authoritativeGraph();
-        const ids = new Set(value.people.map(person => person.id));
-        if (uniqueParents.some(id => !ids.has(id))) throw new Error('Parent is missing from graph');
-
-        if (uniqueParents.length === 2) {
-            const [a, b] = uniqueParents;
-            const unionExists = value.relationships.some(relation =>
-                relation.type === 'spouse' &&
-                ((relation.person1Id === a && relation.person2Id === b) ||
-                 (relation.person1Id === b && relation.person2Id === a))
-            );
-            if (!unionExists) throw new Error('Selected parents are not a union');
-        }
-
-        const childId = nextPersonId();
-        value.people.push({ id: childId, name: null, metadata: {} });
-        for (const parentId of uniqueParents) {
-            addRelationship(value, {
-                type: 'parent',
-                person1Id: parentId,
-                person2Id: childId
-            });
-        }
-
-        await putGraph(value, anchorId || uniqueParents[0]);
-        await selectAndFocusNewPerson(childId);
-        return childId;
-    }
-
-    async function unionAwareAddChild(parentId) {
-        showStatus('מוסיף ילד...');
-        try {
-            const value = await authoritativeGraph();
-            const partners = spouseIds(parentId);
-            if (partners.length > 1) {
-                showStatus('בחרו זוגיות להוספת ילד');
-                queueSync();
-                return;
-            }
-
-            const childId = nextPersonId();
-            value.people.push({ id: childId, name: null, metadata: {} });
-            addRelationship(value, {
-                type: 'parent', person1Id: parentId, person2Id: childId
-            });
-            if (partners.length === 1) {
-                addRelationship(value, {
-                    type: 'parent', person1Id: partners[0], person2Id: childId
-                });
-            }
-
-            await putGraph(value, parentId);
-            await selectAndFocusNewPerson(childId);
-            showStatus('נשמר בהצלחה');
-        } catch (error) {
-            console.error('Unable to add union-aware child:', error);
-            showStatus('שגיאה בהוספה');
-        }
-    }
-
-    async function addChildToUnion(a, b) {
-        showStatus('מוסיף ילד...');
-        try {
-            await addChildForParents([a, b], currentRootId() || a);
-            showStatus('נשמר בהצלחה');
-        } catch (error) {
-            console.error('Unable to add child to union:', error);
-            showStatus('שגיאה בהוספה');
-        }
-    }
-
-    async function unionAwareAddParent(childId) {
-        showStatus('מוסיף הורה...');
-        try {
-            const value = await authoritativeGraph();
-            const existingParents = explicitParentIds(childId);
-            if (existingParents.length >= 2) {
-                showStatus('כבר יש שני הורים');
-                return;
-            }
-
-            const parentId = nextPersonId();
-            value.people.push({ id: parentId, name: null, metadata: {} });
-            addRelationship(value, {
-                type: 'parent', person1Id: parentId, person2Id: childId
-            });
-
-            if (existingParents.length === 1) {
-                addRelationship(value, {
-                    type: 'spouse', person1Id: existingParents[0], person2Id: parentId
-                });
-            }
-
-            await putGraph(value, childId);
-            showStatus('נשמר בהצלחה');
-        } catch (error) {
-            console.error('Unable to add union-aware parent:', error);
-            showStatus('שגיאה בהוספה');
-        }
-    }
-
-    function meaningfulValue(value) {
-        if (value === null || value === undefined) return false;
-        if (typeof value === 'string') return !!value.trim();
-        if (Array.isArray(value)) return value.some(meaningfulValue);
-        if (typeof value === 'object') return Object.values(value).some(meaningfulValue);
-        return true;
-    }
-
-    function personLooksUnfilled(node) {
-        if (!node) return false;
-        const name = String(node.name || '').trim();
-        if (name && name !== 'שם') return false;
-        return !meaningfulValue(node.metadata || {});
-    }
-
-    async function blankPersonHasMedia(personId) {
-        try {
-            const response = await fetch(`/api/media?person=${encodeURIComponent(personId)}`, { cache: 'no-store' });
-            if (!response.ok) return true;
-            const payload = await response.json();
-            return Array.isArray(payload.items) && payload.items.length > 0;
-        } catch (_) {
-            return true;
-        }
-    }
-
-    function deletionAnchor(id) {
-        refreshFromStore();
-        const parent = explicitParentIds(id)[0];
-        if (parent) return parent;
-        return spouseIds(id)[0] || null;
-    }
-
-    async function deleteWithoutPrompt(id) {
-        const anchorId = deletionAnchor(id);
-        showStatus('מוחק...');
-        const response = await fetch(`/api/nodes/${encodeURIComponent(id)}`, { method: 'DELETE' });
-        if (!response.ok) return showStatus('שגיאה במחיקה');
-        const revision = Store.finiteRevision(
-            response.headers.get('X-Family-Revision') || response.headers.get('X-Family-Graph-Revision')
-        );
-        Store.noteMutation({ scope: 'graph', revision });
-        await loadTree(anchorId, true);
-        showStatus('נמחק');
+        return String(Store.person(id)?.name || '').trim() || 'ללא שם';
     }
 
     function generationY(unit) {
@@ -361,8 +103,7 @@
         const left = a.x <= b.x ? a : b;
         const right = left === a ? b : a;
         const x = ((left.x + left.cardWidth / 2) + (right.x - right.cardWidth / 2)) / 2;
-        const adjacent = Math.abs(index.get(aId) - index.get(bId)) === 1;
-        if (adjacent) return { x, y: centerY };
+        if (Math.abs(index.get(aId) - index.get(bId)) === 1) return { x, y: centerY };
 
         const routedKeys = [];
         for (const member of unit.members) {
@@ -373,13 +114,10 @@
                 }
             }
         }
-        routedKeys.sort((aKey, bKey) => aKey.localeCompare(bKey));
+        routedKeys.sort((a, b) => a.localeCompare(b));
         const laneIndex = Math.max(0, routedKeys.indexOf(pairKey(aId, bId)));
         const maxBottom = Math.max(...unit.members.map(member => member.targetY + member.cardHeight));
-        return {
-            x,
-            y: maxBottom + UNION_LANE_CLEARANCE + laneIndex * UNION_LANE_STEP
-        };
+        return { x, y: maxBottom + UNION_LANE_CLEARANCE + laneIndex * UNION_LANE_STEP };
     }
 
     function ensureOverlay() {
@@ -394,8 +132,7 @@
 
     function applyPersonChildPolicy() {
         cardsLayer.querySelectorAll('.absolute-card[data-node-id]').forEach(card => {
-            const requiresUnion = spouseIds(card.dataset.nodeId).length > 1;
-            if (requiresUnion) card.dataset.childUnionRequired = 'true';
+            if (spouseIds(card.dataset.nodeId).length > 1) card.dataset.childUnionRequired = 'true';
             else card.removeAttribute('data-child-union-required');
         });
     }
@@ -434,79 +171,32 @@
     function queueSync() {
         if (syncQueued) return;
         syncQueued = true;
-        requestAnimationFrame(() => requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
             syncQueued = false;
             try { syncUnionActions(); }
             catch (error) { console.warn('Unable to sync union child actions:', error); }
-        }));
-    }
-
-    function refreshOpenPersonSearch() {
-        const input = document.querySelector('.graph-search-input');
-        if (input && (document.activeElement === input || input.value)) {
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-        window.FamilyPersonPickerLabels?.refresh?.();
-    }
-
-    function install() {
-        if (installed) return;
-        if (!window.__familyMultiPartnerRefinement) {
-            setTimeout(install, 20);
-            return;
-        }
-        installed = true;
-        refreshFromStore();
-
-        const baseDeleteNode = typeof deleteNode === 'function' ? deleteNode : null;
-        addChild = unionAwareAddChild;
-        addParent = unionAwareAddParent;
-
-        if (baseDeleteNode) {
-            deleteNode = async function quietBlankDeleteNode(id) {
-                const node = typeof globalNodeMap !== 'undefined' ? globalNodeMap.get(id) : null;
-                if (personLooksUnfilled(node) && !(await blankPersonHasMedia(id))) {
-                    return deleteWithoutPrompt(id);
-                }
-                return baseDeleteNode(id);
-            };
-        }
-
-        // No layout wrapper and no card MutationObserver: RenderController explicitly calls
-        // FamilyUnionChildActions.refresh() after authoritative geometry, and store changes are
-        // communicated through a dedicated event.
-        window.addEventListener('family-graph-store-changed', queueSync);
-        window.addEventListener('family-graph-rendered', queueSync);
-        window.addEventListener('family-person-disambiguation-updated', () => {
-            refreshFromStore();
-            refreshOpenPersonSearch();
-            queueSync();
         });
-        window.addEventListener('family-person-pane-saved', () => {
-            queueMicrotask(() => {
-                refreshFromStore();
-                refreshOpenPersonSearch();
-                queueSync();
-            });
-        });
-        window.addEventListener('resize', queueSync);
-
-        cardsLayer.addEventListener('click', event => {
-            const button = event.target.closest('.family-union-child-action');
-            if (!button) return;
-            event.preventDefault();
-            event.stopPropagation();
-            void addChildToUnion(button.dataset.unionParent1, button.dataset.unionParent2);
-        }, true);
-
-        queueSync();
     }
+
+    cardsLayer.addEventListener('click', event => {
+        const button = event.target.closest('.family-union-child-action');
+        if (!button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void Mutations.addChildToUnion(button.dataset.unionParent1, button.dataset.unionParent2);
+    }, true);
+
+    window.addEventListener('family-graph-store-changed', queueSync);
+    window.addEventListener('family-graph-rendered', queueSync);
+    window.addEventListener('family-person-disambiguation-updated', queueSync);
+    window.addEventListener('family-person-pane-saved', queueSync);
 
     window.FamilyUnionChildActions = Object.freeze({
         refresh: queueSync,
-        addChildToUnion,
+        addChildToUnion: (a, b) => Mutations.addChildToUnion(a, b),
         spouseIds: personId => [...spouseIds(personId)]
     });
 
-    install();
+    refreshFromStore();
+    queueSync();
 })();
