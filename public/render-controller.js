@@ -11,6 +11,7 @@
     if (!viewportEl || !canvasEl || !cardsLayerEl || !svgLayerEl) return;
 
     const IDLE_RECENTER_MS = 30000;
+    const IDLE_RECENTER_ANIMATION_MS = 900;
     const layoutStages = new Map();
     const prepareStages = new Map();
     const validationStages = new Map();
@@ -22,6 +23,7 @@
     let activeContext = null;
     let prepareDepth = 0;
     let idleTimer = 0;
+    let centerFrameId = 0;
     let centerInsetX = 0;
     let centerInsetY = 0;
 
@@ -279,15 +281,64 @@
         }, null)?.node || nodes[0];
     }
 
-    function centerRoot(rootId = selectedRootId(), { reason = 'center' } = {}) {
+    function cancelCenterAnimation() {
+        if (centerFrameId) cancelAnimationFrame(centerFrameId);
+        centerFrameId = 0;
+    }
+
+    function centerTarget(node) {
+        const card = [...cardsLayerEl.querySelectorAll('.absolute-card[data-node-id]')]
+            .find(candidate => candidate.dataset.nodeId === node.id);
+        const cardRect = card?.getBoundingClientRect?.();
+        const viewportRect = viewportEl.getBoundingClientRect?.();
+        if (cardRect && viewportRect && Number.isFinite(cardRect.left) && Number.isFinite(viewportRect.left)) {
+            return {
+                left: Math.max(0, viewportEl.scrollLeft + cardRect.left + cardRect.width / 2 - viewportRect.left - viewportRect.width / 2),
+                top: Math.max(0, viewportEl.scrollTop + cardRect.top + cardRect.height / 2 - viewportRect.top - viewportRect.height / 2),
+                visual: true
+            };
+        }
+
+        const nodeCenterY = node.targetY + (Number(node.cardHeight) || 0) / 2;
+        return {
+            left: Math.max(0, centerInsetX + node.x - viewportEl.clientWidth / 2),
+            top: Math.max(0, centerInsetY + nodeCenterY - viewportEl.clientHeight / 2),
+            visual: false
+        };
+    }
+
+    function moveViewport(target, animate) {
+        cancelCenterAnimation();
+        if (!animate || !target.visual || window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+            viewportEl.scrollLeft = target.left;
+            viewportEl.scrollTop = target.top;
+            return;
+        }
+
+        const startLeft = viewportEl.scrollLeft;
+        const startTop = viewportEl.scrollTop;
+        const deltaLeft = target.left - startLeft;
+        const deltaTop = target.top - startTop;
+        let startedAt = null;
+        const step = now => {
+            if (startedAt == null) startedAt = now;
+            const progress = Math.min(1, Math.max(0, (now - startedAt) / IDLE_RECENTER_ANIMATION_MS));
+            const eased = progress * progress * (3 - 2 * progress);
+            viewportEl.scrollLeft = startLeft + deltaLeft * eased;
+            viewportEl.scrollTop = startTop + deltaTop * eased;
+            if (progress < 1) centerFrameId = requestAnimationFrame(step);
+            else centerFrameId = 0;
+        };
+        centerFrameId = requestAnimationFrame(step);
+    }
+
+    function centerRoot(rootId = selectedRootId(), { reason = 'center', animate = false } = {}) {
         syncViewportCenteringInsets();
         const node = fallbackCenterNode(rootId);
         if (!node) return false;
         if (!rootId || node.id !== rootId) diagnostics.fallbackRecenters += 1;
 
-        const nodeCenterY = node.targetY + (Number(node.cardHeight) || 0) / 2;
-        viewportEl.scrollLeft = Math.max(0, centerInsetX + node.x - viewportEl.clientWidth / 2);
-        viewportEl.scrollTop = Math.max(0, centerInsetY + nodeCenterY - viewportEl.clientHeight / 2);
+        moveViewport(centerTarget(node), animate);
         diagnostics.viewportCommits += 1;
         diagnostics.lastViewportReason = reason;
         expose();
@@ -296,6 +347,7 @@
 
     function restoreCommittedAnchor(anchor) {
         if (!anchor || typeof restoreAnchor !== 'function') return false;
+        cancelCenterAnimation();
         restoreAnchor(anchor);
         diagnostics.viewportCommits += 1;
         diagnostics.lastViewportReason = 'anchor-restore';
@@ -436,7 +488,7 @@
                 scheduleIdleRecenter();
                 return;
             }
-            if (centerRoot(selectedRootId(), { reason: 'idle-recenter' })) {
+            if (centerRoot(selectedRootId(), { reason: 'idle-recenter', animate: true })) {
                 diagnostics.idleRecenters += 1;
                 diagnostics.lastIdleRecenterAt = new Date().toISOString();
                 expose();
@@ -446,6 +498,7 @@
     }
 
     function noteInteraction() {
+        cancelCenterAnimation();
         diagnostics.lastInteractionAt = new Date().toISOString();
         scheduleIdleRecenter();
         expose();
@@ -454,9 +507,12 @@
     for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'focusin', 'input']) {
         window.addEventListener(type, noteInteraction, { capture: true, passive: type === 'wheel' || type === 'touchstart' });
     }
-    viewportEl.addEventListener?.('scroll', noteInteraction, { passive: true });
+    viewportEl.addEventListener?.('scroll', () => {
+        if (!centerFrameId) noteInteraction();
+    }, { passive: true });
     document.addEventListener?.('visibilitychange', () => {
         if (document.hidden) {
+            cancelCenterAnimation();
             if (idleTimer) clearTimeout(idleTimer);
             idleTimer = 0;
             return;
@@ -465,6 +521,7 @@
     });
 
     window.addEventListener('resize', () => {
+        cancelCenterAnimation();
         syncViewportCenteringInsets();
         scheduleIdleRecenter();
         if (!globalNodes?.length) return;
