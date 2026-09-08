@@ -6,6 +6,7 @@ let unitByNodeId = new Map();
 
 const SPOUSE_EDGE_GAP = 34;
 const UNIT_GAP = 90;
+const MOBILE_UNIT_GAP = 48;
 const CANVAS_PAD_X = 240;
 const CANVAS_PAD_TOP = 180;
 const CANVAS_PAD_BOTTOM = 220;
@@ -281,8 +282,12 @@ function orderGenerations(byGen) {
     }
 }
 
+function horizontalUnitGap() {
+    return geometryMobileQuery.matches ? MOBILE_UNIT_GAP : UNIT_GAP;
+}
+
 function unitSeparation(left, right) {
-    return left.width / 2 + UNIT_GAP + right.width / 2;
+    return left.width / 2 + horizontalUnitGap() + right.width / 2;
 }
 
 function compactGeneration(units, targets) {
@@ -311,12 +316,13 @@ function compactGeneration(units, targets) {
 
 function simplePack(units) {
     if (!units.length) return;
+    const gap = horizontalUnitGap();
     let cursor = 0;
     for (const unit of units) {
         unit.centerX = cursor + unit.width / 2;
-        cursor += unit.width + UNIT_GAP;
+        cursor += unit.width + gap;
     }
-    const total = cursor - UNIT_GAP;
+    const total = cursor - gap;
     units.forEach(unit => unit.centerX -= total / 2);
 }
 
