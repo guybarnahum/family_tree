@@ -10,6 +10,11 @@
 
     const style = document.createElement('style');
     style.textContent = `
+        #scroll-viewport,
+        #scroll-viewport:active { cursor: default !important; }
+
+        .absolute-card { padding-bottom: 30px !important; }
+
         .absolute-card h2[data-field="name"] {
             text-align: center !important;
             width: 100%;
