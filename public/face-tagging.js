@@ -1,4 +1,4 @@
-// Slice E manual face tagging. Face rectangles are normalized to the displayed image and
+// Manual face tagging. Face rectangles are normalized to the displayed image and
 // persisted independently from media/person metadata so one photo can contain many faces.
 (() => {
     if (window.__familyFaceTaggingInstalled) return;
@@ -6,7 +6,9 @@
 
     const modal = document.getElementById('person-media-modal');
     const image = modal?.querySelector('.person-media-full');
-    if (!modal || !image) return;
+    const Api = window.FamilyApi;
+    const Store = window.FamilyGraphStore;
+    if (!modal || !image || !Api || !Store) return;
 
     const MIN_SIZE = 0.01;
     let mediaId = null;
@@ -306,16 +308,13 @@
 
     async function loadPeople() {
         if (people.length) return;
-        const response = await fetch('/api/graph', { cache: 'no-store' });
-        if (!response.ok) throw new Error(await response.text());
-        const graph = await response.json();
-        people = Array.isArray(graph.people) ? graph.people.map(person => ({ id: person.id, name: person.name })) : [];
+        let snapshot = Store.snapshot();
+        if (!snapshot.graph) snapshot = await Store.read({ reason: 'face-tagging-people' });
+        people = (snapshot.graph?.people || []).map(person => ({ id: person.id, name: person.name }));
     }
 
     async function loadFaces(id, serial) {
-        const response = await fetch(`/api/faces?media=${encodeURIComponent(id)}`, { cache: 'no-store' });
-        if (!response.ok) throw new Error(await response.text());
-        const payload = await response.json();
+        const payload = await Api.json(`/api/faces?media=${encodeURIComponent(id)}`, { cache: 'no-store' });
         if (serial !== activationSerial || id !== mediaId) return;
         faces = Array.isArray(payload.items) ? payload.items : [];
         if (!faces.some(face => face.id === selectedFaceId)) selectedFaceId = null;
@@ -379,13 +378,11 @@
     async function createFace(rect) {
         if (!mediaId || rect.width < MIN_SIZE || rect.height < MIN_SIZE) return;
         try {
-            const response = await fetch('/api/faces', {
+            const payload = await Api.json('/api/faces', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mediaId, ...rect })
             });
-            if (!response.ok) throw new Error(await response.text());
-            const payload = await response.json();
             faces.push(payload.item);
             selectedFaceId = payload.item.id;
             setDrawMode(false);
@@ -399,15 +396,13 @@
 
     async function saveRect(face, before) {
         try {
-            const response = await fetch(`/api/faces/${encodeURIComponent(face.id)}`, {
+            const payload = await Api.json(`/api/faces/${encodeURIComponent(face.id)}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ rect: {
                     x: face.x, y: face.y, width: face.width, height: face.height
                 } })
             });
-            if (!response.ok) throw new Error(await response.text());
-            const payload = await response.json();
             Object.assign(face, payload.item || {});
         } catch (error) {
             Object.assign(face, before);
@@ -548,13 +543,11 @@
         const personId = personSelect.value || null;
         if (personId === original) return;
         try {
-            const response = await fetch(`/api/faces/${encodeURIComponent(face.id)}`, {
+            const payload = await Api.json(`/api/faces/${encodeURIComponent(face.id)}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ personId })
             });
-            if (!response.ok) throw new Error(await response.text());
-            const payload = await response.json();
             Object.assign(face, payload.item || {});
             renderFaces();
             showStatus('זיהוי הפנים נשמר');
@@ -569,7 +562,7 @@
         const face = selectedFace();
         if (!face) return;
         try {
-            const response = await fetch(`/api/faces/${encodeURIComponent(face.id)}`, { method: 'DELETE' });
+            const response = await Api.request(`/api/faces/${encodeURIComponent(face.id)}`, { method: 'DELETE' });
             if (!response.ok) throw new Error(await response.text());
             faces = faces.filter(item => item.id !== face.id);
             selectedFaceId = null;
