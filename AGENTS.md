@@ -264,7 +264,16 @@ The obsolete `.graph-select-zone` presentation/print cleanup selectors are delet
 
 D1 stores metadata; originals live in R2. Preferred face is `metadata.primaryFaceId` and must belong to that person or deterministic fallback applies.
 
-`face-tagging.js` owns face-editor people population from the current GraphStore, uses `FamilyPersonIdentity` for disambiguated select labels, and chooses the initial selected face itself (selected person's tagged face, otherwise the first face). The former `person-picker-refresh.js` and `face-open-selection.js` repair layers are deleted; there is no 90-frame polling or synthetic pointer selection.
+`face-tagging.js` owns face-editor people population from the current GraphStore, uses `FamilyPersonIdentity` for disambiguated select labels, chooses the initial selected face itself (selected person's tagged face, otherwise the first face), and owns selected face/person/editor state. After each authoritative face/editor render it publishes:
+
+```text
+family-face-editor-state
+{ mediaId, open, faceId, personId }
+```
+
+`face-tagging-ux.js` and `face-primary.js` consume that owner state directly. Their former select/editor/overlay/modal MutationObservers and the face-search RAF resync listener are deleted. Failed face assignment rerenders authoritative FaceTagging state so downstream UI cannot remain ahead of persistence.
+
+The former `person-picker-refresh.js` and `face-open-selection.js` repair layers are deleted; there is no 90-frame polling or synthetic pointer selection.
 
 `person-identity.js` owns canonical normalized/disambiguated labels. `graph-view.js` renders graph-search identity labels directly and `face-tagging-ux.js` renders face-search identity labels directly. `person-picker-labels.js`, its global input/focus listeners, queued decoration pass, disambiguation refresh listener, and DOM rewrite signatures are deleted.
 
@@ -272,7 +281,7 @@ D1 stores metadata; originals live in R2. Preferred face is `metadata.primaryFac
 
 `node-face-footprint.js`, its `measureCards` monkey patch, avatar-signature RAF, and post-render corrective relayout are deleted.
 
-`face-tagging-ux.js` and `face-primary.js` still contain modal-local observers. They are candidates for consolidation only if FaceTagging explicitly owns/publishes the corresponding editor state; do not replace them with another observer/event bridge.
+The one remaining face-modal MutationObserver is inside `face-tagging.js` itself, where it translates PersonMedia modal open/close state into FaceTagging activation/deactivation. Remove it only if `person-media.js` publishes an explicit modal lifecycle; do not recreate downstream DOM observers.
 
 ## Print
 
@@ -286,8 +295,9 @@ Deletion-first does not mean “zero observers.” Keep local observers when the
 
 High-value remaining candidates:
 
-- consolidate FaceTagging/face UX state only where doing so deletes the remaining local observer bridges;
-- remove stale planning comments while touching their owners.
+- if PersonMedia publishes explicit modal open/close lifecycle, replace FaceTagging's remaining modal MutationObserver with it and delete URL/class rediscovery where possible;
+- remove stale planning comments while touching their owners;
+- run another reachability sweep for leftover observers, timers, wrappers and fallback chains before closing M4-G.
 
 Do not redesign the proven layout algorithms during cleanup.
 
