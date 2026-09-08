@@ -63,6 +63,26 @@
         return result;
     }
 
+    // The committed projection can contain conservative, view-only co-parent inference for
+    // legacy one-parent rows. Those inferred family units are intentionally absent from the
+    // canonical Store indexes, so derive sibling protection from the projection as well.
+    function projectionSiblings(rootId) {
+        const map = typeof globalNodeMap !== 'undefined' ? globalNodeMap : null;
+        const root = map?.get?.(rootId) || null;
+        if (!root?.parent_id) return new Set();
+
+        const parentUnit = new Set([root.parent_id]);
+        const projectedParent = map.get(root.parent_id) || null;
+        if (projectedParent?.spouse_id) parentUnit.add(projectedParent.spouse_id);
+
+        const result = new Set();
+        for (const [id, node] of map) {
+            if (id === rootId || !node?.parent_id) continue;
+            if (parentUnit.has(node.parent_id)) result.add(id);
+        }
+        return result;
+    }
+
     function sharedChildren(a, b, childrenByParent) {
         const aChildren = childrenByParent.get(a) || new Set();
         const bChildren = childrenByParent.get(b) || new Set();
@@ -150,6 +170,14 @@
             const { context, rootSiblings, protectedIds } = hasGraph
                 ? rootContextPolicy(rootId, graphIndexes)
                 : { context: new Set(), rootSiblings: new Set(), protectedIds: new Set([rootId]) };
+            const canonicalSiblings = new Set(rootSiblings);
+            const projectedSiblings = projectionSiblings(rootId);
+            for (const id of projectedSiblings) {
+                rootSiblings.add(id);
+                protectedIds.add(id);
+                context.delete(id);
+            }
+
             const spouseDepths = hasGraph ? spouseAncestorDepths(rootId, graphIndexes) : new Map();
             const roles = {};
 
@@ -199,6 +227,8 @@
                 rootId,
                 selectedPersonId: selectedPersonId(),
                 siblings: [...rootSiblings],
+                canonicalSiblings: [...canonicalSiblings],
+                projectionSiblings: [...projectedSiblings],
                 contextual: [...context],
                 roles,
                 appliedAt
@@ -207,6 +237,8 @@
                 rootId,
                 selectedPersonId: selectedPersonId(),
                 siblings: [...rootSiblings],
+                canonicalSiblings: [...canonicalSiblings],
+                projectionSiblings: [...projectedSiblings],
                 contextual: [...context],
                 appliedAt
             };
