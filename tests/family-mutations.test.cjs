@@ -22,7 +22,7 @@ let revision = 1;
 let graphPuts = 0;
 let personPatches = 0;
 let loads = 0;
-let selected = null;
+let selected = 'A';
 const events = [];
 
 const cardsLayer = {
@@ -95,8 +95,9 @@ const context = {
   dispatchEvent(event) { events.push(event); },
   FamilyGraphStore: Store,
   FamilySelectionController: {
-    getSelectedPersonId: () => 'A',
-    selectPerson(id) { selected = id; return true; }
+    getSelectedPersonId: () => selected,
+    selectPerson(id) { selected = id; return true; },
+    replaceUrlPerson(id) { selected = id; return true; }
   },
   async loadTree() { loads += 1; }
 };
@@ -132,8 +133,15 @@ vm.runInContext(source, context, { filename: 'family-mutations.js' });
   assert.strictEqual(changed.changed, true);
   assert.strictEqual(personPatches, beforePatches + 1);
   assert.strictEqual(Store.person('A').name, 'Alicia');
-  assert(loads >= 2, 'structural writes should refresh through the canonical graph loader');
-  assert(graphPuts >= 2, 'structural actions should use transactional graph PUTs');
+
+  selected = childId;
+  const deleted = await Mutations.deletePerson(childId);
+  assert.strictEqual(deleted, true);
+  assert(!graph.people.some(person => person.id === childId));
+  assert.strictEqual(selected, 'A', 'deleting the selected child should move selection to a surviving parent');
+
+  assert(loads >= 3, 'structural writes should refresh through the canonical graph loader');
+  assert(graphPuts >= 3, 'structural actions should use transactional graph PUTs');
   assert(events.some(event => event.type === 'family-graph-mutated'));
 
   console.log('family mutation tests passed');
