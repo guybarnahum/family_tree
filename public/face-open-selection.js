@@ -1,26 +1,19 @@
 // When a photo opens with existing face tags, select a useful face immediately.
-// Prefer the currently viewed person's tagged face; otherwise select the first face.
+// Prefer the selected person's tagged face; otherwise select the first face.
 (() => {
     if (window.__familyFaceOpenSelectionInstalled) return;
     window.__familyFaceOpenSelectionInstalled = true;
 
+    const Api = window.FamilyApi;
+    const Selection = window.FamilySelectionController;
     const modal = document.getElementById('person-media-modal');
     const image = modal?.querySelector('.person-media-full');
     const overlay = modal?.querySelector('.face-overlay');
-    const cardsLayer = document.getElementById('cards-layer');
-    if (!modal || !image || !overlay) return;
+    if (!Api || !modal || !image || !overlay) return;
 
     let openSerial = 0;
     let selectedForOpen = null;
-
-    function currentPersonId() {
-        const root = cardsLayer?.querySelector('.absolute-card.graph-root[data-node-id]');
-        if (root?.dataset.nodeId) return root.dataset.nodeId;
-        const fromUrl = new URL(window.location.href).searchParams.get('person');
-        if (fromUrl) return fromUrl;
-        try { return localStorage.getItem('family-tree.anchor-person'); }
-        catch (_) { return null; }
-    }
+    const currentPersonId = () => Selection?.getSelectedPersonId?.() || null;
 
     function currentMediaId() {
         try {
@@ -50,43 +43,26 @@
 
     function synthesizeSelection(box) {
         if (!box?.isConnected || overlay.querySelector('.face-box.selected')) return;
-
         const rect = box.getBoundingClientRect();
         const x = rect.left + rect.width / 2;
         const y = rect.top + rect.height / 2;
         const pointerId = 424242;
         const EventCtor = window.PointerEvent || window.MouseEvent;
-
         const hadOwnSet = Object.prototype.hasOwnProperty.call(overlay, 'setPointerCapture');
         const hadOwnRelease = Object.prototype.hasOwnProperty.call(overlay, 'releasePointerCapture');
         const originalSet = overlay.setPointerCapture;
         const originalRelease = overlay.releasePointerCapture;
 
-        // Synthetic pointer events are not considered active browser pointers, so the native
-        // setPointerCapture call would reject them. The core selection logic does not depend
-        // on capture for this zero-movement selection gesture.
         overlay.setPointerCapture = () => {};
         overlay.releasePointerCapture = () => {};
         try {
             box.dispatchEvent(new EventCtor('pointerdown', {
-                bubbles: true,
-                cancelable: true,
-                pointerId,
-                pointerType: 'mouse',
-                clientX: x,
-                clientY: y,
-                button: 0,
-                buttons: 1
+                bubbles: true, cancelable: true, pointerId, pointerType: 'mouse',
+                clientX: x, clientY: y, button: 0, buttons: 1
             }));
             overlay.dispatchEvent(new EventCtor('pointerup', {
-                bubbles: true,
-                cancelable: true,
-                pointerId,
-                pointerType: 'mouse',
-                clientX: x,
-                clientY: y,
-                button: 0,
-                buttons: 0
+                bubbles: true, cancelable: true, pointerId, pointerType: 'mouse',
+                clientX: x, clientY: y, button: 0, buttons: 0
             }));
         } finally {
             if (hadOwnSet) overlay.setPointerCapture = originalSet;
@@ -100,21 +76,18 @@
         if (!modal.classList.contains('open')) return;
         const mediaId = currentMediaId();
         if (!mediaId || selectedForOpen === mediaId) return;
-
         const serial = openSerial;
         try {
-            const response = await fetch(`/api/faces?media=${encodeURIComponent(mediaId)}`, { cache: 'no-store' });
+            const response = await Api.request(`/api/faces?media=${encodeURIComponent(mediaId)}`, { cache: 'no-store' });
             if (!response.ok) throw new Error(await response.text());
             const payload = await response.json();
             if (serial !== openSerial || !modal.classList.contains('open')) return;
-
             const faces = Array.isArray(payload.items) ? payload.items : [];
             if (!faces.length) return;
             const personId = currentPersonId();
             const target = faces.find(face => personId && face.personId === personId) || faces[0];
             const box = await waitForBox(target.id, serial);
             if (!box || serial !== openSerial) return;
-
             synthesizeSelection(box);
             selectedForOpen = mediaId;
         } catch (error) {
@@ -128,6 +101,7 @@
         requestAnimationFrame(() => requestAnimationFrame(() => void selectInitialFace()));
     }
 
+    // Modal visibility is local UI state, so this observer does not participate in graph lifecycle.
     new MutationObserver(() => {
         if (modal.classList.contains('open')) opened();
         else {
@@ -139,6 +113,5 @@
     image.addEventListener('load', () => {
         if (modal.classList.contains('open')) requestAnimationFrame(() => void selectInitialFace());
     });
-
     if (modal.classList.contains('open')) opened();
 })();
