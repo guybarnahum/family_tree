@@ -38,6 +38,8 @@ M4-G  compatibility/dead-code deletion    active, late stage
 
 M4-G is deletion-first: remove code only when observable behavior already has a clear owner. Do not recreate compatibility wrappers while cleaning them up.
 
+The current implementation sweep is at a local-validation boundary. No known architectural repair MutationObserver remains in the runtime; the remaining timers/RAFs are owner-local behavior or browser/platform boundaries. Do not declare M4-G complete until the current head is locally validated.
+
 ## Product invariants
 
 One canonical graph:
@@ -173,7 +175,10 @@ face-open-selection.js
 graph-card-geometry.js
 node-face-footprint.js
 mobile-chrome.js
+graph-debug.js
 ```
+
+`graph-debug.js` was a developer-only F1 tray that was nevertheless loaded in production. It had its own DOM/CSS, global key handler, sync/render listeners and a 500 ms render interval while open. Nothing consumed `FamilyGraphDebug`, so the tray and its bootstrap load are deleted. The existing diagnostic globals remain available directly.
 
 ## Projection / visual roles
 
@@ -252,7 +257,14 @@ RenderController owns viewport commits. Mobile CSS must not apply `scroll-behavi
 
 `place-autocomplete.js` consumes pane selection/render/save lifecycle directly for stored flags; its pane-body MutationObserver and RAF repair passes are deleted. Autocomplete debounce/focus timing remains local input behavior.
 
-`person-media.js` consumes explicit selection/render/save lifecycle and calls `ensureSection()` synchronously. Its pane-body MutationObserver, RAF queue, unused cards-layer dependency and stale edit-state compatibility writes are deleted.
+`person-media.js` consumes explicit selection/render/save lifecycle and calls `ensureSection()` synchronously. It also owns modal open/close and publishes:
+
+```text
+family-person-media-opened { mediaId, personId }
+family-person-media-closed { mediaId, personId }
+```
+
+Its pane-body MutationObserver, RAF queue, unused cards-layer dependency and stale edit-state compatibility writes are deleted.
 
 `mobile-refinement.js` is the single responsive/touch stylesheet owner. `mobile-chrome.js` is deleted; do not recreate a second late stylesheet whose purpose is to override the first one.
 
@@ -264,7 +276,9 @@ The obsolete `.graph-select-zone` presentation/print cleanup selectors are delet
 
 D1 stores metadata; originals live in R2. Preferred face is `metadata.primaryFaceId` and must belong to that person or deterministic fallback applies.
 
-`face-tagging.js` owns face-editor people population from the current GraphStore, uses `FamilyPersonIdentity` for disambiguated select labels, chooses the initial selected face itself (selected person's tagged face, otherwise the first face), and owns selected face/person/editor state. After each authoritative face/editor render it publishes:
+`face-tagging.js` consumes PersonMedia's explicit modal lifecycle. It no longer watches modal classes, parses the image URL to rediscover the media ID, or reactivates/refetches the face list when the image `load` event fires. Image load now only synchronizes overlay geometry.
+
+FaceTagging owns face-editor people population from the current GraphStore, uses `FamilyPersonIdentity` for disambiguated select labels, chooses the initial selected face itself (selected person's tagged face, otherwise the first face), and owns selected face/person/editor state. After each authoritative face/editor render it publishes:
 
 ```text
 family-face-editor-state
@@ -273,15 +287,13 @@ family-face-editor-state
 
 `face-tagging-ux.js` and `face-primary.js` consume that owner state directly. Their former select/editor/overlay/modal MutationObservers and the face-search RAF resync listener are deleted. Failed face assignment rerenders authoritative FaceTagging state so downstream UI cannot remain ahead of persistence.
 
-The former `person-picker-refresh.js` and `face-open-selection.js` repair layers are deleted; there is no 90-frame polling or synthetic pointer selection.
+There are no remaining face-stack MutationObservers. The former `person-picker-refresh.js` and `face-open-selection.js` repair layers are deleted; there is no 90-frame polling or synthetic pointer selection.
 
 `person-identity.js` owns canonical normalized/disambiguated labels. `graph-view.js` renders graph-search identity labels directly and `face-tagging-ux.js` renders face-search identity labels directly. `person-picker-labels.js`, its global input/focus listeners, queued decoration pass, disambiguation refresh listener, and DOM rewrite signatures are deleted.
 
 `node-face-decoration.js` owns preferred graph-card portrait decoration and portrait measurement extension. Bootstrap awaits its initial preferred-face catalog before the first graph render. During base geometry RenderController calls decoration before `measureCards()`, then asks the face owner to extend measured width by the actual half-avatar outset. Later face-presence changes request geometry explicitly only when the visible set of portrait-bearing cards changes.
 
 `node-face-footprint.js`, its `measureCards` monkey patch, avatar-signature RAF, and post-render corrective relayout are deleted.
-
-The one remaining face-modal MutationObserver is inside `face-tagging.js` itself, where it translates PersonMedia modal open/close state into FaceTagging activation/deactivation. Remove it only if `person-media.js` publishes an explicit modal lifecycle; do not recreate downstream DOM observers.
 
 ## Print
 
@@ -291,13 +303,11 @@ The one remaining face-modal MutationObserver is inside `face-tagging.js` itself
 
 ## Deletion policy / remaining candidates
 
-Deletion-first does not mean “zero observers.” Keep local observers when the browser/UI does not provide a better explicit lifecycle. Remove code only when another owner already provides the behavior.
+Deletion-first does not mean “zero observers” or “zero timers.” Keep owner-local mechanisms when the browser/UI does not provide a better explicit lifecycle.
 
-High-value remaining candidates:
+The current reachability sweep found no remaining known architectural repair MutationObserver or production debug loop. Remaining timing mechanisms are intentional boundaries/behaviors such as GraphSync polling/coalescing, autocomplete debounce/focus timing, RenderController batching, pane/presentation measurement, status fade, object-URL cleanup, upstream request timeout, and browser print timing.
 
-- if PersonMedia publishes explicit modal open/close lifecycle, replace FaceTagging's remaining modal MutationObserver with it and delete URL/class rediscovery where possible;
-- remove stale planning comments while touching their owners;
-- run another reachability sweep for leftover observers, timers, wrappers and fallback chains before closing M4-G.
+High-value next step is local validation of the current cleanup head. If it passes, M4-G is a candidate to close; further work should be opportunistic stale-comment/naming cleanup rather than another architectural rewrite.
 
 Do not redesign the proven layout algorithms during cleanup.
 
