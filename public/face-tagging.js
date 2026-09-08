@@ -8,6 +8,8 @@
     const image = modal?.querySelector('.person-media-full');
     const Api = window.FamilyApi;
     const Store = window.FamilyGraphStore;
+    const Identity = window.FamilyPersonIdentity;
+    const Selection = window.FamilySelectionController;
     if (!modal || !image || !Api || !Store) return;
 
     const MIN_SIZE = 0.01;
@@ -218,7 +220,9 @@
 
     function personName(personId) {
         if (!personId) return 'לא מזוהה';
-        return people.find(person => person.id === personId)?.name || 'אדם לא זמין';
+        return Identity?.describe?.(personId)?.name ||
+            people.find(person => person.id === personId)?.name ||
+            'אדם לא זמין';
     }
 
     function selectedFace() {
@@ -253,14 +257,16 @@
         unknown.textContent = 'לא מזוהה';
         personSelect.appendChild(unknown);
 
-        const sorted = [...people].sort((a, b) =>
-            String(a.name || '').localeCompare(String(b.name || ''), document.documentElement.lang || 'he') ||
-            a.id.localeCompare(b.id)
-        );
+        const sorted = [...people].sort((a, b) => {
+            const aLabel = Identity?.describe?.(a.id)?.name || String(a.name || '');
+            const bLabel = Identity?.describe?.(b.id)?.name || String(b.name || '');
+            return aLabel.localeCompare(bLabel, document.documentElement.lang || 'he') || a.id.localeCompare(b.id);
+        });
         for (const person of sorted) {
             const option = document.createElement('option');
             option.value = person.id;
-            option.textContent = person.name || 'ללא שם';
+            const label = Identity?.describe?.(person.id);
+            option.textContent = label?.display || person.name || 'ללא שם';
             personSelect.appendChild(option);
         }
 
@@ -307,7 +313,6 @@
     }
 
     async function loadPeople() {
-        if (people.length) return;
         let snapshot = Store.snapshot();
         if (!snapshot.graph) snapshot = await Store.read({ reason: 'face-tagging-people' });
         people = (snapshot.graph?.people || []).map(person => ({ id: person.id, name: person.name }));
@@ -317,7 +322,11 @@
         const payload = await Api.json(`/api/faces?media=${encodeURIComponent(id)}`, { cache: 'no-store' });
         if (serial !== activationSerial || id !== mediaId) return;
         faces = Array.isArray(payload.items) ? payload.items : [];
-        if (!faces.some(face => face.id === selectedFaceId)) selectedFaceId = null;
+        if (!faces.some(face => face.id === selectedFaceId)) {
+            const selectedPersonId = Selection?.getSelectedPersonId?.() || null;
+            selectedFaceId = faces.find(face => selectedPersonId && face.personId === selectedPersonId)?.id ||
+                faces[0]?.id || null;
+        }
         renderFaces();
     }
 
@@ -580,6 +589,10 @@
     });
     window.addEventListener('resize', syncOverlayGeometry, { passive: true });
     window.visualViewport?.addEventListener('resize', syncOverlayGeometry, { passive: true });
+    window.addEventListener('family-person-disambiguation-updated', () => {
+        if (!modal.classList.contains('open')) return;
+        void loadPeople().then(() => renderFaces());
+    });
 
     new MutationObserver(() => {
         if (modal.classList.contains('open')) requestAnimationFrame(() => void activate());
