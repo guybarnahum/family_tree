@@ -83,8 +83,11 @@
     }
 
     function syncViewportCenteringInsets() {
-        const width = Math.max(0, Number(viewportEl.clientWidth) || Number(window.innerWidth) || 0);
-        const height = Math.max(0, Number(viewportEl.clientHeight) || Number(window.innerHeight) || 0);
+        const computed = window.getComputedStyle?.(viewportEl);
+        const marginX = (parseFloat(computed?.marginLeft) || 0) + (parseFloat(computed?.marginRight) || 0);
+        const windowWidth = Number(window.innerWidth) || 0;
+        const width = windowWidth ? Math.max(0, windowWidth - marginX) : Math.max(0, Number(viewportEl.clientWidth) || 0);
+        const height = Math.max(0, Number(window.innerHeight) || Number(viewportEl.clientHeight) || 0);
         centerInsetX = Math.ceil(width / 2);
         centerInsetY = Math.ceil(height / 2);
         viewportEl.style.boxSizing = 'border-box';
