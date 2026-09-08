@@ -7,9 +7,6 @@
     window.__familyRuntimeBootstrapInstalled = true;
 
     const build = document.querySelector('meta[name="family-tree-build"]')?.content || 'dev';
-    // graph-view is loaded immediately before this bootstrap. Its loadTree implementation is
-    // the canonical projection loader; stage modules may replace it only while their historical
-    // prepare wrappers are being captured.
     const directGraphLoadTree = typeof window.loadTree === 'function' ? window.loadTree : null;
     const diagnostics = {
         phase: 'installing',
@@ -165,9 +162,22 @@
         });
     }
 
+    function installMutationFacade() {
+        const mutations = window.FamilyMutations;
+        if (!mutations) throw new Error('FamilyMutations must be installed before runtime startup');
+        addChild = mutations.addChild;
+        addParent = mutations.addParent;
+        addSpouse = mutations.addSpouse;
+        deleteNode = mutations.deletePerson;
+        saveEdit = async function retiredLegacySaveEdit() {};
+        window.addChild = addChild;
+        window.addParent = addParent;
+        window.addSpouse = addSpouse;
+        window.deleteNode = deleteNode;
+        window.saveEdit = saveEdit;
+    }
+
     async function loadMobileStack() {
-        // mobile-refinement historically self-loaded presentation + multi-partner. Temporary
-        // marker scripts suppress those nested loaders so runtime-bootstrap owns exact order.
         const presentationSentinel = document.createElement('script');
         presentationSentinel.setAttribute('data-family-presentation', 'bootstrap-sentinel');
         const multiPartnerSentinel = document.createElement('script');
@@ -198,7 +208,6 @@
             ['/person-pane.js', 'data-family-person-pane'],
             ['/new-person-focus.js', 'data-family-new-person-focus'],
             ['/place-autocomplete.js', 'data-family-place-autocomplete'],
-            ['/pane-save-guard.js', 'data-family-pane-save-guard'],
             ['/person-media.js', 'data-family-person-media'],
             ['/face-tagging.js', 'data-family-face-tagging'],
             ['/face-tagging-ux.js', 'data-family-face-tagging-ux'],
@@ -217,17 +226,12 @@
             ['/print-refinement.js', 'data-family-print']
         ];
         for (const [src, dataKey] of features) await loadScript(src, dataKey);
-
-        // Feature modules may request layout, but the controller remains the sole global owner.
         window.FamilyRenderController.installFacade();
     }
 
     async function installLayoutStack() {
         const controller = window.FamilyRenderController;
 
-        // Multi-partner owns relationship-aware family-unit construction/positioning/card UX.
-        // Capture only its graph-refresh loadTree wrapper; its lower-level geometry overrides
-        // remain active and are consumed by the controller's base-geometry stage.
         const multi = await captureLegacyModule({
             src: '/multi-partner-refinement.js',
             dataKey: 'data-family-multi-partner',
@@ -268,8 +272,6 @@
         registerPrepare('planar', 30, planar.prepare);
         diagnostics.capturedStages.push('planar');
 
-        // Member-order is the feedback stage: its historical BASE_LAYOUT callback is an
-        // explicit call into the controller's named planar prefix.
         const member = await captureLegacyModule({
             src: '/member-order-refinement.js',
             dataKey: 'data-family-member-order',
@@ -317,15 +319,15 @@
 
         await loadScript('/visual-roles.js', 'data-family-visual-roles');
         controller.installFacade();
+        installMutationFacade();
         expose();
     }
 
     async function installSyncStack() {
-        // Sync starts only after the first controller-owned graph commit. Restore graph-view's
-        // canonical loader before installing sync so reconciliation has one graph/projection path.
         await waitFor(() => document.readyState !== 'loading', 'DOM parsing');
         if (directGraphLoadTree) setLoadTree(directGraphLoadTree);
         window.FamilyRenderController?.installFacade?.();
+        installMutationFacade();
         await loadScript('/graph-sync.js', 'data-family-graph-sync');
         await loadScript('/graph-debug.js', 'data-family-graph-debug');
         diagnostics.syncStartedAt = new Date().toISOString();
