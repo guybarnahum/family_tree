@@ -19,6 +19,7 @@ assert(!index.includes('function addChild'), 'index shell must not contain struc
 assert(!index.includes('setInterval('), 'index shell must not poll');
 assert(!index.includes("addEventListener('resize'"), 'index shell must not own render resize behavior');
 assert(!index.includes("addEventListener('focusout'"), 'index shell must not own persistence blur behavior');
+assert(!index.includes('legacy-symbols.js'), 'index shell must not hardcode runtime compatibility scripts');
 
 assert(core.includes('function buildFamilyUnits()'), 'family-core must retain base geometry primitives');
 assert(core.includes('function createCardHTML(node)'), 'family-core must own base card construction');
@@ -42,6 +43,7 @@ assert(bootstrap.includes('function installMutationFacade()'), 'bootstrap must r
 assert(bootstrap.includes('addChild = mutations.addChild'), 'legacy addChild global must resolve to canonical mutations');
 assert(!fs.existsSync('public/pane-save-guard.js'), 'pane-save-guard must be physically removed');
 
+assert(entry.includes("'/legacy-symbols.js'"), 'entry must version transitional compatibility symbols');
 assert(entry.includes("'/family-core.js'"), 'entry must load extracted family core');
 assert(entry.includes("'/family-mutations.js'"), 'entry must load canonical mutations before runtime bootstrap');
 assert(!entry.includes('stripLegacyInlineStartup'), 'entry must not edit legacy inline application code');
