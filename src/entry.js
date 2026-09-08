@@ -142,7 +142,6 @@ async function handleFrontendAsset(request, env) {
     ['/graph-status.js', 'data-family-graph-status'],
     ['/family-mutations.js', 'data-family-mutations'],
     ['/person-identity.js', 'data-family-person-identity'],
-    ['/person-picker-labels.js', 'data-family-person-picker-labels'],
     ['/graph-view.js', 'data-family-graph-view'],
     ['/runtime-bootstrap.js', 'data-family-runtime-bootstrap']
   ];
