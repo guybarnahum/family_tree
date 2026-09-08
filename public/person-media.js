@@ -1,5 +1,5 @@
-// Slice D photo gallery for the selected-person pane. Originals live in R2; D1 stores
-// metadata and person associations. Face rectangles intentionally remain a Slice E concern.
+// Photo gallery for the selected-person pane. Originals live in R2; D1 stores
+// metadata and person associations. All application requests go through FamilyApi.
 (() => {
     if (window.__familyPersonMediaInstalled) return;
     window.__familyPersonMediaInstalled = true;
@@ -7,7 +7,9 @@
     const pane = document.getElementById('person-pane');
     const paneBody = pane?.querySelector('.person-pane-body');
     const cardsLayer = document.getElementById('cards-layer');
-    if (!pane || !paneBody || !cardsLayer) return;
+    const Api = window.FamilyApi;
+    const Selection = window.FamilySelectionController;
+    if (!pane || !paneBody || !cardsLayer || !Api || !Selection) return;
 
     const Metadata = window.FamilyPersonMetadata || {
         placeText: value => typeof value === 'string' ? value : String(value?.text || ''),
@@ -211,12 +213,7 @@
     const modalFlag = modal.querySelector('.person-media-place-flag');
 
     function currentPersonId() {
-        const card = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
-        if (card?.dataset.nodeId) return card.dataset.nodeId;
-        const urlId = new URL(window.location.href).searchParams.get('person');
-        if (urlId) return urlId;
-        try { return localStorage.getItem('family-tree.anchor-person'); }
-        catch (_) { return null; }
+        return Selection.getSelectedPersonId?.() || null;
     }
 
     function insertMediaSection(section) {
@@ -285,9 +282,7 @@
     async function loadSection(section, serial) {
         const personId = section.dataset.personId;
         try {
-            const response = await fetch(`/api/media?person=${encodeURIComponent(personId)}`, { cache: 'no-store' });
-            if (!response.ok) throw new Error(await response.text());
-            const payload = await response.json();
+            const payload = await Api.json(`/api/media?person=${encodeURIComponent(personId)}`, { cache: 'no-store' });
             if (serial !== renderSerial || !section.isConnected || currentPersonId() !== personId) return;
             section._mediaItems = payload.items || [];
             renderItems(section, payload);
@@ -328,7 +323,7 @@
             form.append('file', file);
             if (size.width) form.append('width', String(size.width));
             if (size.height) form.append('height', String(size.height));
-            const response = await fetch(`/api/media?person=${encodeURIComponent(section.dataset.personId)}`, {
+            const response = await Api.request(`/api/media?person=${encodeURIComponent(section.dataset.personId)}`, {
                 method: 'POST',
                 body: form
             });
@@ -399,13 +394,11 @@
             ? { takenPlace: Metadata.placeFromText(value) }
             : { [field]: value };
         try {
-            const response = await fetch(`/api/media/${encodeURIComponent(selectedItem.id)}`, {
+            const result = await Api.json(`/api/media/${encodeURIComponent(selectedItem.id)}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
-            if (!response.ok) throw new Error(await response.text());
-            const result = await response.json();
             Object.assign(selectedItem, result.item || {});
             editOriginals.set(element, value);
             showStatus('נשמר בהצלחה');
@@ -429,8 +422,6 @@
         editOriginals.set(event.target, event.target.innerText.trim());
     }, true);
 
-    // These contenteditables are media metadata, not graph-card fields. Stop their blur in
-    // capture phase so the legacy body-level saveEdit() listener can never reload the graph.
     modal.addEventListener('focusout', event => {
         const field = event.target?.dataset?.mediaField;
         if (!field) return;
@@ -450,7 +441,7 @@
         if (!selectedItem || !confirm('למחוק את התמונה?')) return;
         const item = selectedItem;
         try {
-            const response = await fetch(`/api/media/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+            const response = await Api.request(`/api/media/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
             if (!response.ok) throw new Error(await response.text());
             closeMedia();
             showStatus('נמחק');
@@ -477,6 +468,6 @@
     }
 
     new MutationObserver(queueEnsure).observe(paneBody, { childList: true });
-    window.addEventListener('popstate', queueEnsure);
+    window.addEventListener('family-selection-changed', queueEnsure);
     queueEnsure();
 })();
