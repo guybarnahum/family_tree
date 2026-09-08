@@ -1,17 +1,16 @@
-// Slice C selected-person pane. The graph stays topology-only; all biographical details
-// live in nodes.metadata_json while the pane is both the view and the editor.
+// Selected-person details pane. Selection comes from SelectionController; data comes from GraphStore.
 (() => {
     if (window.__familyPersonPaneInstalled) return;
     window.__familyPersonPaneInstalled = true;
 
     const cardsLayer = document.getElementById('cards-layer');
-    const viewport = document.getElementById('scroll-viewport');
-    if (!cardsLayer || !viewport) return;
+    const Store = window.FamilyGraphStore;
+    const Selection = window.FamilySelectionController;
+    if (!cardsLayer || !Store || !Selection) return;
 
     const Metadata = window.FamilyPersonMetadata || {
         metadataObject: value => value && typeof value === 'object' && !Array.isArray(value) ? value : {},
         placeText: value => typeof value === 'string' ? value.trim() : String(value?.text ?? '').trim(),
-        placeCountryCode: () => null,
         inferCountryCode: () => null,
         flagEmoji: () => '',
         countryName: code => code || ''
@@ -166,17 +165,9 @@
             overflow-wrap: anywhere;
         }
 
-        .person-pane-field.person-pane-field-wide {
-            display: block;
-        }
-
-        .person-pane-field-wide .person-pane-value {
-            margin-top: 2px;
-        }
-
-        .person-pane-value.person-pane-bio {
-            min-height: 72px;
-        }
+        .person-pane-field.person-pane-field-wide { display: block; }
+        .person-pane-field-wide .person-pane-value { margin-top: 2px; }
+        .person-pane-value.person-pane-bio { min-height: 72px; }
 
         .person-pane-name:hover,
         .person-pane-name:focus,
@@ -306,30 +297,17 @@
                 transition: transform 0.20s cubic-bezier(0.2, 0.8, 0.2, 1);
             }
 
-            #person-pane.person-pane-open {
-                transform: translateY(0);
-            }
+            #person-pane.person-pane-open { transform: translateY(0); }
 
             #person-pane .person-pane-handle {
                 cursor: pointer;
                 position: relative;
             }
 
-            #person-pane .person-pane-chevron {
-                display: block;
-            }
-
-            #person-pane.person-pane-open .person-pane-chevron {
-                transform: rotate(180deg);
-            }
-
-            #person-pane .person-pane-body {
-                padding: 14px 16px 30px;
-            }
-
-            #person-pane .person-pane-name {
-                font-size: 27px;
-            }
+            #person-pane .person-pane-chevron { display: block; }
+            #person-pane.person-pane-open .person-pane-chevron { transform: rotate(180deg); }
+            #person-pane .person-pane-body { padding: 14px 16px 30px; }
+            #person-pane .person-pane-name { font-size: 27px; }
 
             #scroll-viewport {
                 width: 100vw !important;
@@ -345,9 +323,7 @@
             }
         }
 
-        @media print {
-            #person-pane { display: none !important; }
-        }
+        @media print { #person-pane { display: none !important; } }
     `;
     document.head.appendChild(style);
 
@@ -369,47 +345,21 @@
     const body = pane.querySelector('.person-pane-body');
     const handle = pane.querySelector('.person-pane-handle');
     const mobileName = pane.querySelector('.person-pane-mobile-name');
-    let renderedPersonId = null;
-    let relayoutQueued = false;
 
-    function cleanName(value) {
-        const text = String(value ?? '').trim();
-        return EMPTY_NAMES.has(text) ? '' : text;
-    }
-
-    function textValue(value) {
-        return value === null || value === undefined ? '' : String(value).trim();
-    }
-
-    function currentRootId() {
-        const card = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
-        if (card?.dataset.nodeId) return card.dataset.nodeId;
-        const urlId = new URL(window.location.href).searchParams.get('person');
-        if (urlId) return urlId;
-        try { return localStorage.getItem('family-tree.anchor-person'); }
-        catch (_) { return null; }
-    }
-
-    function currentPerson() {
-        const id = currentRootId();
-        if (!id) return null;
-        return globalNodeMap?.get(id) || null;
-    }
+    const currentRootId = () => Selection.getSelectedPersonId?.() || null;
+    const currentPerson = () => Store.person(currentRootId()) || null;
+    const cleanName = value => EMPTY_NAMES.has(String(value ?? '').trim()) ? '' : String(value ?? '').trim();
+    const textValue = value => value == null ? '' : String(value).trim();
 
     function metadataForPerson(person) {
-        if (!person) return {};
-        const metadata = Metadata.metadataObject(person.metadata);
-        person.metadata = metadata;
-        return metadata;
+        return person ? Metadata.metadataObject(person.metadata) : {};
     }
 
     function metadataFieldValue(metadata, key, kind) {
         return kind === 'place' ? Metadata.placeText(metadata[key]) : textValue(metadata[key]);
     }
 
-    function editable(field, value, {
-        className = '', placeholder = '', metadataKey = null, metadataKind = 'text'
-    } = {}) {
+    function editable(field, value, { className = '', placeholder = '', metadataKey = null, metadataKind = 'text' } = {}) {
         const element = document.createElement('div');
         element.className = `person-pane-value ${className}`.trim();
         element.contentEditable = 'true';
@@ -423,10 +373,18 @@
         return element;
     }
 
+    function updatePlaceFlag(editor) {
+        if (editor?.dataset?.metaKind !== 'place') return;
+        const flag = editor.parentElement?.querySelector('.person-pane-place-flag');
+        if (!flag) return;
+        const code = Metadata.inferCountryCode(editor.innerText.trim());
+        flag.textContent = Metadata.flagEmoji(code);
+        flag.title = code ? Metadata.countryName(code, document.documentElement.lang || 'he') : '';
+    }
+
     function placeEditor(metadataKey, value) {
         const wrap = document.createElement('div');
         wrap.className = 'person-pane-place';
-
         const editor = editable('metadata', value, {
             metadataKey,
             metadataKind: 'place',
@@ -435,44 +393,23 @@
         const flag = document.createElement('span');
         flag.className = 'person-pane-place-flag';
         flag.setAttribute('aria-hidden', 'true');
-        wrap.appendChild(editor);
-        wrap.appendChild(flag);
+        wrap.append(editor, flag);
         updatePlaceFlag(editor);
         return wrap;
     }
 
-    function updatePlaceFlag(editor) {
-        if (!editor?.dataset || editor.dataset.metaKind !== 'place') return;
-        const flag = editor.parentElement?.querySelector('.person-pane-place-flag');
-        if (!flag) return;
-        const code = Metadata.inferCountryCode(editor.innerText.trim());
-        flag.textContent = Metadata.flagEmoji(code);
-        flag.title = code ? Metadata.countryName(code, document.documentElement.lang || 'he') : '';
-    }
-
-    function fieldRow(label, metadataKey, value, {
-        kind = 'text', className = '', placeholder = '', wide = false
-    } = {}) {
+    function fieldRow(label, metadataKey, value, { kind = 'text', className = '', placeholder = '', wide = false } = {}) {
         const row = document.createElement('div');
         row.className = `person-pane-field${wide ? ' person-pane-field-wide' : ''}`;
-
         if (!wide) {
             const fieldLabel = document.createElement('span');
             fieldLabel.className = 'person-pane-field-label';
             fieldLabel.textContent = label;
             row.appendChild(fieldLabel);
         }
-
-        if (kind === 'place') {
-            row.appendChild(placeEditor(metadataKey, value));
-        } else {
-            row.appendChild(editable('metadata', value, {
-                className,
-                placeholder,
-                metadataKey,
-                metadataKind: kind
-            }));
-        }
+        row.appendChild(kind === 'place'
+            ? placeEditor(metadataKey, value)
+            : editable('metadata', value, { className, placeholder, metadataKey, metadataKind: kind }));
         return row;
     }
 
@@ -496,7 +433,6 @@
     function addDetailMenu(metadata) {
         const missing = FIELD_DEFS.filter(def => !metadataFieldValue(metadata, def.key, def.kind));
         if (!missing.length) return null;
-
         const wrap = document.createElement('div');
         wrap.className = 'person-pane-add-wrap';
         const trigger = document.createElement('button');
@@ -505,8 +441,6 @@
         trigger.dataset.togglePersonFields = 'true';
         trigger.setAttribute('aria-expanded', 'false');
         trigger.textContent = '+ הוסף פרט';
-        wrap.appendChild(trigger);
-
         const menu = document.createElement('div');
         menu.className = 'person-pane-add-menu';
         for (const def of missing) {
@@ -517,7 +451,7 @@
             option.textContent = def.label;
             menu.appendChild(option);
         }
-        wrap.appendChild(menu);
+        wrap.append(trigger, menu);
         return wrap;
     }
 
@@ -537,9 +471,7 @@
 
     function renderPerson({ focusField = null } = {}) {
         const person = currentPerson();
-        renderedPersonId = person?.id || null;
         body.innerHTML = '';
-
         if (!person) {
             mobileName.textContent = 'עץ המשפחה';
             const empty = document.createElement('p');
@@ -576,10 +508,9 @@
         if (birth) body.appendChild(birth);
 
         if (fieldVisible(metadata, 'residence', focusField)) {
-            const residence = section('מקום מגורים', [
+            body.appendChild(section('מקום מגורים', [
                 fieldRow('', 'residence', Metadata.placeText(metadata.residence), { kind: 'place', wide: true })
-            ]);
-            if (residence) body.appendChild(residence);
+            ]));
         }
 
         const deathRows = [];
@@ -595,19 +526,17 @@
         if (death) body.appendChild(death);
 
         if (fieldVisible(metadata, 'bio', focusField)) {
-            const about = section('ביוגרפיה קצרה', [
+            body.appendChild(section('ביוגרפיה קצרה', [
                 fieldRow('', 'bio', textValue(metadata.bio), {
                     className: 'person-pane-bio',
                     placeholder: 'כמה מילים על האדם…',
                     wide: true
                 })
-            ]);
-            if (about) body.appendChild(about);
+            ]));
         }
 
         const addMenu = addDetailMenu(metadata);
         if (addMenu) body.appendChild(addMenu);
-
         if (focusField) focusMetadataField(focusField);
     }
 
@@ -622,60 +551,24 @@
             card.appendChild(button);
         }
         button.textContent = label;
-        return button;
     }
 
     function decorateCards() {
-        let geometryChanged = false;
         cardsLayer.querySelectorAll('.absolute-card[data-node-id]').forEach(card => {
-            const name = card.querySelector('h2[data-field="name"]');
-            if (name?.hasAttribute('contenteditable')) {
-                name.removeAttribute('contenteditable');
-                name.removeAttribute('spellcheck');
-                geometryChanged = true;
-            }
-
             if (!card.querySelector('[data-action="add-parent"]')) {
-                ensureAction(
-                    card,
-                    'add-parent',
-                    '+ הורה',
-                    'absolute -top-2.5 left-1/2 -translate-x-1/2 bg-leaf-light text-white text-[8px] px-2 py-0.5 rounded-full hover:bg-leaf shadow z-30 transition whitespace-nowrap'
-                );
+                ensureAction(card, 'add-parent', '+ הורה',
+                    'absolute -top-2.5 left-1/2 -translate-x-1/2 bg-leaf-light text-white text-[8px] px-2 py-0.5 rounded-full hover:bg-leaf shadow z-30 transition whitespace-nowrap');
             }
-
             const spouse = card.querySelector('[data-action="add-spouse"]');
             if (spouse) spouse.textContent = '+ בן/בת זוג';
             const child = card.querySelector('[data-action="add-child"]');
             if (child) child.textContent = '+ ילד';
         });
-        return geometryChanged;
     }
 
-    function queueRelayout({ center = false } = {}) {
-        if (relayoutQueued || !globalNodes?.length) return;
-        relayoutQueued = true;
-        requestAnimationFrame(() => {
-            relayoutQueued = false;
-            try {
-                layoutAndRender();
-                if (center) {
-                    requestAnimationFrame(() => {
-                        const person = currentPerson();
-                        if (!person || !Number.isFinite(person.x)) return;
-                        viewport.scrollLeft = Math.max(0, person.x - viewport.clientWidth / 2);
-                    });
-                }
-            } catch (error) {
-                console.warn('Unable to reflow name-only family cards:', error);
-            }
-        });
-    }
-
-    function refreshFromGraph({ center = false } = {}) {
-        const changed = decorateCards();
+    function refreshFromGraph() {
+        decorateCards();
         renderPerson();
-        if (changed || center) queueRelayout({ center });
     }
 
     handle.addEventListener('click', () => {
@@ -692,58 +585,27 @@
             toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
             return;
         }
-
         const option = event.target.closest('[data-add-person-field]');
-        if (!option) return;
-        renderPerson({ focusField: option.dataset.addPersonField });
+        if (option) renderPerson({ focusField: option.dataset.addPersonField });
     });
 
     body.addEventListener('input', event => {
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
         if (target.dataset.field === 'name') {
-            const id = target.dataset.id;
-            const cardName = document.getElementById(`card-${id}`)?.querySelector('h2[data-field="name"]');
-            if (cardName) cardName.textContent = target.innerText.trim() || 'שם';
-            mobileName.textContent = target.innerText.trim() || 'ללא שם';
+            const value = target.innerText.trim();
+            const cardName = document.getElementById(`card-${target.dataset.id}`)?.querySelector('h2[data-field="name"]');
+            if (cardName) cardName.textContent = value || 'שם';
+            mobileName.textContent = value || 'ללא שם';
         } else if (target.dataset.metaKind === 'place') {
             updatePlaceFlag(target);
         }
     });
 
-    const cardObserver = new MutationObserver(mutations => {
-        if (!mutations.some(mutation => mutation.type === 'childList')) return;
-        requestAnimationFrame(() => refreshFromGraph());
-    });
-    cardObserver.observe(cardsLayer, { childList: true });
-
-    const rootObserver = new MutationObserver(() => {
-        const next = currentRootId();
-        if (next !== renderedPersonId) renderPerson();
-    });
-    rootObserver.observe(cardsLayer, {
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['class']
-    });
-
-    const priorReplaceState = history.replaceState.bind(history);
-    history.replaceState = function personPaneReplaceState(...args) {
-        const result = priorReplaceState(...args);
-        requestAnimationFrame(() => renderPerson());
-        return result;
-    };
-    const priorPushState = history.pushState.bind(history);
-    history.pushState = function personPanePushState(...args) {
-        const result = priorPushState(...args);
-        requestAnimationFrame(() => renderPerson());
-        return result;
-    };
-    window.addEventListener('popstate', () => requestAnimationFrame(() => renderPerson()));
-
+    window.addEventListener('family-selection-changed', renderPerson);
+    window.addEventListener('family-graph-rendered', refreshFromGraph);
     window.addEventListener('family-person-pane-saved', event => {
-        if (event.detail?.id !== currentRootId()) return;
-        if (event.detail?.field === 'metadata') requestAnimationFrame(() => renderPerson());
+        if (event.detail?.id === currentRootId() && event.detail?.field === 'metadata') renderPerson();
     });
 
     mobileQuery.addEventListener?.('change', () => {
@@ -751,12 +613,7 @@
             pane.classList.remove('person-pane-open');
             handle.setAttribute('aria-expanded', 'false');
         }
-        queueRelayout({ center: true });
     });
 
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-        decorateCards();
-        renderPerson();
-        queueRelayout({ center: true });
-    }));
+    refreshFromGraph();
 })();
