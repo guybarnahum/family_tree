@@ -665,6 +665,8 @@
             const id = card.dataset.nodeId;
             const person = Store.person(id);
             const metadata = metadataForPerson(person);
+            const blocked = youngerThan(person, 16, today) ||
+                [...(parentsByChild.get(id) || [])].some(parentId => youngerThan(Store.person(parentId), 36, today));
             card.classList.toggle('graph-deceased', metadata.lifeStatus === 'dead');
             if (!card.querySelector('[data-action="add-parent"]')) {
                 ensureAction(card, 'add-parent', '+ הורה',
@@ -672,15 +674,17 @@
             }
             const spouse = card.querySelector('[data-action="add-spouse"]');
             if (spouse) {
-                const blocked = youngerThan(person, 16, today) ||
-                    [...(parentsByChild.get(id) || [])].some(parentId => youngerThan(Store.person(parentId), 36, today));
                 if (blocked) spouse.style.setProperty('display', 'none', 'important');
                 else spouse.style.removeProperty('display');
                 const sex = metadata.sex;
                 spouse.textContent = sex === 'male' ? '+ בת זוג' : sex === 'female' ? '+ בן זוג' : '+ בן/בת זוג';
             }
             const child = card.querySelector('[data-action="add-child"]');
-            if (child) child.textContent = '+ ילד';
+            if (child) {
+                if (blocked) child.style.setProperty('display', 'none', 'important');
+                else child.style.removeProperty('display');
+                child.textContent = '+ ילד';
+            }
         });
     }
 
