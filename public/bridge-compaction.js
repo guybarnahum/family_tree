@@ -1,64 +1,29 @@
 // Safe compaction for long bridge connectors.
-//
-// Once row/member order is planar, some self-contained ancestry/descendant branches can
-// still drift far from the single edge that attaches them to the selected person's graph.
-// If that attachment is a graph bridge, move the entire non-root side rigidly toward the
-// attachment. Internal geometry is unchanged; collision bounds prevent any unit from
-// passing a stationary unit, so planar order cannot be invalidated by this refinement.
+// Self-contained branches may translate rigidly toward a bridge attachment without changing
+// internal geometry or row order.
 (() => {
     if (window.__familyBridgeCompactionInstalled) return;
     window.__familyBridgeCompactionInstalled = true;
+
+    const Store = window.FamilyGraphStore;
+    const Controller = window.FamilyRenderController;
+    const Selection = window.FamilySelectionController;
+    if (!Store || !Controller || !Selection) return;
 
     const MIN_ARM = 56;
     const MIN_SHIFT = 2;
     const MAX_PASSES = 4;
     const EPSILON = 0.5;
 
-    let graphDocument = null;
-    let graphPromise = null;
-    let graphSignature = '';
+    let graphReady = false;
     let parentsByChild = new Map();
     let spousesByPerson = new Map();
-    let installed = false;
 
-    function addSet(map, key, value) {
-        if (!map.has(key)) map.set(key, new Set());
-        map.get(key).add(value);
-    }
-
-    function rebuildIndexes() {
-        parentsByChild = new Map();
-        spousesByPerson = new Map();
-        for (const relation of graphDocument?.relationships || []) {
-            if (relation.type === 'parent') {
-                addSet(parentsByChild, relation.person2Id, relation.person1Id);
-            } else if (relation.type === 'spouse') {
-                addSet(spousesByPerson, relation.person1Id, relation.person2Id);
-                addSet(spousesByPerson, relation.person2Id, relation.person1Id);
-            }
-        }
-    }
-
-    async function refreshGraph(force = false) {
-        if (graphDocument && !force) return { graph: graphDocument, changed: false };
-        if (graphPromise && !force) return graphPromise;
-        graphPromise = fetch('/api/graph', { cache: 'no-store' })
-            .then(async response => {
-                if (!response.ok) throw new Error(await response.text());
-                return response.json();
-            })
-            .then(value => {
-                const signature = JSON.stringify((value.relationships || []).map(relation => [
-                    relation.id || '', relation.type, relation.person1Id, relation.person2Id
-                ]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
-                const changed = signature !== graphSignature;
-                graphSignature = signature;
-                graphDocument = value;
-                rebuildIndexes();
-                return { graph: value, changed };
-            })
-            .finally(() => { graphPromise = null; });
-        return graphPromise;
+    function prepareTopology() {
+        const snapshot = Store.snapshot();
+        graphReady = !!snapshot.graph;
+        parentsByChild = snapshot.indexes?.parentsByChild || new Map();
+        spousesByPerson = snapshot.indexes?.spousesByPerson || new Map();
     }
 
     function spouseIds(id) {
@@ -69,7 +34,6 @@
         return spousesByPerson.get(a)?.has(b) || false;
     }
 
-    // Match the renderer's conservative legacy projection.
     function parentIds(id) {
         let parents = [...(parentsByChild.get(id) || [])];
         if (parents.length === 1) {
@@ -123,12 +87,7 @@
                 }
                 for (const [parentUnit, ids] of byParentUnit) {
                     const key = `${parentUnit.id}->${childUnit.id}`;
-                    if (!grouped.has(key)) grouped.set(key, {
-                        key,
-                        parentUnit,
-                        childUnit,
-                        records: []
-                    });
+                    if (!grouped.has(key)) grouped.set(key, { key, parentUnit, childUnit, records: [] });
                     grouped.get(key).records.push({
                         childId: child.id,
                         sourceX: parentSourceX(parentUnit, ids),
@@ -150,12 +109,7 @@
     }
 
     function currentRootUnit() {
-        const rootCard = document.querySelector('#cards-layer .absolute-card.graph-root[data-node-id]');
-        const urlId = new URL(window.location.href).searchParams.get('person');
-        let id = rootCard?.dataset.nodeId || urlId;
-        if (!id) {
-            try { id = localStorage.getItem('family-tree.anchor-person'); } catch (_) {}
-        }
+        const id = Selection.getSelectedPersonId?.() || null;
         return id ? unitByNodeId.get(id) : null;
     }
 
@@ -188,12 +142,11 @@
 
         const candidates = [];
         for (const [edgeKey, pairLinks] of byPair) {
-            // Multiple semantic records between the same two units are still one graph edge.
             const sample = pairLinks[0];
             const rootSide = reachable(adjacency, rootUnit.id, edgeKey);
             const parentInRoot = rootSide.has(sample.parentUnit.id);
             const childInRoot = rootSide.has(sample.childUnit.id);
-            if (parentInRoot === childInRoot) continue; // not a bridge relative to the root component
+            if (parentInRoot === childInRoot) continue;
 
             const branchEndpoint = parentInRoot ? sample.childUnit : sample.parentUnit;
             const branchIds = reachable(adjacency, branchEndpoint.id, edgeKey);
@@ -216,11 +169,9 @@
         const deltas = [];
         for (const link of candidate.links) {
             for (const record of link.records) {
-                if (candidate.branchContainsParent) {
-                    deltas.push(record.targetX - record.sourceX);
-                } else {
-                    deltas.push(record.sourceX - record.targetX);
-                }
+                deltas.push(candidate.branchContainsParent
+                    ? record.targetX - record.sourceX
+                    : record.sourceX - record.targetX);
             }
         }
         return median(deltas, 0);
@@ -279,20 +230,14 @@
     }
 
     function compactBridgeBranches() {
-        if (!graphDocument || !globalUnits?.length) return [];
+        if (!graphReady || !globalUnits?.length) return [];
         const moves = [];
-
         for (let pass = 0; pass < MAX_PASSES; pass++) {
-            const links = unitLinks();
-            const candidates = bridgeCandidates(links).filter(candidate => candidate.span >= MIN_ARM);
+            const candidates = bridgeCandidates(unitLinks()).filter(candidate => candidate.span >= MIN_ARM);
             let movedThisPass = false;
-
             for (const candidate of candidates) {
-                // Geometry may have changed after an earlier move in this pass.
-                const currentLinks = unitLinks();
-                const fresh = bridgeCandidates(currentLinks).find(value => value.edgeKey === candidate.edgeKey);
+                const fresh = bridgeCandidates(unitLinks()).find(value => value.edgeKey === candidate.edgeKey);
                 if (!fresh || fresh.span < MIN_ARM) continue;
-
                 const desired = desiredShift(fresh);
                 const dx = allowedShift(fresh.branchIds, desired);
                 if (Math.abs(dx) < MIN_SHIFT) continue;
@@ -314,7 +259,6 @@
             }
             if (!movedThisPass) break;
         }
-
         normalizeHorizontalBounds();
         window.__familyBridgeDiagnostics = {
             movedBranches: moves.length,
@@ -324,52 +268,17 @@
         return moves;
     }
 
-    function installWrapper() {
-        if (installed) return;
-        installed = true;
-        const BASE_LAYOUT = layoutAndRender;
-
-        layoutAndRender = function bridgeCompactedLayoutAndRender() {
-            BASE_LAYOUT();
-            if (!graphDocument || !globalUnits?.length) return;
-
+    Controller.registerPrepareStage({ name: 'bridge-compaction', order: 50, run: prepareTopology });
+    Controller.registerLayoutStage({
+        name: 'bridge-compaction',
+        order: 50,
+        run() {
+            if (!graphReady || !globalUnits?.length) return;
             compactBridgeBranches();
             updateCanvasBounds();
             syncCardPositions();
-            requestAnimationFrame(() => {
-                drawSVGLines();
-                assertLayout();
-            });
-        };
-
-        const BASE_LOAD_TREE = loadTree;
-        loadTree = async function bridgeAwareLoadTree(...args) {
-            const result = await BASE_LOAD_TREE(...args);
-            try {
-                const refreshed = await refreshGraph(true);
-                if (refreshed.changed && globalNodes?.length) layoutAndRender();
-            } catch (error) {
-                console.warn('Unable to refresh bridge compaction graph:', error);
-            }
-            return result;
-        };
-
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-            if (!globalNodes?.length) return;
-            try { layoutAndRender(); }
-            catch (error) { console.warn('Unable to initialize bridge compaction:', error); }
-        }));
-    }
-
-    async function waitForMemberOrder() {
-        for (let attempt = 0; attempt < 180; attempt++) {
-            if (typeof layoutAndRender === 'function' && layoutAndRender.name === 'lineageAwareLayoutAndRender') return;
-            await new Promise(resolve => setTimeout(resolve, 20));
         }
-        throw new Error('Lineage-aware member ordering did not initialize');
-    }
+    });
 
-    Promise.all([waitForMemberOrder(), refreshGraph(true)])
-        .then(installWrapper)
-        .catch(error => console.warn('Unable to initialize bridge compaction:', error));
+    prepareTopology();
 })();
