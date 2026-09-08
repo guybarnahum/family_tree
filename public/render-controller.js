@@ -35,6 +35,7 @@
         prepareLayoutRequestsSuppressed: 0,
         connectorRuns: 0,
         viewportCommits: 0,
+        rootIdentityCommits: 0,
         lastGeneration: 0,
         lastReason: '',
         lastRootId: null,
@@ -218,6 +219,22 @@
         return window.FamilySelectionController?.getSelectedPersonId?.() || null;
     }
 
+    function commitRootIdentity(rootId) {
+        if (!rootId) return false;
+        let found = false;
+        for (const card of cardsLayerEl.querySelectorAll('.absolute-card[data-node-id]')) {
+            const isRoot = card.dataset.nodeId === rootId;
+            card.classList.toggle('graph-root', isRoot);
+            if (isRoot) {
+                found = true;
+                card.classList.remove('graph-context', 'graph-spouse-parent', 'graph-spouse-ancestor-deep');
+                card.dataset.familyVisualRole = 'root';
+            }
+        }
+        if (found) diagnostics.rootIdentityCommits += 1;
+        return found;
+    }
+
     function centerRoot(rootId = selectedRootId()) {
         if (!rootId) return false;
         const node = globalNodeMap?.get(rootId);
@@ -249,19 +266,21 @@
     }
 
     function completeVisualCommit(options, generation, context) {
+        const rootId = options.rootId || selectedRootId();
         runDeferredDiagnostics();
         finalConnectors();
         if (typeof assertLayout === 'function') assertLayout();
-        window.FamilyVisualRoles?.refreshNow?.(options.rootId || selectedRootId());
+        commitRootIdentity(rootId);
+        window.FamilyVisualRoles?.refreshNow?.(rootId);
         window.FamilyUnionChildActions?.refresh?.();
 
-        if (options.recenter) centerRoot(options.rootId);
+        if (options.recenter) centerRoot(rootId);
         else if (options.anchor) restoreCommittedAnchor(options.anchor);
 
         diagnostics.generationsCommitted += 1;
         diagnostics.lastGeneration = generation;
         diagnostics.lastReason = options.reason || 'render';
-        diagnostics.lastRootId = options.rootId || selectedRootId();
+        diagnostics.lastRootId = rootId;
         diagnostics.lastCommittedAt = new Date().toISOString();
         diagnostics.lastStageOrder = [...context.stageOrder];
         diagnostics.lastStageDurationsMs = { ...context.stageDurations };
@@ -375,8 +394,6 @@
         if (prepareDepth > 0) diagnostics.prepareLayoutRequestsSuppressed += 1;
         else diagnostics.legacyLayoutRequestsIgnored += 1;
         expose();
-        // M4-B: no implicit render generation. Feature code must express intent through
-        // FamilyRenderController.requestLayout()/requestRecenter().
     }
 
     function installFacade() {
