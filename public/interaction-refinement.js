@@ -3,16 +3,9 @@
     if (window.__familyInteractionRefinementInstalled) return;
     window.__familyInteractionRefinementInstalled = true;
 
-    const viewportEl = document.getElementById('scroll-viewport');
     const cardsLayerEl = document.getElementById('cards-layer');
     const Selection = window.FamilySelectionController;
-    if (!viewportEl || !cardsLayerEl || !Selection) return;
-
-    viewportEl.style.cursor = 'default';
-    viewportEl.addEventListener('mousedown', event => {
-        try { isDragging = false; } catch (_) {}
-        if (!event.target.closest('.absolute-card')) event.stopImmediatePropagation();
-    }, true);
+    if (!cardsLayerEl || !Selection) return;
 
     const style = document.createElement('style');
     style.textContent = `
