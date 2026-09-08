@@ -22,6 +22,22 @@ npm test
 
 Production: `family.barnahum.com`. Stack: Cloudflare Worker + D1 + R2 + static frontend.
 
+## M4 status
+
+M4 is in its final cleanup phase:
+
+```text
+M4-A  one selection authority            done
+M4-B  one render + viewport authority    done
+M4-C  explicit mutation layer            done
+M4-D  shell-only index                    done
+M4-E  one transport/data path             done
+M4-F  direct registered layout pipeline   done
+M4-G  compatibility/dead-code deletion    active, late stage
+```
+
+M4-G is deletion-first: remove code only when observable behavior already has a clear owner. Do not recreate compatibility wrappers while cleaning them up.
+
 ## Product invariants
 
 One canonical graph:
@@ -153,6 +169,7 @@ interaction-refinement.js
 person-picker-refresh.js
 face-open-selection.js
 graph-card-geometry.js
+node-face-footprint.js
 ```
 
 ## Projection / visual roles
@@ -175,6 +192,7 @@ Historical placeholder bug: `node-hover.js` intentionally classifies card text f
 
 ```text
 projection/cards
+→ portrait decoration + measurement outset
 → base geometry
 → relationship-compaction
 → planar
@@ -204,9 +222,9 @@ planar-router              prepare:60 + final connector owner
 
 Member-order feedback explicitly calls `FamilyRenderController.runThrough('planar')`. Never add corrective render/centering RAFs, timers or observers.
 
-`family-core.js` now directly owns the compact generation-centered vertical geometry that previously won through `graph-card-geometry.js`: desktop gap 96, mobile gap 84, compact fallback band 56, and mobile top padding 150. `graph-card-geometry.js` is deleted and `mobile-refinement.js` no longer replaces `assignVerticalPositions`.
+`family-core.js` directly owns compact generation-centered vertical geometry: desktop gap 96, mobile gap 84, compact fallback band 56, and mobile top padding 150. `graph-card-geometry.js` is deleted and `mobile-refinement.js` no longer replaces `assignVerticalPositions`.
 
-`mobile-refinement.js` still owns a mobile-only horizontal spacing override (`unitSeparation` / `simplePack`, gap 48). That remaining monkey patch should eventually move into foundational geometry rather than gain another wrapper.
+`mobile-refinement.js` still owns one mobile-only horizontal spacing override (`unitSeparation` / `simplePack`, gap 48). That remaining monkey patch should move into foundational geometry rather than gain another wrapper.
 
 `union-child-actions.js` is commit-only presentation. RenderController calls `FamilyUnionChildActions.refresh()` after final geometry; the module no longer listens to Store/render/pane/identity events or queues its own RAF pass.
 
@@ -220,7 +238,11 @@ Member-order feedback explicitly calls `FamilyRenderController.runThrough('plana
 
 `place-autocomplete.js` consumes pane selection/render/save lifecycle directly for stored flags; its pane-body MutationObserver and RAF repair passes are deleted. Autocomplete debounce/focus timing remains local input behavior.
 
-`person-media.js` now consumes explicit selection/render/save lifecycle and calls `ensureSection()` synchronously. Its pane-body MutationObserver, RAF queue, unused cards-layer dependency and stale edit-state compatibility writes are deleted.
+`person-media.js` consumes explicit selection/render/save lifecycle and calls `ensureSection()` synchronously. Its pane-body MutationObserver, RAF queue, unused cards-layer dependency and stale edit-state compatibility writes are deleted.
+
+Mobile selected-card height is content-driven again; the stale `min-height:138px` in `mobile-refinement.js` was deleted after `graph-card-geometry.js` removal exposed it. Do not reintroduce a fixed selected-card height.
+
+The fixed title/search shell is above the person pane in the stacking order so autocomplete results can overlap the pane and remain selectable. The dropdown's own z-index cannot escape a lower parent stacking context; preserve the shell-level ordering.
 
 ## Media / faces / pickers
 
@@ -230,9 +252,9 @@ D1 stores metadata; originals live in R2. Preferred face is `metadata.primaryFac
 
 `person-identity.js` owns canonical normalized/disambiguated labels. `person-picker-labels.js` still exists only as presentation decoration for graph/face search results and select options; remove it only after those producers render `Identity.describe(...)` directly.
 
-Graph-card face decoration uses committed render/face lifecycle directly. `node-face-decoration.js` applies synchronously at those boundaries; its old extra RAF apply queue and unrelated pane-metadata refresh listener are deleted.
+`node-face-decoration.js` owns preferred graph-card portrait decoration and portrait measurement extension. Bootstrap awaits its initial preferred-face catalog before the first graph render. During base geometry RenderController calls decoration before `measureCards()`, then asks the face owner to extend measured width by the actual half-avatar outset. Later face-presence changes request geometry explicitly only when the visible set of portrait-bearing cards changes.
 
-`node-face-footprint.js` still wraps `measureCards`; do not move that monkey patch elsewhere. The proper cleanup is to make foundational card measurement account for avatar overflow, then delete the module.
+`node-face-footprint.js`, its `measureCards` monkey patch, avatar-signature RAF, and post-render corrective relayout are deleted.
 
 `face-tagging-ux.js` and `face-primary.js` still contain modal-local observers. They are candidates for consolidation only if FaceTagging explicitly owns/publishes the corresponding editor state; do not replace them with another observer/event bridge.
 
@@ -248,7 +270,6 @@ Deletion-first does not mean “zero observers.” Keep local observers when the
 
 High-value remaining candidates:
 
-- integrate avatar overflow into foundational `measureCards` → delete `node-face-footprint.js`;
 - move mobile horizontal spacing into foundational geometry → remove `unitSeparation` / `simplePack` monkey patches from `mobile-refinement.js`;
 - make GraphView and face-search producers render `FamilyPersonIdentity.describe(...)` directly → delete `person-picker-labels.js` and remove it from foundations;
 - consolidate FaceTagging/face UX state only where doing so deletes the remaining local observer bridges;
