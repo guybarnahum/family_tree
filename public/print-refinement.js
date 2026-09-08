@@ -151,8 +151,7 @@
             }
 
             .family-print-graph [data-action],
-            .family-print-graph .graph-frontier,
-            .family-print-graph .graph-select-zone { display: none !important; }
+            .family-print-graph .graph-frontier { display: none !important; }
         }
     `;
     document.head.appendChild(style);
@@ -281,7 +280,7 @@
             clone.removeAttribute('id');
             clone.querySelectorAll('[id]').forEach(element => element.removeAttribute('id'));
             clone.querySelectorAll('[contenteditable]').forEach(element => element.setAttribute('contenteditable', 'false'));
-            clone.querySelectorAll('[data-action], .graph-frontier, .graph-select-zone').forEach(element => element.remove());
+            clone.querySelectorAll('[data-action], .graph-frontier').forEach(element => element.remove());
             clone.classList.remove('graph-context', 'graph-spouse-parent', 'graph-spouse-ancestor-deep');
             removeEmptyFields(clone);
             preserveFieldSpacing(clone);
