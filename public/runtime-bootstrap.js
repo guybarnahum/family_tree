@@ -91,7 +91,6 @@
             ['/face-open-selection.js', 'data-family-face-open-selection'],
             ['/node-face-decoration.js', 'data-family-node-face-decoration'],
             ['/node-face-footprint.js', 'data-family-node-face-footprint'],
-            ['/parent-limit.js', 'data-family-parent-limit'],
             ['/union-child-actions.js', 'data-family-union-child-actions'],
             ['/person-pane-position.js', 'data-family-person-pane-position'],
             ['/mobile-chrome.js', 'data-family-mobile-chrome'],
