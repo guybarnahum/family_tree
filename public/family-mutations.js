@@ -121,12 +121,14 @@
             const before = person?.[key];
             if (JSON.stringify(before ?? null) !== JSON.stringify(value ?? null)) effective[key] = value;
         }
-        if (!Object.keys(effective).length) {
+        const fields = Object.keys(effective);
+        if (!fields.length) {
             diagnostics.noopPersonWrites += 1;
             diagnostics.lastAction = `${reason}:noop`;
             expose();
             return { changed: false, revision: Store.snapshot().revision };
         }
+        if (fields.length !== 1) throw new Error('Person update expects exactly one field');
 
         const response = await fetch(`/api/nodes/${encodeURIComponent(id)}`, {
             method: 'PATCH',
@@ -207,10 +209,10 @@
         return false;
     }
 
-    async function addChildForParents(parentIds, anchorId) {
+    async function addChildForParents(parentIds, anchorId, graphValue = null) {
         const parents = [...new Set(parentIds.filter(Boolean))];
         if (!parents.length || parents.length > 2) throw new Error('Child creation requires one or two explicit parents');
-        const value = await authoritativeGraph('add-child-intent');
+        const value = graphValue ? cloneGraph(graphValue) : await authoritativeGraph('add-child-intent');
         const ids = new Set(value.people.map(person => person.id));
         if (parents.some(id => !ids.has(id))) throw new Error('Parent is missing from graph');
 
@@ -245,7 +247,7 @@
                 return { requiresUnion: true };
             }
             const parents = partners.length === 1 ? [parentId, partners[0]] : [parentId];
-            const childId = await addChildForParents(parents, parentId);
+            const childId = await addChildForParents(parents, parentId, value);
             showStatus('נשמר בהצלחה');
             return { requiresUnion: false, childId };
         } catch (error) {
@@ -297,8 +299,9 @@
             const person = value.people.find(candidate => candidate.id === id);
             if (!person) return false;
             const { parentsByChild, spousesByPerson } = graphIndexes(value);
-            const anchorId = [...(parentsByChild.get(id) || [])][0] || [...(spousesByPerson.get(id) || [])][0] || null;
-            const blank = !String(person.name || '').trim() && !meaningfulValue(person.metadata || {});
+            const relatedAnchor = [...(parentsByChild.get(id) || [])][0] || [...(spousesByPerson.get(id) || [])][0] || null;
+            const name = String(person.name || '').trim();
+            const blank = (!name || name === 'שם') && !meaningfulValue(person.metadata || {});
             const media = blank ? await hasMedia(id) : true;
             if ((!blank || media) && !confirm('האם אתה בטוח שברצונך למחוק איש קשר זה?')) return false;
 
@@ -307,6 +310,14 @@
             value.relationships = value.relationships.filter(relation =>
                 relation.person1Id !== id && relation.person2Id !== id
             );
+            const anchorId = relatedAnchor || value.people[0]?.id || null;
+            if (window.FamilySelectionController?.getSelectedPersonId?.() === id && anchorId) {
+                window.FamilySelectionController.replaceUrlPerson(anchorId, {
+                    source: 'delete-person',
+                    persist: true,
+                    notify: true
+                });
+            }
             await putGraph(value, { anchorId, reason: 'delete-person' });
             showStatus('נמחק');
             return true;
