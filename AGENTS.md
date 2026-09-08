@@ -27,9 +27,9 @@ Production: `family.barnahum.com`. Stack: Cloudflare Worker + D1 + R2 + static f
 M4 is in its final cleanup phase:
 
 ```text
-M4-A  one selection authority            done
-M4-B  one render + viewport authority    done
-M4-C  explicit mutation layer            done
+M4-A  one selection authority             done
+M4-B  one render + viewport authority     done
+M4-C  explicit mutation layer             done
 M4-D  shell-only index                    done
 M4-E  one transport/data path             done
 M4-F  direct registered layout pipeline   done
@@ -149,6 +149,8 @@ graph-view
 runtime-bootstrap
 ```
 
+The fixed title/search shell is intentionally above the person pane in the stacking order so autocomplete results can overlap the pane and remain selectable. A child dropdown z-index cannot escape a lower parent stacking context; preserve the shell-level ordering.
+
 `family-core.js` contains foundational card/geometry primitives only. It has no graph loading, polling, selection, mutations, old renderer entry point, old connector renderer, edit-state shim, or graph signature global.
 
 Deleted compatibility/runtime-repair files include:
@@ -170,6 +172,7 @@ person-picker-refresh.js
 face-open-selection.js
 graph-card-geometry.js
 node-face-footprint.js
+mobile-chrome.js
 ```
 
 ## Projection / visual roles
@@ -222,9 +225,20 @@ planar-router              prepare:60 + final connector owner
 
 Member-order feedback explicitly calls `FamilyRenderController.runThrough('planar')`. Never add corrective render/centering RAFs, timers or observers.
 
-`family-core.js` directly owns compact generation-centered vertical geometry: desktop gap 96, mobile gap 84, compact fallback band 56, and mobile top padding 150. `graph-card-geometry.js` is deleted and `mobile-refinement.js` no longer replaces `assignVerticalPositions`.
+`family-core.js` now directly owns both responsive geometry dimensions:
 
-`mobile-refinement.js` still owns one mobile-only horizontal spacing override (`unitSeparation` / `simplePack`, gap 48). That remaining monkey patch should move into foundational geometry rather than gain another wrapper.
+```text
+desktop horizontal unit gap  90
+mobile horizontal unit gap   48
+desktop generation gap       96
+mobile generation gap        84
+compact fallback band        56
+mobile top padding           150
+```
+
+`graph-card-geometry.js` is deleted. `mobile-refinement.js` no longer replaces `assignVerticalPositions`, `unitSeparation`, or `simplePack`.
+
+RenderController owns viewport commits. Mobile CSS must not apply `scroll-behavior:smooth` to `#scroll-viewport`; sequential `scrollLeft`/`scrollTop` writes must be immediate so a reroot is one deterministic center commit just like desktop.
 
 `union-child-actions.js` is commit-only presentation. RenderController calls `FamilyUnionChildActions.refresh()` after final geometry; the module no longer listens to Store/render/pane/identity events or queues its own RAF pass.
 
@@ -240,9 +254,9 @@ Member-order feedback explicitly calls `FamilyRenderController.runThrough('plana
 
 `person-media.js` consumes explicit selection/render/save lifecycle and calls `ensureSection()` synchronously. Its pane-body MutationObserver, RAF queue, unused cards-layer dependency and stale edit-state compatibility writes are deleted.
 
-Mobile selected-card height is content-driven again; the stale `min-height:138px` in `mobile-refinement.js` was deleted after `graph-card-geometry.js` removal exposed it. Do not reintroduce a fixed selected-card height.
+`mobile-refinement.js` is the single responsive/touch stylesheet owner. `mobile-chrome.js` is deleted; do not recreate a second late stylesheet whose purpose is to override the first one.
 
-The fixed title/search shell is above the person pane in the stacking order so autocomplete results can overlap the pane and remain selectable. The dropdown's own z-index cannot escape a lower parent stacking context; preserve the shell-level ordering.
+Selected-card height is content-driven. Old fixed/high-specificity mobile height/padding rules that made the root artificially tall are retired; presentation owns compact root padding. Do not reintroduce a fixed selected-card height or a competing root padding owner.
 
 ## Media / faces / pickers
 
@@ -270,7 +284,6 @@ Deletion-first does not mean “zero observers.” Keep local observers when the
 
 High-value remaining candidates:
 
-- move mobile horizontal spacing into foundational geometry → remove `unitSeparation` / `simplePack` monkey patches from `mobile-refinement.js`;
 - make GraphView and face-search producers render `FamilyPersonIdentity.describe(...)` directly → delete `person-picker-labels.js` and remove it from foundations;
 - consolidate FaceTagging/face UX state only where doing so deletes the remaining local observer bridges;
 - remove stale `.graph-select-zone` selectors from person-pane/print CSS now that no module creates that element;
