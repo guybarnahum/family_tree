@@ -9,6 +9,7 @@ Current code + explicit user instructions override historical notes.
 - Do not create PRs by default.
 - Refetch the current file SHA before every GitHub write.
 - Never claim tests/deploy/commits unless they actually succeeded.
+- Name runtime modules and symbols by what they own, not by planning slices/milestones.
 - Normal user flow:
 
 ```bash
@@ -111,7 +112,7 @@ Rules:
 - unchanged person edits are true no-ops;
 - card `[data-action]` dispatch is owned by FamilyMutations;
 - `union-child-actions.js` is presentation-only and delegates to `FamilyMutations.addChildToUnion`;
-- `slice-a-polish.js` saves pane fields through `FamilyMutations.updatePerson`;
+- `person-pane-editing.js` saves pane fields through `FamilyMutations.updatePerson`;
 - `pane-save-guard.js` was deleted.
 
 Runtime bootstrap calls `installMutationFacade()` after historical stage capture so old mutation globals cannot remain active.
@@ -195,6 +196,8 @@ FamilyRenderController.requestLayout({ reason, preserveAnchor: true })
 or `requestRecenter(...)`.
 
 After capture, historical `layoutAndRender()` and `restoreAnchor(...)` calls are inert compatibility facades. Never fix render bugs by adding RAF/timer/observer/centering repair passes.
+
+`public/graph-card-geometry.js` owns compact name-card generation spacing and topology-control geometry.
 
 ## 8. Projection / visual roles
 
@@ -293,7 +296,7 @@ Do not combine M4-F algorithm cleanup with algorithm redesign.
 - visual roles;
 - placeholder classification;
 - FamilyMutations;
-- M4 shell/ownership;
+- runtime shell/ownership conformance;
 - RenderController generations.
 
 F1/debug diagnostics of interest:
