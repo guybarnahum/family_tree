@@ -102,7 +102,6 @@
         if (root instanceof HTMLElement && root.matches('.graph-search-result[data-person-id], .face-person-result[data-person-id]')) {
             decorateResult(root);
         }
-
         root.querySelectorAll?.('.face-person-select option[value]').forEach(decorateSelectOption);
         root.querySelectorAll?.('.graph-search-result[data-person-id], .face-person-result[data-person-id]').forEach(decorateResult);
     }
@@ -117,9 +116,11 @@
         });
     }
 
-    new MutationObserver(mutations => {
-        if (mutations.some(mutation => mutation.type === 'childList')) queueDecorate();
-    }).observe(document.body, { childList: true, subtree: true });
+    function pickerSearchChanged(event) {
+        if (event.target?.matches?.('.graph-search-input, .face-person-search')) queueDecorate();
+    }
+    document.addEventListener('input', pickerSearchChanged);
+    document.addEventListener('focusin', pickerSearchChanged);
 
     window.addEventListener('family-person-disambiguation-updated', () => {
         document.querySelectorAll('[data-person-picker-signature]').forEach(node => {
