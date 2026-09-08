@@ -144,7 +144,6 @@ graph-store
 graph-status
 family-mutations
 person-identity
-person-picker-labels
 graph-view
 runtime-bootstrap
 ```
@@ -169,6 +168,7 @@ print-polish.js
 parent-limit.js
 interaction-refinement.js
 person-picker-refresh.js
+person-picker-labels.js
 face-open-selection.js
 graph-card-geometry.js
 node-face-footprint.js
@@ -264,9 +264,9 @@ The obsolete `.graph-select-zone` presentation/print cleanup selectors are delet
 
 D1 stores metadata; originals live in R2. Preferred face is `metadata.primaryFaceId` and must belong to that person or deterministic fallback applies.
 
-`face-tagging.js` owns face-editor people population from the current GraphStore, uses `FamilyPersonIdentity` for disambiguated labels, and chooses the initial selected face itself (selected person's tagged face, otherwise the first face). The former `person-picker-refresh.js` and `face-open-selection.js` repair layers are deleted; there is no 90-frame polling or synthetic pointer selection.
+`face-tagging.js` owns face-editor people population from the current GraphStore, uses `FamilyPersonIdentity` for disambiguated select labels, and chooses the initial selected face itself (selected person's tagged face, otherwise the first face). The former `person-picker-refresh.js` and `face-open-selection.js` repair layers are deleted; there is no 90-frame polling or synthetic pointer selection.
 
-`person-identity.js` owns canonical normalized/disambiguated labels. `person-picker-labels.js` still exists only as presentation decoration for graph/face search results and select options; remove it only after those producers render `Identity.describe(...)` directly.
+`person-identity.js` owns canonical normalized/disambiguated labels. `graph-view.js` renders graph-search identity labels directly and `face-tagging-ux.js` renders face-search identity labels directly. `person-picker-labels.js`, its global input/focus listeners, queued decoration pass, disambiguation refresh listener, and DOM rewrite signatures are deleted.
 
 `node-face-decoration.js` owns preferred graph-card portrait decoration and portrait measurement extension. Bootstrap awaits its initial preferred-face catalog before the first graph render. During base geometry RenderController calls decoration before `measureCards()`, then asks the face owner to extend measured width by the actual half-avatar outset. Later face-presence changes request geometry explicitly only when the visible set of portrait-bearing cards changes.
 
@@ -286,7 +286,6 @@ Deletion-first does not mean “zero observers.” Keep local observers when the
 
 High-value remaining candidates:
 
-- make GraphView and face-search producers render `FamilyPersonIdentity.describe(...)` directly → delete `person-picker-labels.js` and remove it from foundations;
 - consolidate FaceTagging/face UX state only where doing so deletes the remaining local observer bridges;
 - remove stale planning comments while touching their owners.
 
