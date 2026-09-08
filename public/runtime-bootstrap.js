@@ -72,7 +72,6 @@
         window.FamilySelectionController?.restoreSelection?.();
 
         await loadScript('/import-export.js', 'data-family-import-export');
-        await loadScript('/interaction-refinement.js', 'data-family-interaction');
         await loadScript('/node-hover.js', 'data-family-node-hover');
         await loadScript('/mobile-refinement.js', 'data-family-mobile');
         await loadScript('/presentation-refinement.js', 'data-family-presentation');
