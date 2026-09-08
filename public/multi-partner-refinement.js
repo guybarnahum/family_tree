@@ -1,6 +1,4 @@
-// Multi-partner relationship/layout extension.
-// Ordinary people and one-couple units retain the existing visual behavior; visible spouse
-// components with 3+ people activate the extended union geometry.
+// Multi-partner family-unit geometry. Final connector routing belongs to planar-router.
 (() => {
     if (window.__familyMultiPartnerRefinement) return;
     window.__familyMultiPartnerRefinement = true;
@@ -8,8 +6,7 @@
     const Store = window.FamilyGraphStore;
     const Controller = window.FamilyRenderController;
     const Selection = window.FamilySelectionController;
-    const cardsLayerEl = document.getElementById('cards-layer');
-    if (!Store || !Controller || !Selection || !cardsLayerEl) return;
+    if (!Store || !Controller || !Selection) return;
 
     const EXTRA_MEMBER_GAP = 58;
     const UNION_LANE_CLEARANCE = 18;
@@ -23,8 +20,6 @@
 
     const baseBuildFamilyUnits = buildFamilyUnits;
     const baseOrientCouples = orientCouples;
-    const baseDrawSVGLines = drawSVGLines;
-    const baseCreateCardHTML = createCardHTML;
 
     function prepareTopology() {
         const snapshot = Store.snapshot();
@@ -34,9 +29,7 @@
         childrenMap = snapshot.indexes?.childrenByParent || new Map();
     }
 
-    function currentRootId() {
-        return Selection.getSelectedPersonId?.() || null;
-    }
+    const currentRootId = () => Selection.getSelectedPersonId?.() || null;
 
     function spouseIds(personId, { visibleOnly = false } = {}) {
         const result = [...(spouseMap.get(personId) || [])];
@@ -56,13 +49,8 @@
         return visibleOnly ? explicit.filter(id => globalNodeMap.has(id)) : explicit;
     }
 
-    function spouseEdge(a, b) {
-        return spouseMap.get(a)?.has(b) || false;
-    }
-
-    function pairKey(a, b) {
-        return a < b ? `${a}|${b}` : `${b}|${a}`;
-    }
+    const spouseEdge = (a, b) => spouseMap.get(a)?.has(b) || false;
+    const pairKey = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
 
     function spouseComponent(seedId, available) {
         const queue = [seedId];
@@ -162,9 +150,7 @@
         return [...left.reverse(), hub, ...right];
     }
 
-    function memberGap(a, b) {
-        return spouseEdge(a.id, b.id) ? SPOUSE_EDGE_GAP : EXTRA_MEMBER_GAP;
-    }
+    const memberGap = (a, b) => spouseEdge(a.id, b.id) ? SPOUSE_EDGE_GAP : EXTRA_MEMBER_GAP;
 
     function sizeUnit(unit) {
         unit.memberGaps = [];
@@ -263,7 +249,6 @@
 
     const leftEdge = node => node.x - node.cardWidth / 2;
     const rightEdge = node => node.x + node.cardWidth / 2;
-    const topEdge = node => node.targetY;
     const bottomEdge = node => node.targetY + node.cardHeight;
 
     function unionGeometry(unit) {
@@ -289,30 +274,14 @@
             const left = a.x <= b.x ? a : b;
             const right = left === a ? b : a;
             const key = pairKey(a.id, b.id);
-            const adjacent = Math.abs(index.get(a.id) - index.get(b.id)) === 1;
-            if (adjacent) {
-                const x1 = rightEdge(left);
-                const x2 = leftEdge(right);
-                result.set(key, {
-                    path: `M ${x1} ${centerY} L ${x2} ${centerY}`,
-                    x: (x1 + x2) / 2,
-                    y: centerY,
-                    width: 2.5
-                });
-                continue;
-            }
-            const laneY = maxBottom + UNION_LANE_CLEARANCE + (laneByPair.get(key) || 0) * UNION_LANE_STEP;
             const x1 = rightEdge(left);
             const x2 = leftEdge(right);
-            const inset = Math.min(14, Math.max(8, (x2 - x1) * 0.08));
+            const adjacent = Math.abs(index.get(a.id) - index.get(b.id)) === 1;
             result.set(key, {
-                path: roundedOrthogonalPath([
-                    [x1, centerY], [x1 + inset, centerY], [x1 + inset, laneY],
-                    [x2 - inset, laneY], [x2 - inset, centerY], [x2, centerY]
-                ], CONNECTOR_KNEE_RADIUS),
                 x: (x1 + x2) / 2,
-                y: laneY,
-                width: 2.3
+                y: adjacent
+                    ? centerY
+                    : maxBottom + UNION_LANE_CLEARANCE + (laneByPair.get(key) || 0) * UNION_LANE_STEP
             });
         }
         return result;
@@ -321,30 +290,6 @@
     function visibleParents(child) {
         return parentIds(child.id, { visibleOnly: true })
             .map(id => globalNodeMap.get(id)).filter(Boolean);
-    }
-
-    function childParentPair(child, unit) {
-        const parents = visibleParents(child).filter(parent => unitByNodeId.get(parent.id) === unit);
-        if (parents.length < 2) return null;
-        for (let i = 0; i < parents.length; i++) {
-            for (let j = i + 1; j < parents.length; j++) {
-                if (spouseEdge(parents[i].id, parents[j].id)) return [parents[i], parents[j]];
-            }
-        }
-        return [parents[0], parents[1]];
-    }
-
-    function childSource(unit, child, geometry) {
-        const pair = childParentPair(child, unit);
-        if (pair) {
-            const union = geometry.get(pairKey(pair[0].id, pair[1].id));
-            if (union) return { x: union.x, y: union.y };
-            return { x: average(pair.map(parent => parent.x)), y: generationY(unit) };
-        }
-        const parent = visibleParents(child).find(candidate => unitByNodeId.get(candidate.id) === unit);
-        if (parent) return { x: parent.x, y: bottomEdge(parent) };
-        if (unit.members.length === 2) return { x: unit.centerX, y: generationY(unit) };
-        return { x: unit.members[0].x, y: bottomEdge(unit.members[0]) };
     }
 
     function unionDescriptorForChildUnit(childUnit, geometryByParent) {
@@ -358,7 +303,6 @@
                 byParentUnit.get(parentUnit).push(parent);
             }
             for (const [parentUnit, inUnit] of byParentUnit) {
-                if (!inUnit.length) continue;
                 let pair = null;
                 for (let i = 0; i < inUnit.length && !pair; i++) {
                     for (let j = i + 1; j < inUnit.length; j++) {
@@ -412,10 +356,9 @@
         const normalGap = Math.max(0,
             unitSeparation(leftUnit, rightUnit) - leftUnit.width / 2 - rightUnit.width / 2
         );
-        const extra = left.unionKey && right.unionKey && left.unionKey !== right.unionKey
+        return normalGap + (left.unionKey && right.unionKey && left.unionKey !== right.unionKey
             ? UNION_CHILD_GROUP_GAP
-            : 0;
-        return normalGap + extra;
+            : 0);
     }
 
     function packClusters(clusters) {
@@ -423,14 +366,18 @@
         clusters.sort((a, b) => a.targetX - b.targetX || a.oldX - b.oldX || a.key.localeCompare(b.key));
         const positions = clusters.map(cluster => cluster.targetX);
         for (let i = 1; i < clusters.length; i++) {
-            const minimum = positions[i - 1] +
-                clusters[i - 1].width / 2 + clusterGap(clusters[i - 1], clusters[i]) + clusters[i].width / 2;
-            positions[i] = Math.max(positions[i], minimum);
+            positions[i] = Math.max(
+                positions[i],
+                positions[i - 1] + clusters[i - 1].width / 2 +
+                    clusterGap(clusters[i - 1], clusters[i]) + clusters[i].width / 2
+            );
         }
         for (let i = clusters.length - 2; i >= 0; i--) {
-            const maximum = positions[i + 1] -
-                clusters[i].width / 2 - clusterGap(clusters[i], clusters[i + 1]) - clusters[i + 1].width / 2;
-            positions[i] = Math.min(positions[i], maximum);
+            positions[i] = Math.min(
+                positions[i],
+                positions[i + 1] - clusters[i].width / 2 -
+                    clusterGap(clusters[i], clusters[i + 1]) - clusters[i + 1].width / 2
+            );
         }
         const delta = average(clusters.map((cluster, i) => cluster.targetX - positions[i]));
         clusters.forEach((cluster, i) => {
@@ -490,53 +437,6 @@
             placeMembers();
         }
     }
-
-    drawSVGLines = function relationshipAwareDrawSVGLines() {
-        if (!graphReady) return baseDrawSVGLines();
-        let svg = '';
-        const geometryByUnit = new Map();
-        for (const unit of globalUnits) {
-            const geometry = unionGeometry(unit);
-            geometryByUnit.set(unit, geometry);
-            for (const union of geometry.values()) svg += svgPath(union.path, union.width);
-        }
-        for (const unit of globalUnits) {
-            const children = globalNodes.filter(child =>
-                child.gen === unit.gen + 1 &&
-                visibleParents(child).some(parent => unitByNodeId.get(parent.id) === unit)
-            ).sort((a, b) => a.x - b.x);
-            const geometry = geometryByUnit.get(unit) || new Map();
-            for (const child of children) {
-                const source = childSource(unit, child, geometry);
-                const targetX = child.x;
-                const targetY = topEdge(child);
-                const midY = source.y + Math.max(48, (targetY - source.y) * 0.52);
-                svg += Math.abs(targetX - source.x) < 0.5
-                    ? svgPath(`M ${source.x} ${source.y} L ${targetX} ${targetY}`)
-                    : svgPath(roundedOrthogonalPath([
-                        [source.x, source.y], [source.x, midY],
-                        [targetX, midY], [targetX, targetY]
-                    ], CONNECTOR_KNEE_RADIUS));
-            }
-        }
-        svgLayer.innerHTML = svg;
-    };
-
-    createCardHTML = function relationshipAwareCreateCardHTML(node) {
-        let html = baseCreateCardHTML(node);
-        const label = '+ הוסף בן/בת זוג';
-        if (html.includes('data-action="add-spouse"')) return html.replace('♥ זוג', label);
-
-        const id = escapeHTML(node.id);
-        const button = `
-            <button data-action="add-spouse" data-id="${id}"
-                    class="absolute -top-2.5 right-1 bg-pink-100 text-pink-700 text-[8px] px-2 py-0.5 rounded-full hover:bg-pink-200 shadow z-30 transition whitespace-nowrap">${label}</button>`;
-        return html.replace(/(\s*<h2\b)/, `${button}$1`);
-    };
-
-    const style = document.createElement('style');
-    style.textContent = `.absolute-card [data-action="add-spouse"] { white-space: nowrap; }`;
-    document.head.appendChild(style);
 
     Controller.registerPrepareStage({ name: 'multi-partner', order: 10, run: prepareTopology });
     prepareTopology();
