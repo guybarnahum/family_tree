@@ -1,7 +1,5 @@
-// Responsive/touch styling plus mobile horizontal spacing.
+// Responsive/touch styling only. Geometry belongs to family-core; viewport commits belong to RenderController.
 (() => {
-    const mobileQuery = window.matchMedia('(max-width: 768px), (hover: none) and (pointer: coarse)');
-
     const style = document.createElement('style');
     style.textContent = `
         @media (max-width: 768px), (hover: none) and (pointer: coarse) {
@@ -18,7 +16,6 @@
                 -webkit-overflow-scrolling: touch;
                 touch-action: pan-x pan-y;
                 overscroll-behavior: contain;
-                scroll-behavior: smooth;
                 scrollbar-width: none;
             }
 
@@ -133,7 +130,6 @@
                 min-width: min(228px, calc(100vw - 46px)) !important;
                 width: min(264px, calc(100vw - 40px)) !important;
                 max-width: min(286px, calc(100vw - 28px)) !important;
-                padding: 20px 16px 40px !important;
                 border-radius: 13px !important;
                 outline-width: 3px !important;
                 outline-offset: 3px !important;
@@ -274,19 +270,4 @@
         }
     `;
     document.head.appendChild(style);
-
-    if (mobileQuery.matches) {
-        unitSeparation = (left, right) => left.width / 2 + 48 + right.width / 2;
-        simplePack = function mobileSimplePack(units) {
-            if (!units.length) return;
-            const gap = 48;
-            let cursor = 0;
-            for (const unit of units) {
-                unit.centerX = cursor + unit.width / 2;
-                cursor += unit.width + gap;
-            }
-            const total = cursor - gap;
-            units.forEach(unit => unit.centerX -= total / 2);
-        };
-    }
 })();
