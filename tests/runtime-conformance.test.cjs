@@ -23,7 +23,7 @@ assert(!index.includes('function addChild'), 'index shell must not contain struc
 assert(!index.includes('setInterval('), 'index shell must not poll');
 assert(!index.includes("addEventListener('resize'"), 'index shell must not own render resize behavior');
 assert(!index.includes("addEventListener('focusout'"), 'index shell must not own persistence blur behavior');
-assert(!index.includes('legacy-symbols.js'), 'index shell must not hardcode runtime compatibility scripts');
+assert(!index.includes('legacy-symbols.js'), 'index shell must not hardcode compatibility scripts');
 
 assert(core.includes('function buildFamilyUnits()'), 'family-core must retain base geometry primitives');
 assert(core.includes('function createCardHTML(node)'), 'family-core must own base card construction');
@@ -50,7 +50,7 @@ assert(!mutations.includes('Store.noteMutation'), 'transport mutation bookkeepin
 assert(personPaneEditing.includes('Mutations.updatePerson'), 'pane saves must delegate to FamilyMutations');
 assert(!personPaneEditing.includes('/api/nodes/'), 'pane UX must not own person network writes');
 assert(!personPaneEditing.includes('__familyUnchangedGuard'), 'saveEdit wrapper chain must be removed');
-assert(personPaneEditing.includes('__familyPersonPaneEditingInstalled'), 'pane editing must use a semantic install guard');
+assert(personPaneEditing.includes('__familyPersonPaneEditingInstalled'), 'pane editing must use semantic install guard');
 assert(!union.includes("fetch('/api/graph'"), 'union actions must not own structural writes');
 assert(!union.includes("fetch('/api/nodes"), 'union actions must not own node mutations');
 assert(union.includes('Mutations.addChildToUnion'), 'union UI must delegate structural intent');
@@ -66,27 +66,37 @@ assert(!graphView.includes('history.replaceState'), 'graph-view must not own his
 assert(!graphView.includes('baseSaveEdit'), 'graph-view must not retain save wrapper debt');
 assert(visualRoles.includes("node?.viewRole === 'sibling'"), 'visual roles must consume projection sibling semantics');
 assert(!visualRoles.includes('projectionSiblings('), 'visual roles must not reconstruct projection siblinghood');
-assert(!visualRoles.includes('parent_id'), 'visual roles must not infer siblinghood from layout family-unit fields');
+assert(!visualRoles.includes('parent_id'), 'visual roles must not infer siblinghood from layout fields');
 
-assert(!bootstrap.includes('pane-save-guard.js'), 'obsolete pane save guard must not load');
-assert(bootstrap.includes('function installMutationFacade()'), 'bootstrap must reclaim historical mutation globals');
-assert(bootstrap.includes('addChild = mutations.addChild'), 'legacy addChild global must resolve to canonical mutations');
-assert(bootstrap.includes("'/person-pane-editing.js'"), 'bootstrap must use thematic pane editing name');
-assert(bootstrap.includes("'/graph-card-geometry.js'"), 'bootstrap must use thematic graph geometry name');
+// Bootstrap may wait for semantic dependency guards, but must not capture algorithm globals.
+assert(!bootstrap.includes('captureLegacyModule'), 'bootstrap capture harness must be removed');
+assert(!bootstrap.includes('setLayout('), 'bootstrap must not swap layout globals');
+assert(!bootstrap.includes('setLoadTree('), 'bootstrap must not swap graph loaders');
+assert(!bootstrap.includes('expectedLayoutName'), 'bootstrap must not inspect layout function names');
+assert(!bootstrap.includes('expectedLoadName'), 'bootstrap must not inspect load function names');
+assert(!bootstrap.includes('bootstrap-sentinel'), 'bootstrap must not inject fake dependency sentinels');
+assert(bootstrap.includes('verifyLayoutPipeline()'), 'bootstrap must verify registered stage ownership');
+assert(bootstrap.includes("'/person-pane-editing.js'"), 'bootstrap must use thematic pane editing module');
+assert(bootstrap.includes("'/graph-card-geometry.js'"), 'bootstrap must use thematic graph geometry module');
 assert(!bootstrap.includes('slice-a-'), 'bootstrap must not retain slice-derived module names');
-assert(!fs.existsSync('public/pane-save-guard.js'), 'pane-save-guard must be physically removed');
+assert(!fs.existsSync('public/pane-save-guard.js'), 'pane-save-guard must stay deleted');
+assert(!fs.existsSync('public/legacy-symbols.js'), 'legacy-symbols must be physically removed');
 
-assert(entry.includes("'/legacy-symbols.js'"), 'entry must version transitional compatibility symbols');
 assert(entry.includes("'/family-core.js'"), 'entry must load extracted family core');
+assert(entry.includes("'/selection-controller.js'"), 'entry must load canonical selection owner');
 assert(entry.includes("'/family-api.js'"), 'entry must load explicit transport');
+assert(entry.indexOf("'/selection-controller.js'") < entry.indexOf("'/graph-view.js'"),
+  'selection owner must load before graph projection');
 assert(entry.indexOf("'/family-api.js'") < entry.indexOf("'/graph-store.js'"), 'transport must load before Store');
 assert(entry.includes("'/family-mutations.js'"), 'entry must load canonical mutations before runtime bootstrap');
+assert(!entry.includes("'/legacy-symbols.js'"), 'entry must not load retired legacy symbols');
 assert(!entry.includes("'/media-resilience.js'"), 'entry must not load retired media wrapper');
 assert(!entry.includes('stripLegacyInlineStartup'), 'entry must not edit legacy inline application code');
 
 for (const retiredName of [
   'public/slice-a-polish.js',
-  'public/slice-a-geometry.js'
-]) assert(!fs.existsSync(retiredName), `${retiredName} must be renamed, not kept as an alias`);
+  'public/slice-a-geometry.js',
+  'public/legacy-symbols.js'
+]) assert(!fs.existsSync(retiredName), `${retiredName} must not survive as an alias`);
 
 console.log('runtime conformance tests passed');
