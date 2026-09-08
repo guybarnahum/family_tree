@@ -134,30 +134,6 @@
             margin: -12px 0 14px;
         }
 
-        .person-pane-attribute {
-            width: 28px;
-            height: 24px;
-            padding: 0;
-            border: 1px solid rgba(163, 177, 138, 0.24);
-            border-radius: 999px;
-            background: rgba(163, 177, 138, 0.05);
-            color: #9aa39a;
-            font: 500 14px/1 Inter, sans-serif;
-            cursor: pointer;
-        }
-
-        .person-pane-attribute.is-set {
-            color: #588157;
-            border-color: rgba(88, 129, 87, 0.30);
-            background: rgba(163, 177, 138, 0.11);
-        }
-
-        .person-pane-attribute:hover,
-        .person-pane-attribute:focus-visible {
-            background: rgba(163, 177, 138, 0.17);
-            outline: none;
-        }
-
         .person-pane-section {
             padding: 13px 0 11px;
             border-top: 1px solid rgba(163, 177, 138, 0.20);
@@ -258,6 +234,16 @@
             background: rgba(163, 177, 138, 0.18);
             outline: none;
         }
+
+        .person-pane-attribute {
+            width: 28px;
+            height: 24px;
+            padding: 0;
+            font-size: 14px;
+            opacity: 0.48;
+        }
+
+        .person-pane-attribute.is-set { opacity: 1; }
 
         .person-pane-add-menu {
             display: none;
@@ -407,7 +393,7 @@
     function attributeButton(person, key, value) {
         const button = document.createElement('button');
         button.type = 'button';
-        button.className = `person-pane-attribute${value ? ' is-set' : ''}`;
+        button.className = `person-pane-add person-pane-attribute${value ? ' is-set' : ''}`;
         button.dataset.id = person.id;
         button.dataset.personAttribute = key;
         if (key === 'sex') {
