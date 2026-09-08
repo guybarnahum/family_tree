@@ -44,9 +44,8 @@ parent('S', 'C');
 parent('O', 'C');
 parent('P', 'S');
 spouse('P', 'Q');
-// B is a projection sibling of R through graph-view's conservative legacy family-unit
-// inference, but the canonical Store intentionally has no X -> B parent row. B is also
-// reachable through spouse ancestry, so projection sibling protection must win.
+// B is deliberately absent from Store sibling indexes but the committed projection marks it
+// as R's sibling. It is also reachable through spouse ancestry, so projection semantics must win.
 spouse('P', 'B');
 parent('D', 'P');
 
@@ -91,8 +90,9 @@ const globalNodeMap = new Map(cards.map(card => [
   card.dataset.nodeId,
   {
     id: card.dataset.nodeId,
-    viewRole: card.dataset.nodeId === 'B' || card.dataset.nodeId === 'O' ? 'context' : 'primary',
-    parent_id: card.dataset.nodeId === 'R' || card.dataset.nodeId === 'B' ? 'X' : null
+    viewRole: card.dataset.nodeId === 'B'
+      ? 'sibling'
+      : (card.dataset.nodeId === 'O' ? 'context' : 'primary')
   }
 ]));
 
@@ -146,12 +146,8 @@ assert.strictEqual(card('R').classList.contains('graph-spouse-parent'), false);
 assert.strictEqual(card('R').classList.contains('graph-spouse-ancestor-deep'), false);
 assert.strictEqual(card('R').dataset.familyVisualRole, 'root');
 
-assert(!window.__familyVisualRoleDiagnostics.canonicalSiblings.includes('B'),
-  'Store should not discover the projection-only sibling');
-assert(window.__familyVisualRoleDiagnostics.projectionSiblings.includes('B'),
-  'committed projection should discover the sibling through its family unit');
 assert(window.__familyVisualRoleDiagnostics.siblings.includes('B'),
-  'effective sibling set must union canonical and projection siblings');
+  'VisualRoles must consume the committed projection sibling role');
 assert.strictEqual(card('B').classList.contains('graph-context'), false);
 assert.strictEqual(card('B').classList.contains('graph-spouse-parent'), false,
   'projection sibling must not be dimmed even when reachable through spouse ancestry');
