@@ -1,5 +1,5 @@
 // Preferred-face control. Preference lives on Person.metadata.primaryFaceId; the selected face
-// must already be assigned to that person. Modal-local observers remain UI-local by design.
+// must already be assigned to that person.
 (() => {
     if (window.__familyFacePrimaryInstalled) return;
     window.__familyFacePrimaryInstalled = true;
@@ -14,7 +14,6 @@
 
     let preferredByPerson = new Map();
     let refreshSerial = 0;
-    let retryTimers = [];
 
     const style = document.createElement('style');
     style.textContent = `
@@ -75,13 +74,6 @@
         }
     }
 
-    function scheduleFaceRefresh() {
-        retryTimers.forEach(clearTimeout);
-        retryTimers = [320, 1200].map(delay => setTimeout(() => {
-            void refreshPreferred({ notify: true });
-        }, delay));
-    }
-
     button.addEventListener('click', async () => {
         const faceId = selectedFaceId();
         const personId = selectedPersonId();
@@ -110,18 +102,16 @@
         }
     });
 
-    personSelect.addEventListener('change', () => {
-        button.disabled = true;
-        scheduleFaceRefresh();
+    personSelect.addEventListener('change', syncButton);
+    window.addEventListener('family-api-mutation', event => {
+        const detail = event.detail || {};
+        if (detail.scope === 'faces' && !String(detail.path || '').endsWith('/preferred')) {
+            void refreshPreferred({ notify: true });
+        }
     });
-    overlay.addEventListener('pointerup', scheduleFaceRefresh);
-    deleteButton.addEventListener('click', scheduleFaceRefresh);
 
     new MutationObserver(syncButton).observe(overlay, {
         childList: true, subtree: true, attributes: true, attributeFilter: ['class']
-    });
-    new MutationObserver(syncButton).observe(personSelect, {
-        childList: true, subtree: true, attributes: true
     });
     new MutationObserver(() => {
         if (modal.classList.contains('open')) void refreshPreferred();
