@@ -6,10 +6,9 @@
 
     const pane = document.getElementById('person-pane');
     const paneBody = pane?.querySelector('.person-pane-body');
-    const cardsLayer = document.getElementById('cards-layer');
     const Api = window.FamilyApi;
     const Selection = window.FamilySelectionController;
-    if (!pane || !paneBody || !cardsLayer || !Api || !Selection) return;
+    if (!pane || !paneBody || !Api || !Selection) return;
 
     const Metadata = window.FamilyPersonMetadata || {
         placeText: value => typeof value === 'string' ? value : String(value?.text || ''),
@@ -418,7 +417,6 @@
     modal.addEventListener('focusin', event => {
         const field = event.target?.dataset?.mediaField;
         if (!field) return;
-        if (typeof isEditing !== 'undefined') isEditing = true;
         editOriginals.set(event.target, event.target.innerText.trim());
     }, true);
 
@@ -426,7 +424,6 @@
         const field = event.target?.dataset?.mediaField;
         if (!field) return;
         event.stopPropagation();
-        if (typeof isEditing !== 'undefined') isEditing = false;
         const value = event.target.innerText.trim();
         const original = editOriginals.get(event.target) ?? value;
         void patchSelected(field, value, event.target, original);
@@ -458,16 +455,8 @@
         if (event.key === 'Escape' && modal.classList.contains('open')) closeMedia();
     });
 
-    let ensureFrame = 0;
-    function queueEnsure() {
-        if (ensureFrame) cancelAnimationFrame(ensureFrame);
-        ensureFrame = requestAnimationFrame(() => {
-            ensureFrame = 0;
-            ensureSection();
-        });
-    }
-
-    new MutationObserver(queueEnsure).observe(paneBody, { childList: true });
-    window.addEventListener('family-selection-changed', queueEnsure);
-    queueEnsure();
+    window.addEventListener('family-selection-changed', ensureSection);
+    window.addEventListener('family-graph-rendered', ensureSection);
+    window.addEventListener('family-person-pane-saved', ensureSection);
+    ensureSection();
 })();
