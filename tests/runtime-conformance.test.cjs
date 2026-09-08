@@ -9,6 +9,8 @@ const core = read('public/family-core.js');
 const mutations = read('public/family-mutations.js');
 const union = read('public/union-child-actions.js');
 const personPaneEditing = read('public/person-pane-editing.js');
+const graphView = read('public/graph-view.js');
+const visualRoles = read('public/visual-roles.js');
 const bootstrap = read('public/runtime-bootstrap.js');
 const entry = read('src/entry.js');
 
@@ -38,6 +40,17 @@ assert(personPaneEditing.includes('__familyPersonPaneEditingInstalled'), 'pane e
 assert(!union.includes("fetch('/api/graph'"), 'union actions must not own structural writes');
 assert(!union.includes("fetch('/api/nodes"), 'union actions must not own node mutations');
 assert(union.includes('Mutations.addChildToUnion'), 'union UI must delegate structural intent');
+
+// GraphView owns root-relative projection semantics. A sibling may be lateral in topology without
+// being contextual visually; VisualRoles must consume the committed role instead of rediscovering it.
+assert(graphView.includes('let rootSiblingIds = new Set()'), 'graph-view must track selected-root siblings explicitly');
+assert(graphView.includes('rootSiblingIds = siblingsOf(graphRootId)'), 'graph-view must classify siblings during projection');
+assert(graphView.includes("? 'sibling'"), 'graph-view must emit a sibling viewRole');
+assert(graphView.includes("card.classList.toggle('graph-context', node.viewRole === 'context')"),
+  'graph-view must not dim every lateral node');
+assert(visualRoles.includes("node?.viewRole === 'sibling'"), 'visual roles must consume projection sibling semantics');
+assert(!visualRoles.includes('projectionSiblings('), 'visual roles must not reconstruct projection siblinghood');
+assert(!visualRoles.includes('parent_id'), 'visual roles must not infer siblinghood from layout family-unit fields');
 
 assert(!bootstrap.includes('pane-save-guard.js'), 'obsolete pane save guard must not load');
 assert(bootstrap.includes('function installMutationFacade()'), 'bootstrap must reclaim historical mutation globals');
