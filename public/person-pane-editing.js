@@ -151,8 +151,12 @@
     pane.addEventListener('click', event => {
         const button = event.target.closest('[data-person-attribute]');
         if (!button) return;
-        const current = button.dataset.value || '';
-        const cycle = button.dataset.personAttribute === 'sex' ? ['', 'female', 'male'] : ['', 'dead'];
+        const key = button.dataset.personAttribute;
+        const current = metadataFor(localPerson(button.dataset.id))[key] || '';
+        const cycle = key === 'sex' ? ['', 'female', 'male'] : ['', 'dead'];
+        button.dataset.field = 'metadata';
+        button.dataset.metaKey = key;
+        button.dataset.metaKind = 'attribute';
         button.dataset.value = cycle[(cycle.indexOf(current) + 1) % cycle.length];
         void savePaneField(button, current);
     });
