@@ -59,7 +59,7 @@ function createStoreContext(requestImpl, { status = null } = {}) {
   let graphReads = 0;
   const networkGraph = {
     format: 'family-graph', version: 2,
-    people: [{ id: 'A', name: 'Alice', metadata: {} }, { id: 'B', name: 'Bob', metadata: {} }],
+    people: [{ id: 'A', name: 'Alice', metadata: { sex: 'male' } }, { id: 'B', name: 'Bob', metadata: {} }],
     relationships: [{ id: 'spouse:A:B', type: 'spouse', person1Id: 'A', person2Id: 'B' }]
   };
 
@@ -100,6 +100,7 @@ function createStoreContext(requestImpl, { status = null } = {}) {
   assert.strictEqual(graphReads, 1, 'stale graph must refresh once through FamilyApi');
   assert.strictEqual(snapshot.revision, 2);
   assert(snapshot.indexes.spousesByPerson.get('A').has('B'));
+  assert.strictEqual(Store.person('B').metadata.sex, 'female');
   assert.strictEqual(snapshot.stale, false);
   assert.strictEqual(snapshot.dirty, false);
 
