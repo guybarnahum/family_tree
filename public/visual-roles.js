@@ -19,6 +19,42 @@
             filter: none !important;
         }
 
+        .absolute-card.graph-deceased {
+            border-top-color: #262626 !important;
+        }
+
+        .absolute-card.graph-deceased h2[data-field="name"] {
+            color: #262626 !important;
+        }
+
+        .absolute-card.graph-deceased::before,
+        .absolute-card.graph-deceased::after {
+            content: "";
+            position: absolute;
+            background: #262626;
+            pointer-events: none;
+        }
+
+        .absolute-card.graph-deceased::before {
+            left: 12px;
+            right: 12px;
+            bottom: -5px;
+            height: 1px;
+        }
+
+        .absolute-card.graph-deceased::after {
+            left: 50%;
+            bottom: -12px;
+            width: 2px;
+            height: 12px;
+            transform: translateX(-50%);
+        }
+
+        .absolute-card.graph-root.graph-deceased {
+            outline-color: rgba(38, 38, 38, 0.58) !important;
+            box-shadow: 0 12px 28px rgba(38, 38, 38, 0.18) !important;
+        }
+
         .absolute-card.graph-spouse-parent {
             opacity: 0.60;
             filter: saturate(0.58);
@@ -144,6 +180,7 @@
             card.classList.toggle('graph-context', contextual);
             card.classList.toggle('graph-spouse-parent', spouseParent);
             card.classList.toggle('graph-spouse-ancestor-deep', spouseAncestorDeep);
+            card.classList.toggle('graph-deceased', indexes.peopleById?.get(id)?.metadata?.lifeStatus === 'dead');
 
             const role = isRoot ? 'root'
                 : isSibling ? 'sibling'
