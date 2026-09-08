@@ -30,6 +30,8 @@
 
     const style = document.createElement('style');
     style.textContent = `
+        :root { --family-deceased: #2f3130; }
+
         #cards-layer .absolute-card {
             padding: 11px 14px !important;
         }
@@ -56,6 +58,46 @@
         #cards-layer .absolute-card.graph-root [data-action] {
             opacity: 1 !important;
             pointer-events: auto !important;
+        }
+
+        #cards-layer .absolute-card.graph-deceased {
+            border-top-color: var(--family-deceased) !important;
+        }
+
+        #cards-layer .absolute-card.graph-deceased h2[data-field="name"] {
+            color: var(--family-deceased) !important;
+        }
+
+        #cards-layer .absolute-card.graph-root.graph-deceased {
+            outline-color: var(--family-deceased) !important;
+            border-top-color: var(--family-deceased) !important;
+        }
+
+        #cards-layer .absolute-card.graph-deceased .node-face-avatar {
+            border-color: var(--family-deceased) !important;
+        }
+
+        #cards-layer .absolute-card.graph-deceased::before,
+        #cards-layer .absolute-card.graph-deceased::after {
+            content: '';
+            position: absolute;
+            background: var(--family-deceased);
+            pointer-events: none;
+        }
+
+        #cards-layer .absolute-card.graph-deceased::before {
+            left: 10px;
+            right: 10px;
+            bottom: 0;
+            height: 2px;
+        }
+
+        #cards-layer .absolute-card.graph-deceased::after {
+            left: 50%;
+            top: 100%;
+            width: 2px;
+            height: 14px;
+            transform: translateX(-50%);
         }
 
         #person-pane {
@@ -244,6 +286,12 @@
         }
 
         .person-pane-attribute.is-set { opacity: 1; }
+
+        .person-pane-attribute[data-person-attribute="lifeStatus"].is-set {
+            color: var(--family-deceased);
+            border-color: rgba(47, 49, 48, 0.32);
+            background: rgba(47, 49, 48, 0.06);
+        }
 
         .person-pane-add-menu {
             display: none;
@@ -597,13 +645,15 @@
 
     function decorateCards() {
         cardsLayer.querySelectorAll('.absolute-card[data-node-id]').forEach(card => {
+            const metadata = metadataForPerson(Store.person(card.dataset.nodeId));
+            card.classList.toggle('graph-deceased', metadata.lifeStatus === 'dead');
             if (!card.querySelector('[data-action="add-parent"]')) {
                 ensureAction(card, 'add-parent', '+ הורה',
                     'absolute -top-2.5 left-1/2 -translate-x-1/2 bg-leaf-light text-white text-[8px] px-2 py-0.5 rounded-full hover:bg-leaf shadow z-30 transition whitespace-nowrap');
             }
             const spouse = card.querySelector('[data-action="add-spouse"]');
             if (spouse) {
-                const sex = metadataForPerson(Store.person(card.dataset.nodeId)).sex;
+                const sex = metadata.sex;
                 spouse.textContent = sex === 'male' ? '+ בת זוג' : sex === 'female' ? '+ בן זוג' : '+ בן/בת זוג';
             }
             const child = card.querySelector('[data-action="add-child"]');
