@@ -123,14 +123,6 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-function stripLegacyInlineStartup(html) {
-  const legacyGraphPoll = `        // Poll for multi-client edits, but unchanged data does not cause a relayout.\n        setInterval(() => {\n            if (!isEditing) loadTree(null, false);\n        }, 5000);\n`;
-  const legacyGraphStart = '        loadTree(null, true);\n';
-  return html
-    .replace(legacyGraphPoll, '        // Multi-client synchronization is owned by graph-sync.js.\n')
-    .replace(legacyGraphStart, '        // runtime-bootstrap.js starts the first graph after the final runtime is installed.\n');
-}
-
 async function handleFrontendAsset(request, env) {
   const assetResponse = await env.ASSETS.fetch(request);
   const contentType = assetResponse.headers.get('Content-Type') || '';
@@ -146,10 +138,12 @@ async function handleFrontendAsset(request, env) {
     });
   }
 
-  let html = stripLegacyInlineStartup(await assetResponse.text());
+  let html = await assetResponse.text();
   const foundationalScripts = [
+    ['/family-core.js', 'data-family-core'],
     ['/graph-store.js', 'data-family-graph-store'],
     ['/graph-status.js', 'data-family-graph-status'],
+    ['/family-mutations.js', 'data-family-mutations'],
     ['/person-identity.js', 'data-family-person-identity'],
     ['/person-picker-labels.js', 'data-family-person-picker-labels'],
     ['/media-resilience.js', 'data-family-media-resilience'],
