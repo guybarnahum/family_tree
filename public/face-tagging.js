@@ -229,6 +229,18 @@
         return faces.find(face => face.id === selectedFaceId) || null;
     }
 
+    function publishEditorState() {
+        const face = selectedFace();
+        window.dispatchEvent(new CustomEvent('family-face-editor-state', {
+            detail: {
+                mediaId,
+                open: !!face,
+                faceId: face?.id || null,
+                personId: face?.personId || null
+            }
+        }));
+    }
+
     function syncOverlayGeometry() {
         if (!image.isConnected || !stage.isConnected) return;
         const stageRect = stage.getBoundingClientRect();
@@ -310,6 +322,7 @@
             overlay.appendChild(box);
         }
         renderEditor();
+        publishEditorState();
     }
 
     async function loadPeople() {
@@ -562,6 +575,7 @@
             showStatus('זיהוי הפנים נשמר');
         } catch (error) {
             personSelect.value = original || '';
+            renderFaces();
             console.error('Unable to assign face:', error);
             showStatus('שגיאה בזיהוי הפנים');
         }
