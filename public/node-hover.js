@@ -63,27 +63,32 @@
         element.classList.toggle('default-node-text', value === '' || value === expected);
     }
 
-    function markDefaultText(root = cardsLayer) {
+    function cardFields(root = cardsLayer) {
         const scope = root?.querySelectorAll ? root : cardsLayer;
-        scope.querySelectorAll('[contenteditable="true"][data-field]').forEach(markElement);
+        return [...scope.querySelectorAll('.absolute-card [data-field]')]
+            .filter(element => Object.prototype.hasOwnProperty.call(DEFAULT_TEXT, element.dataset.field));
+    }
 
-        const fields = [...cardsLayer.querySelectorAll('[contenteditable="true"][data-field]')];
+    function markDefaultText(root = cardsLayer) {
+        const fields = cardFields(root);
+        fields.forEach(markElement);
+
+        const allFields = cardFields(cardsLayer);
         diagnostics.passes += 1;
-        diagnostics.defaults = fields.filter(element => element.classList.contains('default-node-text')).length;
-        diagnostics.realValues = fields.length - diagnostics.defaults;
+        diagnostics.defaults = allFields.filter(element => element.classList.contains('default-node-text')).length;
+        diagnostics.realValues = allFields.length - diagnostics.defaults;
         diagnostics.lastAt = new Date().toISOString();
         window.__familyNodeTextDiagnostics = { ...diagnostics };
     }
 
+    // Card fields are read-only after M4-D, but retain this narrow handler so a future explicit
+    // inline editor can update placeholder presentation without reinstating DOM observation.
     cardsLayer.addEventListener('input', event => {
-        const field = event.target.closest?.('[contenteditable="true"][data-field]');
+        const field = event.target.closest?.('.absolute-card [data-field]');
         if (!field || !cardsLayer.contains(field)) return;
         markElement(field);
     });
 
-    // Cards are created by graph-view. React to its explicit committed lifecycle instead of
-    // observing our own DOM mutations. textContent is intentionally used because innerText is
-    // layout-sensitive and can report an empty value while RenderController hides/measures the canvas.
     window.addEventListener('family-graph-rendered', () => markDefaultText(cardsLayer));
     window.addEventListener('family-person-pane-saved', event => {
         if (event.detail?.field === 'name') markDefaultText(cardsLayer);
