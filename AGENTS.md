@@ -258,6 +258,8 @@ RenderController owns viewport commits. Mobile CSS must not apply `scroll-behavi
 
 Selected-card height is content-driven. Old fixed/high-specificity mobile height/padding rules that made the root artificially tall are retired; presentation owns compact root padding. Do not reintroduce a fixed selected-card height or a competing root padding owner.
 
+The obsolete `.graph-select-zone` presentation/print cleanup selectors are deleted; no runtime module creates that element.
+
 ## Media / faces / pickers
 
 D1 stores metadata; originals live in R2. Preferred face is `metadata.primaryFaceId` and must belong to that person or deterministic fallback applies.
@@ -286,7 +288,6 @@ High-value remaining candidates:
 
 - make GraphView and face-search producers render `FamilyPersonIdentity.describe(...)` directly → delete `person-picker-labels.js` and remove it from foundations;
 - consolidate FaceTagging/face UX state only where doing so deletes the remaining local observer bridges;
-- remove stale `.graph-select-zone` selectors from person-pane/print CSS now that no module creates that element;
 - remove stale planning comments while touching their owners.
 
 Do not redesign the proven layout algorithms during cleanup.
