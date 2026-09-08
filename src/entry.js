@@ -140,6 +140,7 @@ async function handleFrontendAsset(request, env) {
 
   let html = await assetResponse.text();
   const foundationalScripts = [
+    ['/legacy-symbols.js', 'data-family-legacy-symbols'],
     ['/family-core.js', 'data-family-core'],
     ['/graph-store.js', 'data-family-graph-store'],
     ['/graph-status.js', 'data-family-graph-status'],
