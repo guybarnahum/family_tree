@@ -1,6 +1,5 @@
 // Print the exact currently visible family projection as a one-page landscape PDF.
-// The live graph is never rerendered for print: cards and connector SVG are cloned,
-// cropped to their real bounds, scaled onto a Letter-landscape sheet, then discarded.
+// The live graph is never rerendered: cards and final connector SVG are cloned and scaled.
 (() => {
     if (window.__familyPrintRefinement) return;
     window.__familyPrintRefinement = true;
@@ -34,10 +33,7 @@
             }
         }
 
-        @page {
-            size: letter landscape;
-            margin: 0;
-        }
+        @page { size: letter landscape; margin: 0; }
 
         @media print {
             html, body {
@@ -48,10 +44,7 @@
                 overflow: hidden !important;
                 background: #fff !important;
             }
-
-            body > *:not(.family-print-sheet) {
-                display: none !important;
-            }
+            body > *:not(.family-print-sheet) { display: none !important; }
 
             .family-print-sheet {
                 display: block !important;
@@ -68,14 +61,18 @@
 
             .family-print-title {
                 position: absolute !important;
-                left: ${PAGE_MARGIN}px !important;
-                top: ${PAGE_MARGIN}px !important;
-                width: ${CONTENT_WIDTH}px !important;
-                height: ${TITLE_HEIGHT}px !important;
+                left: auto !important;
+                right: 32px !important;
+                top: 12px !important;
+                width: 650px !important;
+                height: 58px !important;
                 margin: 0 !important;
                 color: #344e41 !important;
-                font: 700 24px/${TITLE_HEIGHT}px Inter, Arial, sans-serif !important;
-                text-align: center !important;
+                font-family: "Frank Ruhl Libre", serif !important;
+                font-size: 42px !important;
+                font-weight: 700 !important;
+                line-height: 54px !important;
+                text-align: right !important;
                 direction: rtl !important;
                 white-space: nowrap !important;
             }
@@ -87,38 +84,75 @@
             }
 
             .family-print-graph .absolute-card {
+                display: flex !important;
+                flex-direction: column !important;
+                justify-content: center !important;
+                align-items: stretch !important;
+                box-sizing: border-box !important;
+                padding: 8px 12px !important;
                 transition: none !important;
                 pointer-events: none !important;
                 cursor: default !important;
                 transform: translateX(-50%) !important;
-                box-shadow: 0 3px 9px rgba(52, 78, 65, 0.12) !important;
+                opacity: 1 !important;
+                filter: none !important;
                 background: #fff !important;
+                background-image: none !important;
+                mix-blend-mode: normal !important;
+                box-shadow: none !important;
                 print-color-adjust: exact;
                 -webkit-print-color-adjust: exact;
             }
+            .family-print-graph .absolute-card:hover { transform: translateX(-50%) !important; }
 
-            .family-print-graph .absolute-card:hover {
-                transform: translateX(-50%) !important;
-            }
-
-            .family-print-graph .absolute-card h2[data-field="name"],
-            .family-print-graph .absolute-card p[data-field="dates"],
-            .family-print-graph .absolute-card p[data-field="description"] {
+            .family-print-graph .absolute-card [data-field] {
+                position: static !important;
+                width: 100% !important;
                 opacity: 1 !important;
                 transform: none !important;
+                text-align: center !important;
+                background: transparent !important;
+                margin-left: 0 !important;
+                margin-right: 0 !important;
                 pointer-events: none !important;
             }
 
-            .family-print-graph .absolute-card.graph-context {
-                opacity: 0.78 !important;
-                filter: saturate(0.72) !important;
+            .family-print-graph .absolute-card .node-face-avatar {
+                display: block !important;
+                position: absolute !important;
+                left: -14px !important;
+                top: 50% !important;
+                width: 40px !important;
+                height: 40px !important;
+                box-sizing: border-box !important;
+                overflow: hidden !important;
+                border: 2px solid #fff !important;
+                border-radius: 999px !important;
+                background: #eee9dd !important;
+                box-shadow: none !important;
+                z-index: 35 !important;
+                pointer-events: none !important;
+                transform: translateY(-50%) !important;
+            }
+            .family-print-graph .absolute-card.graph-root .node-face-avatar {
+                left: -16px !important;
+                width: 44px !important;
+                height: 44px !important;
+            }
+            .family-print-graph .absolute-card .node-face-avatar img {
+                position: absolute !important;
+                display: block !important;
+                max-width: none !important;
+                max-height: none !important;
+                margin: 0 !important;
+                transform: none !important;
+                transform-origin: 0 0 !important;
+                filter: sepia(.82) saturate(.72) contrast(1.06) !important;
             }
 
             .family-print-graph [data-action],
             .family-print-graph .graph-frontier,
-            .family-print-graph .graph-select-zone {
-                display: none !important;
-            }
+            .family-print-graph .graph-select-zone { display: none !important; }
         }
     `;
     document.head.appendChild(style);
@@ -127,9 +161,7 @@
         const rootCard = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
         const nameField = rootCard?.querySelector('[data-field="name"]');
         const value = nameField?.textContent?.trim() || '';
-        if (!value || nameField?.classList.contains('default-node-text') || EMPTY_FIELD_PLACEHOLDERS.has(value)) {
-            return '';
-        }
+        if (!value || nameField?.classList.contains('default-node-text') || EMPTY_FIELD_PLACEHOLDERS.has(value)) return '';
         return value;
     }
 
@@ -144,37 +176,21 @@
         if (document.title !== value) document.title = value;
     }
 
-    let titleSyncQueued = false;
-    function queueTitleSync() {
-        if (titleSyncQueued) return;
-        titleSyncQueued = true;
-        requestAnimationFrame(() => {
-            titleSyncQueued = false;
-            syncOnlineTitle();
-        });
-    }
-
-    const titleObserver = new MutationObserver(queueTitleSync);
-    titleObserver.observe(cardsLayer, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-        attributes: true,
-        attributeFilter: ['class']
+    window.addEventListener('family-graph-rendered', syncOnlineTitle);
+    window.addEventListener('family-person-pane-saved', event => {
+        if (event.detail?.field === 'name') syncOnlineTitle();
     });
     syncOnlineTitle();
 
     function addPrintButton() {
         let button = controls.querySelector('[data-tree-action="print"]');
         if (button) return button;
-
         button = document.createElement('button');
         button.type = 'button';
         button.dataset.treeAction = 'print';
         button.title = 'Print current visible family graph / Save as PDF';
         button.textContent = '⎙ PDF';
-        const fileInput = controls.querySelector('[data-tree-file]');
-        controls.insertBefore(button, fileInput || null);
+        controls.insertBefore(button, controls.querySelector('[data-tree-file]') || null);
         return button;
     }
 
@@ -189,7 +205,6 @@
         let top = Infinity;
         let right = -Infinity;
         let bottom = -Infinity;
-
         for (const card of cards) {
             const rect = card.getBoundingClientRect();
             left = Math.min(left, rect.left - canvasRect.left + canvas.scrollLeft);
@@ -197,7 +212,6 @@
             right = Math.max(right, rect.right - canvasRect.left + canvas.scrollLeft);
             bottom = Math.max(bottom, rect.bottom - canvasRect.top + canvas.scrollTop);
         }
-
         return { left, top, right, bottom };
     }
 
@@ -207,12 +221,7 @@
             if (!box || !Number.isFinite(box.x) || !Number.isFinite(box.y) ||
                 !Number.isFinite(box.width) || !Number.isFinite(box.height) ||
                 (box.width <= 0 && box.height <= 0)) return null;
-            return {
-                left: box.x,
-                top: box.y,
-                right: box.x + box.width,
-                bottom: box.y + box.height
-            };
+            return { left: box.x, top: box.y, right: box.x + box.width, bottom: box.y + box.height };
         } catch (_) {
             return null;
         }
@@ -228,7 +237,6 @@
             right: Math.max(cards.right, connectors.right),
             bottom: Math.max(cards.bottom, connectors.bottom)
         } : cards;
-
         return {
             left: Math.max(0, merged.left - GRAPH_PADDING),
             top: Math.max(0, merged.top - GRAPH_PADDING),
@@ -240,24 +248,50 @@
     function removeEmptyFields(clone) {
         clone.querySelectorAll('[data-field]').forEach(element => {
             const value = element.textContent.trim();
-            if (element.classList.contains('default-node-text') || EMPTY_FIELD_PLACEHOLDERS.has(value)) {
-                element.remove();
-            }
+            if (element.classList.contains('default-node-text') || EMPTY_FIELD_PLACEHOLDERS.has(value)) element.remove();
         });
+    }
+
+    function preserveFieldSpacing(clone) {
+        const name = clone.querySelector('[data-field="name"]');
+        const dates = clone.querySelector('[data-field="dates"]');
+        const description = clone.querySelector('[data-field="description"]');
+        if (name) {
+            name.style.setProperty('margin-top', '0', 'important');
+            name.style.setProperty('margin-bottom', dates || description ? '3px' : '0', 'important');
+        }
+        if (dates) {
+            dates.style.setProperty('margin-top', '0', 'important');
+            dates.style.setProperty('margin-bottom', description ? '3px' : '0', 'important');
+        }
+        if (description) {
+            description.style.setProperty('margin-top', '0', 'important');
+            description.style.setProperty('margin-bottom', '0', 'important');
+        }
     }
 
     function cloneCards(bounds, graph) {
         for (const original of cardsLayer.querySelectorAll('.absolute-card[data-node-id]')) {
+            const rect = original.getBoundingClientRect();
+            const left = Number.parseFloat(original.style.left);
+            const top = Number.parseFloat(original.style.top);
+            if (!Number.isFinite(left) || !Number.isFinite(top) || rect.width <= 0 || rect.height <= 0) continue;
+
             const clone = original.cloneNode(true);
             clone.removeAttribute('id');
             clone.querySelectorAll('[id]').forEach(element => element.removeAttribute('id'));
             clone.querySelectorAll('[contenteditable]').forEach(element => element.setAttribute('contenteditable', 'false'));
             clone.querySelectorAll('[data-action], .graph-frontier, .graph-select-zone').forEach(element => element.remove());
+            clone.classList.remove('graph-context', 'graph-spouse-parent', 'graph-spouse-ancestor-deep');
             removeEmptyFields(clone);
+            preserveFieldSpacing(clone);
 
-            const left = Number.parseFloat(original.style.left);
-            const top = Number.parseFloat(original.style.top);
-            if (!Number.isFinite(left) || !Number.isFinite(top)) continue;
+            for (const property of ['width', 'min-width', 'max-width']) {
+                clone.style.setProperty(property, `${rect.width}px`, 'important');
+            }
+            for (const property of ['height', 'min-height', 'max-height']) {
+                clone.style.setProperty(property, `${rect.height}px`, 'important');
+            }
             clone.style.left = `${left - bounds.left}px`;
             clone.style.top = `${top - bounds.top}px`;
             graph.appendChild(clone);
@@ -334,14 +368,10 @@
             printButton.disabled = true;
             showStatus('מכין PDF...');
             printSheet = buildPrintSheet();
-
-            // Give fonts, clone styles and SVG one frame to settle before opening the
-            // browser print dialog. The normal application is untouched underneath.
             await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
             window.print();
             showStatus('בחר Save as PDF');
-
-            // Safari does not always fire afterprint consistently after a PDF save.
+            // Safari does not consistently emit afterprint after a PDF save.
             cleanupTimer = setTimeout(cleanup, 1500);
         } catch (error) {
             console.error('Unable to print visible family graph:', error);
@@ -355,7 +385,7 @@
         if (!button) return;
         event.preventDefault();
         event.stopPropagation();
-        printVisibleGraph();
+        void printVisibleGraph();
     });
 
     window.addEventListener('afterprint', cleanup);
