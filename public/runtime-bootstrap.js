@@ -1,5 +1,4 @@
-// Deterministic browser bootstrap for the family graph runtime.
-// Modules install explicit owners/stages; bootstrap only controls dependency order and startup.
+// Deterministic browser bootstrap: dependency order and startup only.
 (() => {
     if (window.__familyRuntimeBootstrapInstalled) return;
     window.__familyRuntimeBootstrapInstalled = true;
@@ -24,12 +23,8 @@
         };
     }
 
-    function scriptSelector(dataKey) {
-        return `script[${dataKey}]`;
-    }
-
     function loadScript(src, dataKey) {
-        const existing = document.querySelector(scriptSelector(dataKey));
+        const existing = document.querySelector(`script[${dataKey}]`);
         if (existing?.dataset.familyBootstrapLoaded === 'true') return Promise.resolve(existing);
         if (existing?.src) {
             return new Promise((resolve, reject) => {
@@ -67,40 +62,10 @@
         });
     }
 
-    function waitFor(predicate, label, timeoutMs = 12000) {
-        const started = performance.now();
-        return new Promise((resolve, reject) => {
-            const check = () => {
-                let ready = false;
-                try { ready = !!predicate(); } catch (_) {}
-                if (ready) return resolve();
-                if (performance.now() - started >= timeoutMs) {
-                    return reject(new Error(`Timed out waiting for ${label}`));
-                }
-                setTimeout(check, 20);
-            };
-            check();
-        });
-    }
-
-    function nextFrame() {
-        return new Promise(resolve => requestAnimationFrame(resolve));
-    }
-
-    async function loadMobileStack() {
-        // mobile-refinement installs generation-centered primitives first, then loads its two
-        // dependent presentation/relationship modules. Wait on semantic install guards rather
-        // than inserting dummy script sentinels or inspecting function names.
-        await loadScript('/mobile-refinement.js', 'data-family-mobile');
-        await waitFor(
-            () => !!window.__familyPresentationRefinementInstalled,
-            'presentation refinement'
-        );
-        await waitFor(
-            () => !!window.__familyMultiPartnerRefinement,
-            'multi-partner refinement'
-        );
-    }
+    const nextFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
+    const domReady = () => document.readyState !== 'loading'
+        ? Promise.resolve()
+        : new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
 
     async function installFeatureStack() {
         await loadScript('/render-controller.js', 'data-family-render-controller');
@@ -109,7 +74,9 @@
         await loadScript('/import-export.js', 'data-family-import-export');
         await loadScript('/interaction-refinement.js', 'data-family-interaction');
         await loadScript('/node-hover.js', 'data-family-node-hover');
-        await loadMobileStack();
+        await loadScript('/mobile-refinement.js', 'data-family-mobile');
+        await loadScript('/presentation-refinement.js', 'data-family-presentation');
+        await loadScript('/multi-partner-refinement.js', 'data-family-multi-partner');
 
         const features = [
             ['/person-metadata.js', 'data-family-person-metadata'],
@@ -134,10 +101,6 @@
             ['/print-refinement.js', 'data-family-print']
         ];
         for (const [src, dataKey] of features) await loadScript(src, dataKey);
-
-        // Some old presentation modules still call the compatibility globals. Reassert the
-        // inert boundary here; M4-G removes those callers rather than granting them ownership.
-        window.FamilyRenderController?.installFacade?.();
     }
 
     function verifyLayoutPipeline() {
@@ -167,8 +130,6 @@
     }
 
     async function installLayoutStack() {
-        // multi-partner is loaded by mobile only after generation-center hooks are installed.
-        await waitFor(() => !!window.__familyMultiPartnerRefinement, 'multi-partner layout');
         await loadScript('/layout-refinement.js', 'data-family-layout-refinement');
         await loadScript('/planar-core.js', 'data-family-planar-core');
         await loadScript('/planar-layout.js', 'data-family-planar-layout');
@@ -177,11 +138,10 @@
         await loadScript('/planar-router.js', 'data-family-planar-router');
         await loadScript('/visual-roles.js', 'data-family-visual-roles');
         verifyLayoutPipeline();
-        window.FamilyRenderController?.installFacade?.();
     }
 
     async function installSyncStack() {
-        await waitFor(() => document.readyState !== 'loading', 'DOM parsing');
+        await domReady();
         await loadScript('/graph-sync.js', 'data-family-graph-sync');
         await loadScript('/graph-debug.js', 'data-family-graph-debug');
         diagnostics.syncStartedAt = new Date().toISOString();
