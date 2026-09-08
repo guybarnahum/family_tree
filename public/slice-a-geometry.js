@@ -13,9 +13,6 @@
 
     const style = document.createElement('style');
     style.textContent = `
-        /* Put the partner pill on the physical top-right corner. Using left:100% with
-           translate(-50%,-50%) centers the pill exactly on that corner, away from the
-           centered add-parent action. */
         #cards-layer .absolute-card [data-action="add-spouse"],
         #cards-layer .absolute-card.graph-root [data-action="add-spouse"] {
             top: 0 !important;
@@ -26,8 +23,6 @@
         }
 
         @media (max-width: 768px), (hover: none) and (pointer: coarse) {
-            /* The old selected card reserved biography height. Slice A moved biography to
-               the pane, so that invisible 138px minimum is no longer appropriate. */
             #cards-layer .absolute-card.graph-root {
                 min-height: 0 !important;
             }
@@ -76,18 +71,15 @@
         return true;
     }
 
-    let relayoutFrame = 0;
-    function queueRelayout() {
-        if (relayoutFrame) cancelAnimationFrame(relayoutFrame);
-        relayoutFrame = requestAnimationFrame(() => {
-            relayoutFrame = 0;
-            if (!installCompactSpacing() || !globalNodes?.length) return;
-            try { layoutAndRender(); }
-            catch (error) { console.warn('Unable to apply compact Slice A generation spacing:', error); }
+    function requestRelayout() {
+        if (!installCompactSpacing() || !globalNodes?.length) return;
+        void window.FamilyRenderController?.requestLayout?.({
+            reason: 'generation-geometry',
+            preserveAnchor: false,
+            recenter: true
         });
     }
 
     installCompactSpacing();
-    mobileQuery.addEventListener?.('change', queueRelayout);
-    requestAnimationFrame(() => requestAnimationFrame(queueRelayout));
+    mobileQuery.addEventListener?.('change', requestRelayout);
 })();
