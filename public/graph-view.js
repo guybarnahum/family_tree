@@ -3,7 +3,7 @@
 // The database is one global graph. This file projects it around one selected person:
 //   - selected ancestry + descendants are eager
 //   - spouse ancestry is capped at one generation by default
-//   - siblings are contextual
+//   - selected person's siblings are visible and active
 //   - collateral branches are behind reversible +N / − controls
 //   - legacy one-parent children are projected under both partners only when the known
 //     parent has exactly one spouse; multiple-partner cases are deliberately not guessed.
@@ -19,6 +19,7 @@
     let visibleIds = new Set();
     let primaryIds = new Set();
     let lateralIds = new Set();
+    let rootSiblingIds = new Set();
 
     // Source card -> exact immediate branches opened from that card. Keeping ownership
     // makes expansion reversible without hiding people still needed by another expansion.
@@ -302,6 +303,7 @@
     function computeVisibleGraph() {
         primaryIds = new Set();
         lateralIds = new Set();
+        rootSiblingIds = new Set();
         if (!graphRootId || !graphPeopleById.has(graphRootId)) {
             visibleIds = new Set();
             return;
@@ -341,7 +343,8 @@
             for (const spouseId of spousesByPerson.get(personId) || []) primaryIds.add(spouseId);
         }
 
-        for (const siblingId of siblingsOf(graphRootId)) {
+        rootSiblingIds = siblingsOf(graphRootId);
+        for (const siblingId of rootSiblingIds) {
             if (!primaryIds.has(siblingId)) lateralIds.add(siblingId);
         }
 
@@ -440,9 +443,11 @@
                     last_updated: person.lastUpdated,
                     parent_id: parentId,
                     spouse_id: spouseChoice.get(person.id) || null,
-                    viewRole: lateralIds.has(person.id)
-                        ? 'context'
-                        : (person.id === graphRootId ? 'root' : 'primary')
+                    viewRole: person.id === graphRootId
+                        ? 'root'
+                        : (rootSiblingIds.has(person.id)
+                            ? 'sibling'
+                            : (lateralIds.has(person.id) ? 'context' : 'primary'))
                 };
             });
     }
@@ -473,7 +478,7 @@
 
             card.querySelectorAll('.graph-frontier').forEach(button => button.remove());
             card.classList.toggle('graph-root', node.id === graphRootId);
-            card.classList.toggle('graph-context', lateralIds.has(node.id));
+            card.classList.toggle('graph-context', node.viewRole === 'context');
             card.setAttribute('title', node.id === graphRootId
                 ? 'Current center'
                 : 'Click to center the family graph here');
