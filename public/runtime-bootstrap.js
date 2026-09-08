@@ -220,8 +220,8 @@
             ['/union-child-actions.js', 'data-family-union-child-actions'],
             ['/person-pane-position.js', 'data-family-person-pane-position'],
             ['/mobile-chrome.js', 'data-family-mobile-chrome'],
-            ['/slice-a-polish.js', 'data-family-slice-a-polish'],
-            ['/slice-a-geometry.js', 'data-family-slice-a-geometry'],
+            ['/person-pane-editing.js', 'data-family-person-pane-editing'],
+            ['/graph-card-geometry.js', 'data-family-graph-card-geometry'],
             ['/print-polish.js', 'data-family-print-polish'],
             ['/print-refinement.js', 'data-family-print']
         ];
