@@ -11,7 +11,6 @@
     const UNION_LANE_CLEARANCE = 18;
     const UNION_LANE_STEP = 16;
     let spouseMap = new Map();
-    let syncQueued = false;
 
     const style = document.createElement('style');
     style.textContent = `
@@ -137,7 +136,7 @@
         });
     }
 
-    function syncUnionActions() {
+    function refresh() {
         refreshFromStore();
         applyPersonChildPolicy();
         const overlay = ensureOverlay();
@@ -168,16 +167,6 @@
         }
     }
 
-    function queueSync() {
-        if (syncQueued) return;
-        syncQueued = true;
-        requestAnimationFrame(() => {
-            syncQueued = false;
-            try { syncUnionActions(); }
-            catch (error) { console.warn('Unable to sync union child actions:', error); }
-        });
-    }
-
     cardsLayer.addEventListener('click', event => {
         const button = event.target.closest('.family-union-child-action');
         if (!button) return;
@@ -186,17 +175,9 @@
         void Mutations.addChildToUnion(button.dataset.unionParent1, button.dataset.unionParent2);
     }, true);
 
-    window.addEventListener('family-graph-store-changed', queueSync);
-    window.addEventListener('family-graph-rendered', queueSync);
-    window.addEventListener('family-person-disambiguation-updated', queueSync);
-    window.addEventListener('family-person-pane-saved', queueSync);
-
     window.FamilyUnionChildActions = Object.freeze({
-        refresh: queueSync,
+        refresh,
         addChildToUnion: (a, b) => Mutations.addChildToUnion(a, b),
         spouseIds: personId => [...spouseIds(personId)]
     });
-
-    refreshFromStore();
-    queueSync();
 })();
