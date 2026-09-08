@@ -92,7 +92,6 @@
             ['/person-pane-position.js', 'data-family-person-pane-position'],
             ['/mobile-chrome.js', 'data-family-mobile-chrome'],
             ['/person-pane-editing.js', 'data-family-person-pane-editing'],
-            ['/graph-card-geometry.js', 'data-family-graph-card-geometry'],
             ['/print-refinement.js', 'data-family-print']
         ];
         for (const [src, dataKey] of features) await loadScript(src, dataKey);
