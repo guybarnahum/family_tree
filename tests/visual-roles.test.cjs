@@ -38,15 +38,15 @@ const spouse = (a, b) => relationships.push(
 );
 
 parent('X', 'R');
-parent('X', 'B');
 spouse('R', 'S');
 spouse('S', 'O');
 parent('S', 'C');
 parent('O', 'C');
 parent('P', 'S');
 spouse('P', 'Q');
-// B is R's sibling, but is also reachable through the spouse-ancestry walk as P's spouse.
-// Root-family protection must win: siblings are never visually dimmed.
+// B is a projection sibling of R through graph-view's conservative legacy family-unit
+// inference, but the canonical Store intentionally has no X -> B parent row. B is also
+// reachable through spouse ancestry, so projection sibling protection must win.
 spouse('P', 'B');
 parent('D', 'P');
 
@@ -91,7 +91,8 @@ const globalNodeMap = new Map(cards.map(card => [
   card.dataset.nodeId,
   {
     id: card.dataset.nodeId,
-    viewRole: card.dataset.nodeId === 'B' || card.dataset.nodeId === 'O' ? 'context' : 'primary'
+    viewRole: card.dataset.nodeId === 'B' || card.dataset.nodeId === 'O' ? 'context' : 'primary',
+    parent_id: card.dataset.nodeId === 'R' || card.dataset.nodeId === 'B' ? 'X' : null
   }
 ]));
 
@@ -145,11 +146,17 @@ assert.strictEqual(card('R').classList.contains('graph-spouse-parent'), false);
 assert.strictEqual(card('R').classList.contains('graph-spouse-ancestor-deep'), false);
 assert.strictEqual(card('R').dataset.familyVisualRole, 'root');
 
+assert(!window.__familyVisualRoleDiagnostics.canonicalSiblings.includes('B'),
+  'Store should not discover the projection-only sibling');
+assert(window.__familyVisualRoleDiagnostics.projectionSiblings.includes('B'),
+  'committed projection should discover the sibling through its family unit');
+assert(window.__familyVisualRoleDiagnostics.siblings.includes('B'),
+  'effective sibling set must union canonical and projection siblings');
 assert.strictEqual(card('B').classList.contains('graph-context'), false);
 assert.strictEqual(card('B').classList.contains('graph-spouse-parent'), false,
-  'root sibling must not be dimmed even when reachable through spouse ancestry');
+  'projection sibling must not be dimmed even when reachable through spouse ancestry');
 assert.strictEqual(card('B').classList.contains('graph-spouse-ancestor-deep'), false,
-  'root sibling must never receive deep spouse-ancestry dimming');
+  'projection sibling must never receive deep spouse-ancestry dimming');
 assert.strictEqual(card('B').dataset.familyVisualRole, 'sibling');
 
 assert.strictEqual(card('O').classList.contains('graph-context'), true);
