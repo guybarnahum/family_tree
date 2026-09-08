@@ -1,5 +1,4 @@
-// Slice E UX refinement: drawing directly on the photo creates a face rectangle, and
-// person assignment uses name search while preserving the core face-tagging API/state.
+// Face tagging UX: direct photo drawing plus searchable person assignment.
 (() => {
     if (window.__familyFaceTaggingUxInstalled) return;
     window.__familyFaceTaggingUxInstalled = true;
@@ -10,6 +9,7 @@
     const drawButton = modal?.querySelector('.face-draw-button');
     const personSelect = modal?.querySelector('.face-person-select');
     const hint = modal?.querySelector('.face-toolbar-hint');
+    const Identity = window.FamilyPersonIdentity;
     if (!modal || !overlay || !editor || !drawButton || !personSelect) return;
 
     const style = document.createElement('style');
@@ -89,6 +89,16 @@
             outline: none;
         }
         .face-person-result.unknown { color: #7c887d; }
+        .face-person-primary { display:block; min-width:0; }
+        .face-person-qualifier {
+            display:block;
+            margin-top:2px;
+            color:#879087;
+            font-size:9px;
+            font-weight:400;
+            line-height:1.2;
+            text-align:right;
+        }
         .face-person-no-results {
             padding: 8px 9px;
             color: #929b93;
@@ -192,7 +202,17 @@
             button.type = 'button';
             button.className = 'face-person-result';
             button.dataset.personId = person.id;
-            button.textContent = person.label;
+            const item = Identity?.describe?.(person.id);
+            const primary = document.createElement('span');
+            primary.className = 'face-person-primary';
+            primary.textContent = item?.name || person.label || 'ללא שם';
+            button.appendChild(primary);
+            if (item?.ambiguous && item.qualifier) {
+                const qualifier = document.createElement('small');
+                qualifier.className = 'face-person-qualifier';
+                qualifier.textContent = item.qualifier;
+                button.appendChild(qualifier);
+            }
             results.appendChild(button);
         }
 
