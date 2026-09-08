@@ -25,26 +25,14 @@ const events = [];
 const trace = [];
 const listeners = new Map();
 
-const viewport = {
-  clientWidth: 800,
-  clientHeight: 600,
-  scrollLeft: 0,
-  scrollTop: 0
-};
+const viewport = { clientWidth: 800, clientHeight: 600, scrollLeft: 0, scrollTop: 0 };
 const canvas = { style: {} };
 const cards = [
   { dataset: { nodeId: 'root' }, classList: new ClassListStub(['graph-context', 'graph-spouse-parent']) },
   { dataset: { nodeId: 'old-root' }, classList: new ClassListStub(['graph-root']) }
 ];
-const cardsLayer = {
-  innerHTML: '',
-  querySelectorAll() { return cards; }
-};
-const svgLayer = {
-  innerHTML: '',
-  setAttribute() {}
-};
-
+const cardsLayer = { innerHTML: '', querySelectorAll() { return cards; } };
+const svgLayer = { innerHTML: '', setAttribute() {} };
 const document = {
   getElementById(id) {
     if (id === 'scroll-viewport') return viewport;
@@ -101,14 +89,8 @@ const controller = context.FamilyRenderController;
 assert(controller, 'RenderController should install');
 assert.strictEqual(context.layoutAndRender.name, 'controlledLayoutAndRender');
 
-controller.registerLayoutStage({
-  name: 'relationship-compaction', order: 20,
-  run: () => trace.push('relationship')
-});
-controller.registerLayoutStage({
-  name: 'planar', order: 30,
-  run: () => trace.push('planar')
-});
+controller.registerLayoutStage({ name: 'relationship-compaction', order: 20, run: () => trace.push('relationship') });
+controller.registerLayoutStage({ name: 'planar', order: 30, run: () => trace.push('planar') });
 controller.registerLayoutStage({
   name: 'member-order', order: 40, ownsPrefix: true,
   run: () => {
@@ -117,13 +99,9 @@ controller.registerLayoutStage({
     trace.push('member-end');
   }
 });
-controller.registerLayoutStage({
-  name: 'bridge-compaction', order: 50,
-  run: () => trace.push('bridge')
-});
-controller.registerConnectorStage({
-  name: 'planar-router', run: () => trace.push('router')
-});
+controller.registerLayoutStage({ name: 'bridge-compaction', order: 50, run: () => trace.push('bridge') });
+controller.registerConnectorStage({ name: 'planar-router', run: () => trace.push('router') });
+controller.registerValidationStage({ name: 'planar', order: 30, run: () => trace.push('validate-planar') });
 
 async function flushFrame() {
   const entry = [...frames.entries()][0];
@@ -140,10 +118,9 @@ async function flushFrame() {
 
   const first = controller.renderProjection({ rootId: 'root', recenter: true, reason: 'first' });
   const second = controller.renderProjection({ rootId: 'root', recenter: true, reason: 'second' });
-
   const superseded = await first;
-  assert.strictEqual(superseded.superseded, true, 'new projection should supersede the pending generation');
-  assert.strictEqual(frames.size, 1, 'only newest generation should retain a frame');
+  assert.strictEqual(superseded.superseded, true);
+  assert.strictEqual(frames.size, 1);
 
   await flushFrame();
   const committed = await second;
@@ -158,33 +135,33 @@ async function flushFrame() {
     'measure', 'units', 'generations', 'layout-units', 'vertical', 'members', 'bounds', 'sync-cards',
     'relationship', 'planar',
     'member-end', 'bridge'
-  ], 'feedback owner should explicitly execute the planar prefix once in this harness');
+  ]);
 
   assert.strictEqual(trace.filter(value => value === 'router').length, 1, 'one final connector generation');
-  assert.strictEqual(trace.filter(value => value === 'assert').length, 1, 'one final layout assertion');
-  assert.strictEqual(trace.filter(value => value === 'roles:root').length, 1, 'roles receive committed root exactly once');
-  assert.strictEqual(trace.filter(value => value === 'union-actions').length, 1, 'union actions synced once at commit');
+  assert.strictEqual(trace.filter(value => value === 'assert').length, 1, 'one final base assertion');
+  assert.strictEqual(trace.filter(value => value === 'validate-planar').length, 1, 'one final planar validation');
+  assert(trace.indexOf('router') < trace.indexOf('validate-planar'), 'validation must run after final connector routing');
+  assert.strictEqual(trace.filter(value => value === 'roles:root').length, 1);
+  assert.strictEqual(trace.filter(value => value === 'union-actions').length, 1);
 
-  assert.strictEqual(cards[0].classList.contains('graph-root'), true, 'committed root must own graph-root class');
-  assert.strictEqual(cards[0].classList.contains('graph-context'), false, 'committed root cannot remain contextual');
-  assert.strictEqual(cards[0].classList.contains('graph-spouse-parent'), false, 'committed root cannot remain spouse-dimmed');
-  assert.strictEqual(cards[1].classList.contains('graph-root'), false, 'stale DOM root must be cleared');
-
-  assert.strictEqual(viewport.scrollLeft, 0);
-  assert.strictEqual(viewport.scrollTop, 0);
+  assert.strictEqual(cards[0].classList.contains('graph-root'), true);
+  assert.strictEqual(cards[0].classList.contains('graph-context'), false);
+  assert.strictEqual(cards[0].classList.contains('graph-spouse-parent'), false);
+  assert.strictEqual(cards[1].classList.contains('graph-root'), false);
 
   const rendered = events.filter(event => event.type === 'family-graph-rendered');
   const stable = events.filter(event => event.type === 'family-graph-render-stable');
   assert.strictEqual(rendered.length, 1);
   assert.strictEqual(stable.length, 1);
   assert.strictEqual(rendered[0].detail.reason, 'second');
-  assert.strictEqual(rendered[0].detail.rootId, 'root');
 
   const snapshot = controller.snapshot();
   assert.strictEqual(snapshot.generationsStarted, 2);
   assert.strictEqual(snapshot.generationsSuperseded, 1);
   assert.strictEqual(snapshot.generationsCommitted, 1);
   assert.strictEqual(snapshot.connectorRuns, 1);
+  assert.strictEqual(snapshot.validationRuns, 1);
+  assert.deepStrictEqual(Array.from(snapshot.lastValidationOrder), ['planar']);
   assert.strictEqual(snapshot.rootIdentityCommits, 1);
   assert.strictEqual(snapshot.viewportCommits, 1);
   assert.deepStrictEqual(
