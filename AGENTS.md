@@ -10,6 +10,10 @@ Current code + explicit user instructions override historical notes.
 - Refetch the current file SHA before every GitHub write.
 - Never claim tests/deploy/commits unless they actually succeeded.
 - Name runtime modules and symbols by what they own, not by planning slices/milestones.
+- Always fix defects at their root cause and owning abstraction/source of truth. Do not cover an upstream semantic, ownership, lifecycle, or data-model defect by adding compensating code downstream.
+- When a proper fix makes a workaround, compatibility shim, repair pass, observer, timer, wrapper, fallback classifier, or duplicated inference unnecessary, delete the superseded code in the same change whenever safe.
+- Before adding new logic for a bug, ask which existing owner should have produced the correct state. Prefer correcting that owner over teaching later layers to recognize and repair bad state.
+- A fix is not complete merely because the symptom disappears; the runtime should become simpler or at least no more layered than before.
 - Normal user flow:
 
 ```bash
