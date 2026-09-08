@@ -7,11 +7,10 @@ Authoritative handoff for `guybarnahum/family_tree`. Current code and explicit u
 - Work directly on `main`; no PR unless explicitly requested.
 - Refetch the current file SHA before every GitHub write.
 - Never claim tests/deploy passed unless actually observed.
-- Fix defects at the owning abstraction/source of truth. Never cover an upstream defect with downstream repair code.
-- When proper ownership replaces a wrapper, observer, timer, fallback, cache or compatibility shim, delete the superseded code.
-- Code and tests must justify existence by protecting observable behavior, a durable product/data invariant, or a necessary platform boundary.
-- Prefer behavioral tests. Do not freeze implementation shape with source-string tests.
-- Name modules by runtime ownership, not planning milestones.
+- Fix defects at the owning abstraction. Do not add downstream repair layers.
+- When an owner replaces a wrapper, observer, timer, fallback, cache or compatibility shim, delete the superseded code.
+- Code and tests must justify existence by protecting observable behavior, a durable invariant, or a necessary platform boundary.
+- Prefer behavioral tests; do not freeze implementation shape with source-string tests.
 
 User validation:
 
@@ -25,7 +24,7 @@ Production: `family.barnahum.com`. Stack: Cloudflare Worker + D1 + R2 + static f
 
 ## Product invariants
 
-One canonical global graph:
+One canonical graph:
 
 ```text
 People ↔ Relationships
@@ -34,7 +33,7 @@ People ↔ Relationships
 The visible tree is an ephemeral projection around the selected person.
 
 - at most two explicit parents;
-- exactly two explicit parents must form a union;
+- exactly two explicit parents form a union;
 - 0 spouses → generic +child has one explicit parent;
 - 1 spouse → generic +child has both explicit parents;
 - 2+ spouses → generic +child is ambiguous; use union-specific child action;
@@ -63,7 +62,7 @@ SelectionController
 
 ### SelectionController
 
-`public/selection-controller.js` owns selected ID, `?person=`, localStorage and selection events. It does **not** monkey-patch `history.replaceState`/`pushState`; repo code changes selection through its API. `popstate` is consumed normally.
+`public/selection-controller.js` owns selected ID, `?person=`, localStorage and selection events. It does not monkey-patch browser history. Repo code changes selection through SelectionController; `popstate` is consumed normally.
 
 Invariant:
 
@@ -85,18 +84,23 @@ childrenByParent
 spousesByPerson
 ```
 
-Persistent snapshot key: `family-tree.graph-cache.v1`.
-`public/graph-sync.js` owns revision polling. Neither Store nor Sync wraps fetch.
+Persistent snapshot: `family-tree.graph-cache.v1`.
+
+`public/graph-sync.js` owns revision polling/coalescing and reconciles explicitly through:
+
+```js
+FamilyGraphView.refresh({ force: false, recenter: false })
+```
+
+There is no `loadTree` compatibility global and no `dataSignature` render-detection global.
 
 ### FamilyApi
 
-`public/family-api.js` is the browser application transport owner. It owns request/json helpers, revision headers, mutation events and resilient media/face catalog reads. It captures native fetch once but never assigns `window.fetch`.
-
-GraphView reads canonical graph only through Store. Feature APIs use FamilyApi explicitly.
+`public/family-api.js` is the sole browser application transport owner. It owns request/json helpers, revision headers, mutation events and resilient media/face catalog reads. It never replaces `window.fetch`.
 
 ### FamilyMutations
 
-`public/family-mutations.js` owns person/topology writes:
+`public/family-mutations.js` owns topology/person writes:
 
 ```js
 updatePerson
@@ -108,13 +112,13 @@ deletePerson
 putGraph
 ```
 
-Structural edits start from an authoritative Store refresh, use one transactional `PUT /api/graph`, then one canonical refresh. Person edits use `PATCH /api/nodes/:id`. Unchanged edits are no-ops.
+Structural edits start from authoritative Store state, use one transactional `PUT /api/graph`, then refresh through `FamilyGraphView.refresh({ force:true, recenter:false })`. Person edits use one `PATCH /api/nodes/:id`. Unchanged edits are no-ops.
 
-`union-child-actions.js` is presentation only. `person-pane-editing.js` delegates saves to FamilyMutations.
+New-person selection is one deterministic SelectionController call followed by a focus intent. `new-person-focus.js` waits for the matching committed render instead of polling animation frames.
 
 ## Shell / foundations
 
-`public/index.html` is a shell only. `src/entry.js` injects foundations in this order:
+`public/index.html` is a shell only. `src/entry.js` injects:
 
 ```text
 family-core
@@ -129,9 +133,9 @@ graph-view
 runtime-bootstrap
 ```
 
-`public/family-core.js` contains foundational card/layout primitives only; it must not own graph loading, polling, selection or mutations.
+`family-core.js` contains foundational card/geometry primitives only. It has no graph loading, polling, selection, mutations, old renderer entry point, old connector renderer, edit-state shim, or graph signature global.
 
-Deleted compatibility files include:
+Deleted compatibility/runtime-repair files include:
 
 ```text
 legacy-symbols.js
@@ -143,19 +147,22 @@ revision-layout-guard.js
 graph-render-stability.js
 root-context-refinement.js
 root-selection-coherence.js
+print-polish.js
 ```
 
 ## Projection / visual roles
 
-`public/graph-view.js` owns root-relative projection semantics:
+`public/graph-view.js` owns root-relative projection semantics (`root / primary / sibling / context`) and is the explicit graph refresh API.
 
-```text
-root / primary / sibling / context
+`public/visual-roles.js` is commit-only. RenderController calls:
+
+```js
+FamilyVisualRoles.refreshNow(committedRootId)
 ```
 
-Selected siblings are emitted as `viewRole: "sibling"`; VisualRoles consumes that committed semantic role and must not reconstruct siblinghood from layout fields.
+exactly during the authoritative render commit. VisualRoles has no root fallbacks, Store/pane/render listeners, queued reapplication, or duplicate root-context diagnostics.
 
-Historical placeholder bug: `node-hover.js` intentionally uses `textContent` after `family-graph-rendered`; do not replace it with layout-sensitive `innerText` while the canvas is hidden.
+Historical placeholder bug: `node-hover.js` intentionally classifies card text from `textContent` after `family-graph-rendered`; do not replace it with layout-sensitive `innerText` while the canvas is hidden.
 
 ## Render / layout
 
@@ -177,7 +184,7 @@ projection/cards
 → family-graph-rendered
 ```
 
-There is no legacy `layoutAndRender`/`restoreAnchor` facade and no `family-graph-render-stable` compatibility event.
+There is no legacy `layoutAndRender`/`restoreAnchor` facade and no `family-graph-render-stable` event.
 
 Registered layout modules:
 
@@ -190,66 +197,52 @@ bridge-compaction          prepare/layout:50
 planar-router              prepare:60 + final connector owner
 ```
 
-M4-F removed function capture, load/layout monkey patches, function-name polling, captured RAFs, dummy sentinels and private layout graph fetches. Member-order feedback explicitly calls `FamilyRenderController.runThrough('planar')`.
-
-Feature geometry changes use `requestLayout(...)`, `requestGeometryRefresh(...)` or `requestRecenter(...)`. Never add corrective RAF/timer/observer centering passes.
+Member-order feedback explicitly calls `FamilyRenderController.runThrough('planar')`. Never add corrective render/centering RAFs, timers or observers.
 
 ## Person pane / mobile
 
-`person-pane.js` gets selection from SelectionController and people from GraphStore. Its former private root resolver, history wrappers, graph DOM observers and corrective relayout/centering system are deleted.
+`person-pane.js` gets selection from SelectionController and people from GraphStore. Its private root resolver, history wrappers, graph DOM observers and corrective relayout/centering system are deleted.
 
-Cards are read-only; editing lives in the pane. Metadata edits should not redraw topology. Name edits may request one geometry refresh because width can change.
+`person-pane-position.js` uses ResizeObserver + viewport/media-query lifecycle only; its old DOM mutation watcher and delayed 80/240 ms repair passes are deleted.
 
-`mobile-refinement.js` owns only responsive CSS and generation/mobile spacing primitives. It does not load other modules, draw connectors, reroot, or perform startup/corrective centering. Bootstrap explicitly loads mobile → presentation → multi-partner in that order.
+`person-pane-editing.js` owns pane editing presentation only; its old header-cleanup observer subsystem is deleted.
 
-## Media / faces
+`mobile-refinement.js` owns only responsive CSS and spacing primitives. It does not self-load modules, draw connectors, reroot, or perform startup/corrective centering.
+
+## Media / faces / pickers
 
 D1 stores metadata; originals live in R2. Preferred face is `metadata.primaryFaceId` and must belong to that person or deterministic fallback applies.
 
-Graph-card face decoration uses committed render lifecycle. Portrait footprint measurement also uses explicit render/face events; graph-card MutationObservers are not needed.
+Graph-card face decoration and portrait footprint use explicit render/face events rather than graph-card MutationObservers.
 
-Modal-local observers are legitimate when they observe local UI state.
+`face-primary.js` refreshes preferred-face state from authoritative `family-api-mutation` events instead of delayed retry timers. Modal-local observers may remain where they genuinely observe local interaction state.
 
-## Current deletion work / M4-G
+`person-identity.js` owns canonical normalized/disambiguated labels. `person-picker-labels.js` no longer observes `document.body`; it reacts only to picker input/focus and Identity updates.
 
-Deletion-first rule: do not pursue a metric like “zero observers”; remove code only when another owner already provides the needed lifecycle/state.
+`person-picker-refresh.js` still exists and is a candidate for deletion by moving face-select/search refresh fully into their producer modules. Do not delete it until that behavior is explicitly owned elsewhere.
 
-Completed in the current M4-G pass:
+## Print
 
-- deleted runtime source-string conformance/ownership tests;
-- merged duplicate metadata helper tests;
-- removed interaction graph-card observer and duplicate stable-event listener;
-- removed dead parent mutation wrapper/polling from parent-limit;
-- removed graph-card observer from portrait footprint;
-- removed person-pane history/observer/relayout/centering subsystem;
-- removed mobile self-bootstrap/router/centering subsystem;
-- removed RenderController compatibility facade and stable event;
-- removed SelectionController history monkey-patching.
+`print-refinement.js` is the single print owner. It builds the clone, preserves measured card geometry, normalizes contextual presentation, preserves avatar crop, updates the family title from committed render/name-save events, and invokes the browser print boundary.
 
-Remaining candidates require behavior-preserving replacement, not blind deletion:
+`print-polish.js` and its body MutationObserver are deleted. The remaining double-RAF before `window.print()` and Safari cleanup timer are browser/platform boundaries, not render-repair architecture.
 
-- old unused renderer primitives still present in `family-core.js` / multi-partner connector code;
-- `print-polish.js` should be folded into the print builder, then deleted;
-- `person-pane-position.js` still protects visible desktop title/pane alignment; replace its repair timers/observer only with a cleaner equivalent;
-- review UI-local observers individually;
-- remove stale milestone comments when touching their owners.
+## Deletion policy / remaining candidates
+
+Deletion-first does not mean “zero observers.” Keep local observers when the browser/UI does not provide a better explicit lifecycle. Remove code only when another owner already provides the behavior.
+
+High-value remaining candidates:
+
+- move face-select/search refresh into their producers, then delete `person-picker-refresh.js` and possibly `person-picker-labels.js`;
+- review `person-media.js` pane-body observer for explicit pane lifecycle replacement;
+- review place/face modal-local observers individually;
+- remove stale planning comments while touching their owners.
 
 Do not redesign the proven layout algorithms during cleanup.
 
 ## Tests
 
-`npm test` keeps behavioral/invariant tests plus cheap syntax checks. High-value coverage includes:
-
-- topology/parent-union invariants;
-- metadata and person identity;
-- face normalization/preference;
-- selection behavior;
-- FamilyApi transport/fallback/mutation events;
-- GraphStore;
-- visual roles/sibling protection;
-- real-name placeholder regression;
-- FamilyMutations;
-- RenderController generation/stage/connector/validation behavior.
+`npm test` runs behavioral/invariant suites plus syntax checks over `public/*.js` and `src/*.js`. High-value coverage includes topology/parent-union invariants, metadata/identity, faces, selection, FamilyApi, GraphStore, visual roles/sibling protection, placeholder classification, FamilyMutations, and RenderController generation/stage/router behavior.
 
 Diagnostics of interest:
 
