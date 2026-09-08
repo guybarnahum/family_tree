@@ -3,7 +3,7 @@
 // - pane blur saves only when a value actually changed
 // - graph-card blur is also a no-op when the value did not change
 // - metadata edits never relayout the graph
-// - name edits relayout once because only name can change graph-card geometry
+// - name edits request one RenderController geometry refresh
 // - title subtitle remains a generic navigation hint and search stays an empty search box
 (() => {
     if (window.__familySliceAPolishInstalled) return;
@@ -87,16 +87,10 @@
 
     function relayoutNameChange(id) {
         if (!globalNodes?.length) return;
-        const anchor = typeof captureAnchor === 'function' ? captureAnchor(id) : null;
-        requestAnimationFrame(() => {
-            try {
-                layoutAndRender();
-                if (anchor && typeof restoreAnchor === 'function') {
-                    requestAnimationFrame(() => restoreAnchor(anchor));
-                }
-            } catch (error) {
-                console.warn('Unable to reflow graph after name edit:', error);
-            }
+        void window.FamilyRenderController?.requestLayout?.({
+            reason: 'person-name-change',
+            preserveAnchor: true,
+            anchorId: id
         });
     }
 
@@ -166,9 +160,6 @@
         }
     }
 
-    // The legacy graph-card editor saves on every focusout, even when the text is unchanged.
-    // Wrap the final saveEdit chain so window/tab blur cannot create a no-op D1 write, bump
-    // graph_state, or trigger a needless graph refresh.
     if (typeof saveEdit === 'function' && !saveEdit.__familyUnchangedGuard) {
         const baseSaveEdit = saveEdit;
         const guardedSaveEdit = async function unchangedGuardedSaveEdit(element, ...args) {
@@ -190,8 +181,6 @@
         originalValues.set(event.target, fieldValue(event.target));
     }, true);
 
-    // Stop pane blur before the legacy body-level saveEdit() handler sees it. Metadata is
-    // deliberately independent of graph geometry, and unchanged focus/blur is a true no-op.
     pane.addEventListener('focusout', event => {
         if (!editableTarget(event.target)) return;
         event.stopPropagation();
