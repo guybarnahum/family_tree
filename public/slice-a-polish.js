@@ -1,17 +1,13 @@
-// Person-pane interaction polish shared by Slice A-C:
-// - desktop pane starts directly with the editable name
-// - pane blur saves only when a value actually changed
-// - graph-card blur is also a no-op when the value did not change
-// - metadata edits never relayout the graph
-// - name edits request one RenderController geometry refresh
-// - title subtitle remains a generic navigation hint and search stays an empty search box
+// Person-pane interaction polish shared by Slice A-C.
+// Persistence is owned exclusively by FamilyMutations; this module owns pane UX only.
 (() => {
     if (window.__familySliceAPolishInstalled) return;
     window.__familySliceAPolishInstalled = true;
 
     const pane = document.getElementById('person-pane');
     const cardsLayer = document.getElementById('cards-layer');
-    if (!pane || !cardsLayer) return;
+    const Mutations = window.FamilyMutations;
+    if (!pane || !cardsLayer || !Mutations) return;
 
     const Metadata = window.FamilyPersonMetadata || {
         metadataObject: value => value && typeof value === 'object' && !Array.isArray(value) ? value : {},
@@ -29,10 +25,7 @@
         .person-pane-kicker { display: none !important; }
 
         @media (min-width: 769px) and (hover: hover) and (pointer: fine) {
-            #person-pane .person-pane-handle {
-                display: none !important;
-            }
-
+            #person-pane .person-pane-handle { display: none !important; }
             #person-pane .person-pane-body {
                 height: 100% !important;
                 padding-top: 18px !important;
@@ -51,7 +44,7 @@
     }
 
     function fieldValue(element) {
-        return element.innerText.trim();
+        return String(element.textContent || '').trim();
     }
 
     function rootCardName(id) {
@@ -59,7 +52,7 @@
     }
 
     function localPerson(id) {
-        return globalNodeMap?.get(id) || null;
+        return window.FamilyGraphStore?.person?.(id) || globalNodeMap?.get?.(id) || null;
     }
 
     function metadataFor(person) {
@@ -110,11 +103,9 @@
         if (field === 'metadata') {
             if (!metadataKey) return;
             const structuredPlace = selectedPlace(element, value);
-            if (structuredPlace) {
-                nextMetadata = { ...priorMetadata, [metadataKey]: structuredPlace };
-            } else {
-                nextMetadata = Metadata.withField(priorMetadata, metadataKey, value, metadataKind);
-            }
+            nextMetadata = structuredPlace
+                ? { ...priorMetadata, [metadataKey]: structuredPlace }
+                : Metadata.withField(priorMetadata, metadataKey, value, metadataKind);
             payload = { metadata: nextMetadata };
         } else {
             payload = { [field]: value };
@@ -122,12 +113,8 @@
 
         showStatus('שומר...');
         try {
-            const response = await fetch(`/api/nodes/${encodeURIComponent(id)}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            if (!response.ok) throw new Error(await response.text());
+            const result = await Mutations.updatePerson(id, payload, { reason: 'person-pane-save' });
+            if (!result.changed) return;
 
             if (person) {
                 if (field === 'metadata') person.metadata = nextMetadata;
@@ -160,22 +147,6 @@
         }
     }
 
-    if (typeof saveEdit === 'function' && !saveEdit.__familyUnchangedGuard) {
-        const baseSaveEdit = saveEdit;
-        const guardedSaveEdit = async function unchangedGuardedSaveEdit(element, ...args) {
-            if (editableTarget(element) && !pane.contains(element)) {
-                const person = localPerson(element.dataset.id);
-                const field = element.dataset.field;
-                const value = fieldValue(element);
-                if (person && String(person[field] ?? '').trim() === value) return;
-            }
-            return baseSaveEdit(element, ...args);
-        };
-        guardedSaveEdit.__familyUnchangedGuard = true;
-        saveEdit = guardedSaveEdit;
-        window.saveEdit = guardedSaveEdit;
-    }
-
     pane.addEventListener('focusin', event => {
         if (!editableTarget(event.target)) return;
         originalValues.set(event.target, fieldValue(event.target));
@@ -183,8 +154,6 @@
 
     pane.addEventListener('focusout', event => {
         if (!editableTarget(event.target)) return;
-        event.stopPropagation();
-        if (typeof isEditing !== 'undefined') isEditing = false;
         const original = originalValues.get(event.target) ?? fieldValue(event.target);
         void savePaneField(event.target, original);
     }, true);
@@ -193,7 +162,6 @@
         const titleCard = document.querySelector('.family-title-card') || document.querySelector('h1')?.parentElement;
         const subtitle = titleCard?.querySelector('p');
         if (subtitle && subtitle.textContent !== NAV_HINT) subtitle.textContent = NAV_HINT;
-
         const search = document.querySelector('.graph-search-input');
         if (search && document.activeElement !== search && search.value) search.value = '';
     }
@@ -215,10 +183,8 @@
             characterData: true
         });
     }
-    new MutationObserver(queueChromeCleanup).observe(cardsLayer, { childList: true });
-    window.addEventListener('popstate', queueChromeCleanup);
+    window.addEventListener('family-graph-rendered', queueChromeCleanup);
     window.addEventListener('family-person-pane-saved', queueChromeCleanup);
 
     queueChromeCleanup();
-    setTimeout(queueChromeCleanup, 80);
 })();
