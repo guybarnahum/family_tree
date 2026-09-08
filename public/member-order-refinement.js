@@ -1,71 +1,34 @@
 // Exact lineage-aware ordering inside spouse/multi-partner family units.
-//
-// The planar row solver can move whole FamilyUnits, but ancestry can still cross when the
-// people *inside* one unit are in the wrong left/right order. This layer treats member order
-// as part of the topology: maximize adjacent spouse links first, then minimize incoming
-// ancestry crossings, then shorten parent/child connectors. Chosen orders are ephemeral
-// layout preferences and are fed back through the next layout pass; no DB state is changed.
+// Chosen orders are ephemeral layout preferences fed back through the named planar prefix.
 (() => {
     if (window.__familyMemberOrderInstalled) return;
     window.__familyMemberOrderInstalled = true;
+
+    const Store = window.FamilyGraphStore;
+    const Controller = window.FamilyRenderController;
+    if (!Store || !Controller) return;
 
     const NON_SPOUSE_MEMBER_GAP = 58;
     const EXACT_MEMBER_LIMIT = 7;
     const MAX_FEEDBACK_PASSES = 3;
     const EPSILON = 0.5;
 
-    let graphDocument = null;
-    let graphPromise = null;
-    let graphSignature = '';
+    let graphReady = false;
+    let relationshipSignature = '';
     let parentsByChild = new Map();
     let spousesByPerson = new Map();
-    let installed = false;
     const preferredOrders = new Map();
 
-    function addSet(map, key, value) {
-        if (!map.has(key)) map.set(key, new Set());
-        map.get(key).add(value);
-    }
-
-    function rebuildIndexes() {
-        parentsByChild = new Map();
-        spousesByPerson = new Map();
-        for (const relation of graphDocument?.relationships || []) {
-            if (relation.type === 'parent') {
-                addSet(parentsByChild, relation.person2Id, relation.person1Id);
-            } else if (relation.type === 'spouse') {
-                addSet(spousesByPerson, relation.person1Id, relation.person2Id);
-                addSet(spousesByPerson, relation.person2Id, relation.person1Id);
-            }
-        }
-    }
-
-    async function refreshGraph(force = false) {
-        if (graphDocument && !force) return { graph: graphDocument, changed: false };
-        if (graphPromise && !force) return graphPromise;
-        graphPromise = fetch('/api/graph', { cache: 'no-store' })
-            .then(async response => {
-                if (!response.ok) throw new Error(await response.text());
-                return response.json();
-            })
-            .then(value => {
-                const signature = JSON.stringify((value.relationships || []).map(relation => [
-                    relation.id || '', relation.type, relation.person1Id, relation.person2Id
-                ]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
-                const changed = signature !== graphSignature;
-                graphSignature = signature;
-                graphDocument = value;
-                rebuildIndexes();
-                if (changed) {
-                    // Unit ids are stable for unchanged spouse components, but relationship
-                    // mutations can split/merge components. Stale preferences are harmless;
-                    // clear them so the next topology starts from its own structural order.
-                    preferredOrders.clear();
-                }
-                return { graph: value, changed };
-            })
-            .finally(() => { graphPromise = null; });
-        return graphPromise;
+    function prepareTopology() {
+        const snapshot = Store.snapshot();
+        graphReady = !!snapshot.graph;
+        parentsByChild = snapshot.indexes?.parentsByChild || new Map();
+        spousesByPerson = snapshot.indexes?.spousesByPerson || new Map();
+        const nextSignature = JSON.stringify((snapshot.graph?.relationships || []).map(relation => [
+            relation.id || '', relation.type, relation.person1Id, relation.person2Id
+        ]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+        if (nextSignature !== relationshipSignature) preferredOrders.clear();
+        relationshipSignature = nextSignature;
     }
 
     function spouseIds(id) {
@@ -138,6 +101,20 @@
             if (order) applyOrder(unit, order);
         }
     }
+
+    const baseBuildFamilyUnits = buildFamilyUnits;
+    buildFamilyUnits = function lineagePreferredBuildFamilyUnits(...args) {
+        const result = baseBuildFamilyUnits(...args);
+        applyPreferredOrders();
+        return result;
+    };
+
+    const baseOrientCouples = orientCouples;
+    orientCouples = function lineagePreferredOrientCouples(...args) {
+        const result = baseOrientCouples(...args);
+        applyPreferredOrders();
+        return result;
+    };
 
     function parentAnchorForUnit(parentUnit, parentIdsInUnit) {
         if (!parentIdsInUnit.length) return parentUnit.centerX;
@@ -336,19 +313,13 @@
                 bestScore = score;
             }
         };
-
         if (currentOrder.length <= EXACT_MEMBER_LIMIT) enumeratePermutations(currentOrder, consider);
         else heuristicCandidates(currentOrder).forEach(consider);
 
         const beforeScore = scoreCandidate(unit, currentOrder, currentOrder, incoming);
         if (bestOrder.every((member, index) => member === currentOrder[index])) {
             preferredOrders.set(unit.id, currentOrder.map(member => member.id));
-            return {
-                changed: false,
-                before: beforeScore,
-                after: bestScore,
-                order: currentOrder.map(member => member.id)
-            };
+            return { changed: false, before: beforeScore, after: bestScore, order: currentOrder.map(member => member.id) };
         }
 
         const nextIds = bestOrder.map(member => member.id);
@@ -378,7 +349,7 @@
     }
 
     function optimizeAllMemberOrders() {
-        if (!graphDocument || !globalUnits?.length) return [];
+        if (!graphReady || !globalUnits?.length) return [];
         placeMembersFromCurrentOrder();
         const diagnostics = [];
         const units = [...globalUnits].sort((a, b) => a.gen - b.gen || a.centerX - b.centerX || a.id.localeCompare(b.id));
@@ -395,88 +366,30 @@
         return diagnostics;
     }
 
-    function installWrapper() {
-        if (installed) return;
-        installed = true;
-
-        // Feed chosen member orders into every subsequent family-unit rebuild. This is the
-        // crucial feedback step: union child groups and the planar row solver then see the
-        // same internal topology that the final router sees.
-        const BASE_BUILD_FAMILY_UNITS = buildFamilyUnits;
-        buildFamilyUnits = function lineagePreferredBuildFamilyUnits(...args) {
-            const result = BASE_BUILD_FAMILY_UNITS(...args);
-            applyPreferredOrders();
-            return result;
-        };
-
-        // The planar layer still invokes the ordinary couple-orientation heuristic during
-        // positioning. Let it make its suggestion, then restore an exact preferred order if
-        // this optimizer has already found a better crossing-free orientation.
-        const BASE_ORIENT_COUPLES = orientCouples;
-        orientCouples = function lineagePreferredOrientCouples(...args) {
-            const result = BASE_ORIENT_COUPLES(...args);
-            applyPreferredOrders();
-            return result;
-        };
-
-        const BASE_LAYOUT = layoutAndRender;
-        layoutAndRender = function lineageAwareLayoutAndRender() {
-            if (!graphDocument) return BASE_LAYOUT();
-
+    Controller.registerPrepareStage({ name: 'member-order', order: 40, run: prepareTopology });
+    Controller.registerLayoutStage({
+        name: 'member-order',
+        order: 40,
+        ownsPrefix: true,
+        run() {
+            if (!graphReady) return Controller.runThrough('planar');
             let diagnostics = [];
             let changed = false;
             for (let pass = 0; pass < MAX_FEEDBACK_PASSES; pass++) {
-                BASE_LAYOUT();
+                Controller.runThrough('planar');
                 if (!globalUnits?.length) return;
                 diagnostics = optimizeAllMemberOrders();
                 changed = diagnostics.some(item => item.changed);
                 if (!changed) break;
             }
-
-            // If the final optimization pass changed an order, consume that preference in
-            // one last complete planar pass so descendant union blocks are centered on the
-            // new union anchors rather than on pre-swap geometry.
             if (changed) {
-                BASE_LAYOUT();
+                Controller.runThrough('planar');
                 optimizeAllMemberOrders();
             }
-
             updateCanvasBounds();
             syncCardPositions();
-            requestAnimationFrame(() => {
-                drawSVGLines();
-                assertLayout();
-            });
-        };
-
-        const BASE_LOAD_TREE = loadTree;
-        loadTree = async function lineageAwareLoadTree(...args) {
-            const result = await BASE_LOAD_TREE(...args);
-            try {
-                const refreshed = await refreshGraph(true);
-                if (refreshed.changed && globalNodes?.length) layoutAndRender();
-            } catch (error) {
-                console.warn('Unable to refresh lineage-aware member ordering:', error);
-            }
-            return result;
-        };
-
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-            if (!globalNodes?.length) return;
-            try { layoutAndRender(); }
-            catch (error) { console.warn('Unable to initialize lineage-aware member ordering:', error); }
-        }));
-    }
-
-    async function waitForPlanarLayout() {
-        for (let attempt = 0; attempt < 150; attempt++) {
-            if (typeof layoutAndRender === 'function' && layoutAndRender.name === 'crossingSafeLayoutAndRender') return;
-            await new Promise(resolve => setTimeout(resolve, 20));
         }
-        throw new Error('Crossing-safe planar layout did not initialize');
-    }
+    });
 
-    Promise.all([waitForPlanarLayout(), refreshGraph(true)])
-        .then(installWrapper)
-        .catch(error => console.warn('Unable to initialize member-order refinement:', error));
+    prepareTopology();
 })();
