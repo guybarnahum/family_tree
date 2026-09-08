@@ -101,7 +101,7 @@
         }
 
         for (const id of protectedIds) context.delete(id);
-        return { context, rootSiblings };
+        return { context, rootSiblings, protectedIds };
     }
 
     function spouseAncestorDepths(rootId, graphIndexes) {
@@ -147,9 +147,9 @@
                 spousesByPerson: new Map()
             };
             const hasGraph = !!snapshot?.graph;
-            const { context, rootSiblings } = hasGraph
+            const { context, rootSiblings, protectedIds } = hasGraph
                 ? rootContextPolicy(rootId, graphIndexes)
-                : { context: new Set(), rootSiblings: new Set() };
+                : { context: new Set(), rootSiblings: new Set(), protectedIds: new Set([rootId]) };
             const spouseDepths = hasGraph ? spouseAncestorDepths(rootId, graphIndexes) : new Map();
             const roles = {};
 
@@ -157,11 +157,12 @@
                 const id = card.dataset.nodeId;
                 const node = globalNodeMap?.get?.(id) || null;
                 const isRoot = id === rootId;
+                const protectedFromDimming = protectedIds.has(id);
                 const baseContext = node?.viewRole === 'context';
-                const contextual = !isRoot && !rootSiblings.has(id) && (baseContext || context.has(id));
+                const contextual = !protectedFromDimming && (baseContext || context.has(id));
                 const depth = spouseDepths.get(id);
-                const spouseParent = !isRoot && depth === 1;
-                const spouseAncestorDeep = !isRoot && Number.isFinite(depth) && depth > 1;
+                const spouseParent = !protectedFromDimming && depth === 1;
+                const spouseAncestorDeep = !protectedFromDimming && Number.isFinite(depth) && depth > 1;
 
                 card.classList.toggle('graph-context', contextual);
                 card.classList.toggle('graph-spouse-parent', spouseParent);
