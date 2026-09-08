@@ -6,10 +6,24 @@ const vm = require('vm');
 
 const source = fs.readFileSync('public/render-controller.js', 'utf8');
 
+class ClassListStub {
+  constructor(values = []) { this.values = new Set(values); }
+  contains(value) { return this.values.has(value); }
+  add(...values) { values.forEach(value => this.values.add(value)); }
+  remove(...values) { values.forEach(value => this.values.delete(value)); }
+  toggle(value, force) {
+    const enabled = force === undefined ? !this.values.has(value) : !!force;
+    if (enabled) this.values.add(value);
+    else this.values.delete(value);
+    return enabled;
+  }
+}
+
 const frames = new Map();
 let nextFrameId = 1;
 const events = [];
 const trace = [];
+const listeners = new Map();
 
 const viewport = {
   clientWidth: 800,
@@ -18,9 +32,13 @@ const viewport = {
   scrollTop: 0
 };
 const canvas = { style: {} };
+const cards = [
+  { dataset: { nodeId: 'root' }, classList: new ClassListStub(['graph-context', 'graph-spouse-parent']) },
+  { dataset: { nodeId: 'old-root' }, classList: new ClassListStub(['graph-root']) }
+];
 const cardsLayer = {
   innerHTML: '',
-  querySelector() { return null; }
+  querySelectorAll() { return cards; }
 };
 const svgLayer = {
   innerHTML: '',
@@ -40,7 +58,6 @@ const document = {
 const context = {
   console,
   document,
-  URL,
   performance: { now: (() => { let n = 0; return () => ++n; })() },
   CustomEvent: class CustomEvent {
     constructor(type, init = {}) { this.type = type; this.detail = init.detail; }
@@ -51,6 +68,10 @@ const context = {
     return id;
   },
   cancelAnimationFrame(id) { frames.delete(id); },
+  addEventListener(type, handler) {
+    if (!listeners.has(type)) listeners.set(type, []);
+    listeners.get(type).push(handler);
+  },
   globalNodes: [{ id: 'root', x: 400, targetY: 250, cardWidth: 100, cardHeight: 80 }],
   globalNodeMap: new Map([['root', { id: 'root', x: 400, targetY: 250, cardWidth: 100, cardHeight: 80 }]]),
   measureCards() { trace.push('measure'); },
@@ -65,9 +86,8 @@ const context = {
   assertLayout() { trace.push('assert'); },
   captureAnchor() { return { id: 'root', screenX: 10, screenY: 20 }; },
   restoreAnchor() { trace.push('restore-anchor'); },
-  location: { href: 'https://example.test/?person=root' },
   FamilySelectionController: { getSelectedPersonId: () => 'root' },
-  FamilyVisualRoles: { refreshNow: () => trace.push('roles') },
+  FamilyVisualRoles: { refreshNow: rootId => trace.push(`roles:${rootId}`) },
   FamilyUnionChildActions: { refresh: () => trace.push('union-actions') },
   dispatchEvent(event) { events.push(event); }
 };
@@ -114,6 +134,10 @@ async function flushFrame() {
 }
 
 (async () => {
+  context.layoutAndRender();
+  assert.strictEqual(frames.size, 0, 'legacy layoutAndRender must not create a render generation');
+  assert.strictEqual(controller.snapshot().legacyLayoutRequestsIgnored, 1);
+
   const first = controller.renderProjection({ rootId: 'root', recenter: true, reason: 'first' });
   const second = controller.renderProjection({ rootId: 'root', recenter: true, reason: 'second' });
 
@@ -138,8 +162,14 @@ async function flushFrame() {
 
   assert.strictEqual(trace.filter(value => value === 'router').length, 1, 'one final connector generation');
   assert.strictEqual(trace.filter(value => value === 'assert').length, 1, 'one final layout assertion');
-  assert.strictEqual(trace.filter(value => value === 'roles').length, 1, 'roles applied once at commit');
+  assert.strictEqual(trace.filter(value => value === 'roles:root').length, 1, 'roles receive committed root exactly once');
   assert.strictEqual(trace.filter(value => value === 'union-actions').length, 1, 'union actions synced once at commit');
+
+  assert.strictEqual(cards[0].classList.contains('graph-root'), true, 'committed root must own graph-root class');
+  assert.strictEqual(cards[0].classList.contains('graph-context'), false, 'committed root cannot remain contextual');
+  assert.strictEqual(cards[0].classList.contains('graph-spouse-parent'), false, 'committed root cannot remain spouse-dimmed');
+  assert.strictEqual(cards[1].classList.contains('graph-root'), false, 'stale DOM root must be cleared');
+
   assert.strictEqual(viewport.scrollLeft, 0);
   assert.strictEqual(viewport.scrollTop, 0);
 
@@ -148,12 +178,15 @@ async function flushFrame() {
   assert.strictEqual(rendered.length, 1);
   assert.strictEqual(stable.length, 1);
   assert.strictEqual(rendered[0].detail.reason, 'second');
+  assert.strictEqual(rendered[0].detail.rootId, 'root');
 
   const snapshot = controller.snapshot();
   assert.strictEqual(snapshot.generationsStarted, 2);
   assert.strictEqual(snapshot.generationsSuperseded, 1);
   assert.strictEqual(snapshot.generationsCommitted, 1);
   assert.strictEqual(snapshot.connectorRuns, 1);
+  assert.strictEqual(snapshot.rootIdentityCommits, 1);
+  assert.strictEqual(snapshot.viewportCommits, 1);
   assert.deepStrictEqual(
     Array.from(snapshot.lastStageOrder),
     ['base-geometry', 'relationship-compaction', 'planar', 'member-order', 'bridge-compaction']
