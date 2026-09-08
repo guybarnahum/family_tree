@@ -208,6 +208,10 @@
         commit(nextId, { source: 'popstate' });
     });
 
+    // Some still-loaded legacy feature files assign history wrappers during bootstrap. They are
+    // inert after readiness: the canonical controller deliberately takes the two methods back.
+    window.addEventListener('family-runtime-ready', installHistoryOwner);
+
     window.FamilySelectionController = Object.freeze({
         restoreSelection,
         syncFromRenderedRoot,
