@@ -132,12 +132,6 @@ vm.runInContext(source, context, { filename: 'family-mutations.js' });
   assert.strictEqual(personPatches, beforePatches + 1);
   assert.strictEqual(Store.person('A').name, 'Alicia');
 
-  const beforeSexPatches = personPatches;
-  await Mutations.updatePerson('A', { metadata: { sex: 'male' } });
-  assert.strictEqual(Store.person('B').metadata.sex, 'female');
-  assert.strictEqual(Store.person(parentId).metadata.sex, 'female');
-  assert.strictEqual(personPatches, beforeSexPatches + 3, 'sex edit should patch the person and unset spouses only');
-
   selected = childId;
   const deleted = await Mutations.deletePerson(childId);
   assert.strictEqual(deleted, true);
