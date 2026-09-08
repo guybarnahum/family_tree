@@ -6,6 +6,7 @@
 
     const Store = window.FamilyGraphStore;
     const Selection = window.FamilySelectionController;
+    const Identity = window.FamilyPersonIdentity;
     if (!Store) return console.warn('FamilyGraphStore must load before graph-view');
 
     let graphPeople = [];
@@ -50,7 +51,9 @@
         }
         .graph-search-result:last-child { border-bottom:0; }
         .graph-search-result:hover,.graph-search-result:focus-visible { background:rgba(163,177,138,.13); outline:none; }
+        .graph-search-primary { display:block; min-width:0; }
         .graph-search-result small { display:block; color:#8a8a84; font-size:9px; margin-top:1px; }
+        .graph-search-qualifier { margin-top:2px !important; font-weight:400; line-height:1.2; }
         .absolute-card.graph-context { opacity:.56; filter:saturate(.62); }
         .absolute-card.graph-context:hover,.absolute-card.graph-context:focus-within { opacity:.92; filter:saturate(.9); }
         .absolute-card.graph-root { box-shadow:0 8px 22px rgba(52,78,65,.18); border-top-width:4px; }
@@ -497,9 +500,17 @@
             button.type = 'button';
             button.className = 'graph-search-result';
             button.dataset.personId = person.id;
+            const item = Identity?.describe?.(person.id);
             const name = document.createElement('span');
-            name.textContent = person.name || 'ללא שם';
+            name.className = 'graph-search-primary';
+            name.textContent = item?.name || person.name || 'ללא שם';
             button.appendChild(name);
+            if (item?.ambiguous && item.qualifier) {
+                const qualifier = document.createElement('small');
+                qualifier.className = 'graph-search-qualifier';
+                qualifier.textContent = item.qualifier;
+                button.appendChild(qualifier);
+            }
             const datesValue = personLifeDates(person);
             if (datesValue) {
                 const dates = document.createElement('small');
