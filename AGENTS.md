@@ -8,13 +8,12 @@ Current code + explicit user instructions override historical notes.
 - Work directly on `main` unless explicitly asked for a PR.
 - Do not create PRs by default.
 - Refetch the current file SHA before every GitHub write.
-- Never claim tests/deploy/commits unless they actually succeeded.
-- Name runtime modules and symbols by what they own, not by planning slices/milestones.
-- Always fix defects at their root cause and owning abstraction/source of truth. Do not cover an upstream semantic, ownership, lifecycle, or data-model defect by adding compensating code downstream.
-- When a proper fix makes a workaround, compatibility shim, repair pass, observer, timer, wrapper, fallback classifier, or duplicated inference unnecessary, delete the superseded code in the same change whenever safe.
-- Before adding new logic for a bug, ask which existing owner should have produced the correct state. Prefer correcting that owner over teaching later layers to recognize and repair bad state.
-- A fix is not complete merely because the symptom disappears; the runtime should become simpler or at least no more layered than before.
-- Normal user flow:
+- Never claim tests/deploy unless actually observed.
+- Fix defects at the owning abstraction/source of truth; do not add downstream repair layers.
+- Delete superseded wrappers, timers, observers, caches and compatibility code when their owner replaces them.
+- Name modules by runtime ownership, not planning milestones.
+
+Normal user flow:
 
 ```bash
 git pull
@@ -35,8 +34,6 @@ People ↔ Relationships
 
 The visible tree is an ephemeral person-centric projection around the selected person.
 
-Canonical topology rules:
-
 - at most two explicit parents;
 - exactly two explicit parents must form a parent union;
 - 0 spouses → generic +child has one explicit parent;
@@ -47,9 +44,9 @@ Canonical topology rules:
 
 Names: NFC + trim + collapse repeated whitespace.
 
-## 3. M4-A — selection ownership
+## 3. Selection ownership — M4-A
 
-`public/selection-controller.js` is the active browser owner of:
+`public/selection-controller.js` owns:
 
 ```text
 selected person ID
@@ -59,21 +56,21 @@ selection events
 history.replaceState / history.pushState
 ```
 
-Committed invariant:
+Invariant:
 
 ```text
 SelectionController ID
-=== graph-view projection root
+=== GraphView projection root
 === RenderController rootId
 === the one DOM .graph-root
 ```
 
-SelectionController is now a foundation loaded before GraphView. GraphView consumes selection events; it does not write history itself.
-Some old history wrappers remain in feature source such as `person-pane.js`; remove them in M4-G rather than building on them.
+SelectionController is a foundation loaded before GraphView. GraphView consumes selection events and does not write history.
+Some source debt such as old feature history wrappers may still exist; remove it in M4-G, never build on it.
 
-## 4. M3 — canonical GraphStore / sync
+## 4. Canonical graph / sync — M3
 
-`public/graph-store.js` owns browser canonical graph state and shared indexes:
+`public/graph-store.js` owns:
 
 ```text
 graph
@@ -87,16 +84,13 @@ spousesByPerson
 ```
 
 Persistent key: `family-tree.graph-cache.v1`.
-Clean graph reads stay in Store. Stale/dirty reads perform one canonical refresh. Authoritative structural intent must refresh before writing.
 
-`public/graph-sync.js` owns revision polling. It consumes explicit `FamilyApi` mutation events and GraphStore fetch events; it does not wrap `window.fetch`.
-Do not revive render tokens, settle windows, or duplicate layout suppression.
+Clean graph reads stay in Store. Stale/dirty reads perform one canonical refresh. Authoritative structural intent refreshes before writing.
+`public/graph-sync.js` owns revision polling and consumes FamilyApi/Store events; it does not wrap fetch.
 
-## 5. M4-C — mutation/edit ownership
+## 5. Mutation/edit ownership — M4-C
 
-`public/family-mutations.js` is the canonical active owner of person/topology mutations.
-
-Public API:
+`public/family-mutations.js` is the canonical mutation owner:
 
 ```js
 FamilyMutations.updatePerson(...)
@@ -108,43 +102,25 @@ FamilyMutations.deletePerson(...)
 FamilyMutations.putGraph(...)
 ```
 
-Rules:
-
 - structural intent starts from `FamilyGraphStore.refresh({ authoritative:true })`;
-- structural edits use one transactional `PUT /api/graph` and then one canonical graph refresh;
-- person detail edits use one `PATCH /api/nodes/:id` path;
-- browser transport goes through `FamilyApi`;
+- structural edits use one transactional `PUT /api/graph` then one canonical graph refresh;
+- person edits use one `PATCH /api/nodes/:id` path;
 - unchanged person edits are true no-ops;
-- card `[data-action]` dispatch is owned by FamilyMutations;
-- `union-child-actions.js` is presentation-only and delegates to `FamilyMutations.addChildToUnion`;
-- `person-pane-editing.js` saves pane fields through `FamilyMutations.updatePerson`;
-- `pane-save-guard.js` was deleted.
+- card `[data-action]` dispatch belongs to FamilyMutations;
+- union-child UI delegates to `addChildToUnion`;
+- person-pane editing delegates to `updatePerson`.
 
-Runtime bootstrap still calls `installMutationFacade()` after historical stage capture so old mutation globals cannot remain active. This facade is M4-F/G compatibility debt.
+The duplicate mutation implementation formerly in multi-partner layout was deleted in M4-F.
+`pane-save-guard.js` and `legacy-symbols.js` are deleted.
 
-`public/legacy-symbols.js` contains inert transitional symbols required only while M4-F still loads old monkey-patch modules. Do not put behavior there.
+## 6. Shell / foundations — M4-D
 
-## 6. M4-D — real shell / base core
+`public/index.html` is a shell only: fonts/Tailwind/base CSS, header/status, viewport, canvas, SVG layer and cards layer.
+It contains no graph loading, layout engine, mutations, polling, startup or blur-save code.
 
-`public/index.html` is a shell only:
-
-```text
-fonts / Tailwind config
-base CSS
-header/status
-scroll viewport
-canvas
-SVG layer
-cards layer
-```
-
-It contains no graph loading, layout engine, mutation/edit handlers, polling, startup, resize rendering, or blur-save code.
-`src/entry.js` injects versioned foundations; it no longer performs legacy inline string surgery.
-
-Foundation order:
+`src/entry.js` injects foundations in this order:
 
 ```text
-legacy-symbols      // inert, temporary M4-F compatibility
 family-core
 selection-controller
 family-api
@@ -159,75 +135,11 @@ runtime-bootstrap
 
 Foundation scripts are marked `data-family-bootstrap-loaded="true"` so bootstrap does not wait on already-fired load events.
 
-`public/family-core.js` contains foundational card/geometry primitives needed by the current captured layout algorithms:
+`public/family-core.js` owns base card/geometry primitives only. It must not own application data I/O, polling, selection or mutations.
 
-```text
-globalNodes / globalNodeMap / globalUnits
-createCardHTML / renderCards
-base family-unit construction
-generation/order/packing primitives
-connector path primitives
-captureAnchor / restoreAnchor
-showStatus
-```
+## 7. Explicit browser transport — M4-E COMPLETE
 
-It must not own fetches, polling, startup, selection or mutations.
-
-## 7. M4-B — RenderController / viewport ownership
-
-`public/render-controller.js` owns active render generations and final viewport commits.
-
-Pipeline:
-
-```text
-projection/cards
-→ base geometry
-→ relationship-compaction
-→ planar
-→ member-order feedback
-→ bridge-compaction
-→ planar-router
-→ assert
-→ commit exactly one DOM .graph-root
-→ visual roles / union controls
-→ one center OR anchor restore
-→ family-graph-rendered
-```
-
-Feature code that changes geometry must use explicit controller intent:
-
-```js
-FamilyRenderController.requestLayout({ reason, preserveAnchor: true })
-```
-
-or `requestRecenter(...)`.
-
-After capture, historical `layoutAndRender()` and `restoreAnchor(...)` calls are inert compatibility facades. Never fix render bugs by adding RAF/timer/observer/centering repair passes.
-`public/graph-card-geometry.js` owns compact name-card generation spacing and topology-control geometry.
-
-## 8. Projection / visual roles
-
-`public/graph-view.js` owns person-centric projection mechanics only. Canonical data comes from GraphStore, selected root comes from SelectionController, and layout/viewport commits go to RenderController.
-It no longer fetches `/api/graph`, writes history, wraps `saveEdit`, or has a legacy RAF/layout fallback.
-
-Default projection intent:
-
-- selected ancestry + descendants eager;
-- selected spouses visible;
-- spouse ancestry limited by default;
-- selected person's siblings visible and `viewRole: "sibling"`, never generic context;
-- collateral branches lazy behind +N;
-- reroot clears expansions.
-
-`public/visual-roles.js` translates committed projection semantics (`root / primary / sibling / context`) plus spouse-ancestry policy into visual classes. It must not rediscover siblinghood from Store/layout fields.
-The committed root or selected person's sibling may never retain contextual/spouse-ancestry dimming classes.
-
-Historical bug note: real names were once misclassified as `default-node-text` because `innerText` was read while the hidden canvas was measuring. `node-hover.js` now classifies card fields from `textContent` after `family-graph-rendered`. Do not revert to layout-sensitive placeholder detection or own-DOM MutationObserver signaling.
-
-## 9. M4-E — explicit browser transport
-
-`public/family-api.js` is the browser transport owner.
-
+`public/family-api.js` is the sole browser application transport owner.
 It owns:
 
 ```text
@@ -241,28 +153,111 @@ resilient preferred-face catalog reads
 
 Rules:
 
-- `FamilyApi` captures native fetch once but never assigns `window.fetch`;
-- GraphStore and GraphSync must not capture or wrap fetch;
-- successful graph/media/face mutations emit one `family-api-mutation` with method/path/scope/revision;
-- GraphStore consumes that event for dirty/revision state;
-- GraphSync consumes it for revision/session metrics;
-- `public/media-resilience.js` was deleted; its catalog fallback belongs in FamilyApi;
-- GraphView reads only through GraphStore;
-- import/export reads through GraphStore and writes through FamilyMutations;
-- place lookup and migrated face features call FamilyApi directly.
+- FamilyApi captures native fetch once but never assigns `window.fetch`;
+- GraphStore and GraphSync do not capture/wrap fetch;
+- successful graph/media/face mutations emit one `family-api-mutation`;
+- GraphStore consumes mutation events for dirty/revision state;
+- GraphSync consumes them for revision/session metrics;
+- `media-resilience.js` is deleted; fallback belongs in FamilyApi;
+- GraphView reads canonical data only through GraphStore;
+- import/export reads through Store and writes through FamilyMutations;
+- person media, face tagging, face preference and place lookup use FamilyApi explicitly;
+- face tagging reads people from GraphStore, never `/api/graph`.
 
-Remaining transport migration debt before M4-E can be called fully complete:
+Do not reintroduce a global fetch compatibility wrapper.
+
+## 8. Projection / visual roles
+
+`public/graph-view.js` owns person-centric projection mechanics only.
+Canonical data comes from GraphStore, selected root from SelectionController, layout/viewport commits from RenderController.
+
+Default projection intent:
+
+- selected ancestry + descendants eager;
+- selected spouses visible;
+- spouse ancestry limited by default;
+- selected person's siblings visible and `viewRole: "sibling"`, never generic context;
+- collateral branches lazy behind +N;
+- reroot clears expansions.
+
+`public/visual-roles.js` translates committed projection semantics (`root / primary / sibling / context`) plus spouse-ancestry policy into visual classes. It must not reconstruct siblinghood from layout fields.
+
+Historical placeholder bug: `node-hover.js` intentionally classifies card text from `textContent` after `family-graph-rendered`; do not use layout-sensitive `innerText` while the canvas is hidden.
+
+## 9. Render / layout ownership — M4-B + M4-F COMPLETE
+
+`public/render-controller.js` owns render generations, stage execution, final connector generation, final validation and viewport commit.
+
+Pipeline:
 
 ```text
-public/person-media.js
-public/face-tagging.js
+projection/cards
+→ base geometry
+→ relationship-compaction
+→ planar
+→ member-order feedback
+→ bridge-compaction
+→ planar-router            // one final connector generation
+→ assert
+→ planar validation        // explicit final validator
+→ commit exactly one DOM .graph-root
+→ visual roles / union controls
+→ one center OR anchor restore
+→ family-graph-rendered
 ```
 
-They still contain direct browser API calls and must move to FamilyApi. Do not solve this with a global fetch compatibility wrapper.
+Direct registered modules:
 
-The historical layout modules also still fetch `/api/graph`; do not individually paper over those reads. M4-F removes their private graph caches and gives layout stages Store-backed prepare state.
+```text
+multi-partner-refinement   prepare:10 + family-unit/union primitives
+layout-refinement          layout:20 relationship-compaction
+planar-layout              prepare/layout:30 + validate:30
+member-order-refinement    prepare/layout:40, ownsPrefix
+bridge-compaction          prepare/layout:50
+planar-router              prepare:60 + connector owner
+```
 
-## 10. Person pane / metadata
+M4-F removed:
+
+```text
+captureLegacyModule
+setLayout / setLoadTree
+function-name stage polling
+captured RAF callbacks
+dummy bootstrap sentinel scripts
+legacy-symbols.js
+layout/loadTree monkey patches
+private /api/graph caches in layout modules
+multi-partner duplicate mutation code
+```
+
+All topology-aware layout modules consume FamilyGraphStore indexes during their prepare stage.
+Member-order retains the same feedback behavior by explicitly calling `FamilyRenderController.runThrough('planar')`.
+Planar crossing/card-intersection diagnostics run as an explicit final validator, after final routing.
+
+The controller still exposes inert `layoutAndRender` / `restoreAnchor` compatibility facades because old presentation modules call them. That boundary is M4-G debt; do not make those calls active again.
+
+Feature geometry changes must use:
+
+```js
+FamilyRenderController.requestLayout({ reason, preserveAnchor: true })
+```
+
+or `requestRecenter(...)`.
+Never fix rendering with corrective RAF/timer/observer/centering passes.
+
+## 10. Mobile/presentation dependency note
+
+`mobile-refinement.js` installs generation-centered primitives and currently dynamically loads presentation + multi-partner modules. Bootstrap waits on semantic install guards:
+
+```text
+__familyPresentationRefinementInstalled
+__familyMultiPartnerRefinement
+```
+
+The old fake script-sentinel mechanism is gone. Removing mobile's remaining dynamic dependency loading is optional M4-G cleanup; do not reorder multi-partner ahead of mobile generation-center primitives without checking geometry behavior.
+
+## 11. Person pane / metadata
 
 Canonical metadata keys:
 
@@ -279,90 +274,49 @@ primaryFaceId
 Cards are read-only topology/presentation; editing lives in the person pane.
 Metadata edits should not cause topology redraw. Name changes may request one geometry refresh because card width can change.
 
-New-person UX: after creation select/reroot, open/focus the pane name editor and make keyboard input ready. Completely blank placeholders delete without confirmation; meaningful/media-bearing people remain protected.
+New-person UX: after creation select/reroot, open/focus the pane name editor and make keyboard input ready. Blank placeholders delete without confirmation; meaningful/media-bearing people remain protected.
 
-## 11. Media / faces
+## 12. Media / faces
 
 D1 stores metadata; originals live in R2. Media is associated with people.
 Preferred face is `metadata.primaryFaceId`; it must belong to the person or deterministic fallback applies.
-Structural graph replacement prunes `media_people` associations for deleted people on the server. Do not orphan media-person links.
+Structural graph replacement prunes media-person associations for deleted people on the server.
 
-Graph-card face decoration now uses committed render lifecycle instead of observing graph card child-list changes. Modal-local observers for face editor state are legitimate UI-local observers and may remain.
+Graph-card face decoration uses committed render lifecycle rather than observing graph card child-list changes.
+Modal-local observers for face-editor state are legitimate UI-local observers.
 
-## 12. Layout compatibility stack / M4-F target
+## 13. M4-G — remaining deletion pass
 
-Current proven layout algorithms remain:
+M4-A through M4-F are active architecture. Remaining cleanup should be reductive:
 
-```text
-public/family-core.js
-public/layout-refinement.js
-public/multi-partner-refinement.js
-public/planar-layout.js
-public/member-order-refinement.js
-public/bridge-compaction.js
-public/planar-router.js
-```
-
-`runtime-bootstrap.js` still captures several historical modules by temporarily replacing globals and waiting for expected function names. This is compatibility debt, not an acceptable pattern for new code.
-
-M4-F must convert these to direct `FamilyRenderController` stage registration and Store-backed prepare state, then delete:
-
-```text
-captureLegacyModule
-setLayout / setLoadTree
-function-name waitFor polling
-sentinel scripts
-legacy-symbols.js
-layout/loadTree monkey patches
-private /api/graph caches in layout modules
-```
-
-Preserve algorithm behavior while flattening ownership:
-
-- parent-pair/union semantics;
-- multi-partner components;
-- distinct child groups for different unions;
-- lineage-aware member order;
-- sibling/union contiguity;
-- final planar connector routing.
-
-Do not combine M4-F ownership cleanup with algorithm redesign.
-
-## 13. M4-G deletion pass
-
-After M4-F stabilizes:
-
-- remove own-graph-DOM MutationObservers; keep only genuinely UI-local/external observers;
-- delete remaining history/save compatibility wrappers;
-- remove `family-graph-render-stable` after its final listener migrates;
+- remove remaining own-graph-DOM MutationObservers; keep only genuinely UI-local/external observers;
+- remove old history wrappers from person-pane/other features now that SelectionController is foundational;
+- remove remaining direct `layoutAndRender` / `restoreAnchor` callers, then delete RenderController's inert compatibility facade and related diagnostics;
+- remove `family-graph-render-stable` after its final listener migrates to `family-graph-rendered`;
+- simplify mobile's dynamic dependency loading if safe;
 - consolidate/delete print polish/refinement overlap;
-- remove milestone/slice comments and naming debt when touching their owners;
-- delete low-value source-string tests when equivalent behavioral/ownership tests exist.
+- remove stale milestone/slice comments and low-value source-string tests when equivalent behavioral tests exist.
+
+Do not redesign the proven layout algorithms during M4-G.
 
 ## 14. Tests / diagnostics
 
-`npm test` includes behavioral/ownership tests for:
+`npm test` covers topology invariants, FamilyApi, GraphStore, selection, visual roles, placeholder classification, mutations, runtime ownership/conformance and RenderController generations/validation.
 
-- topology invariants;
-- FamilyApi transport/fallback/mutation events;
-- GraphStore;
-- selection;
-- visual roles;
-- placeholder classification;
-- FamilyMutations;
-- runtime shell/ownership conformance;
-- RenderController generations.
-
-Diagnostics of interest:
+Diagnostics:
 
 ```text
 window.__familySelectionDiagnostics
 window.__familyGraphStoreDiagnostics
 window.__familyRenderControllerDiagnostics
+window.__familyLayoutDiagnostics
+window.__familyRouteDiagnostics
+window.__familyMemberOrderDiagnostics
+window.__familyBridgeDiagnostics
 window.__familyVisualRoleDiagnostics
 window.__familyNodeTextDiagnostics
 window.__familyMutationDiagnostics
 window.__familyRuntimeBootstrapDiagnostics
 ```
 
-Prefer behavioral regression tests. Avoid source-string assertions except for narrow architecture boundaries that cannot be cheaply tested behaviorally.
+Prefer behavioral regression tests. Keep source-string assertions only for narrow architecture boundaries that are otherwise expensive to exercise.
