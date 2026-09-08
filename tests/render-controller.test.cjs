@@ -152,8 +152,19 @@ controller.registerValidationStage({ name: 'planar', order: 30, run: () => trace
   const [idleId, idleCallback] = [...timers.entries()][0];
   timers.delete(idleId);
   idleCallback();
+  assert.strictEqual(viewport.scrollLeft, 0);
+  assert.strictEqual(viewport.scrollTop, 0);
+  assert.strictEqual(frames.size, 1);
+
+  let [centerId, centerCallback] = [...frames.entries()][0];
+  frames.delete(centerId);
+  centerCallback(0);
+  [centerId, centerCallback] = [...frames.entries()][0];
+  frames.delete(centerId);
+  centerCallback(900);
   assert.strictEqual(viewport.scrollLeft, 700);
   assert.strictEqual(viewport.scrollTop, 540);
+
   snapshot = controller.snapshot();
   assert.strictEqual(snapshot.idleRecenters, 1);
   assert.strictEqual(snapshot.fallbackRecenters, 2);
