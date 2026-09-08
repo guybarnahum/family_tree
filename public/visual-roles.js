@@ -21,15 +21,23 @@
     let queued = false;
     let applying = false;
 
-    function currentRootId() {
+    function selectedPersonId() {
         const selected = window.FamilySelectionController?.getSelectedPersonId?.();
         if (selected) return selected;
-        const card = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
-        if (card?.dataset.nodeId) return card.dataset.nodeId;
         const urlId = new URL(window.location.href).searchParams.get('person');
         if (urlId) return urlId;
         try { return localStorage.getItem('family-tree.anchor-person'); }
         catch (_) { return null; }
+    }
+
+    function currentRootId() {
+        // Visual roles describe the committed projection, not pending selection intent.
+        // During reroot, SelectionController updates before graph-view replaces the cards.
+        // Using that pending ID against the old projection can temporarily classify the
+        // entire visible graph relative to a person that is not yet the rendered root.
+        const rendered = cardsLayer.querySelector('.absolute-card.graph-root[data-node-id]');
+        if (rendered?.dataset.nodeId) return rendered.dataset.nodeId;
+        return selectedPersonId();
     }
 
     function descendants(seedId, childrenByParent) {
@@ -187,6 +195,7 @@
             const appliedAt = new Date().toISOString();
             window.__familyVisualRoleDiagnostics = {
                 rootId,
+                selectedPersonId: selectedPersonId(),
                 siblings: [...rootSiblings],
                 contextual: [...context],
                 roles,
@@ -194,6 +203,7 @@
             };
             window.__familyRootContextDiagnostics = {
                 rootId,
+                selectedPersonId: selectedPersonId(),
                 siblings: [...rootSiblings],
                 contextual: [...context],
                 appliedAt
@@ -212,9 +222,9 @@
         });
     }
 
-    // Card replacement is now communicated by RenderController/store/selection events rather
-    // than inferred by observing DOM child mutations.
-    window.addEventListener('family-selection-changed', queueApply);
+    // Selection intent changes before graph-view commits the new projection. Do not style the
+    // old card set against that pending root. RenderController calls refreshNow() during the
+    // authoritative commit and then emits family-graph-rendered.
     window.addEventListener('family-graph-store-changed', queueApply);
     window.addEventListener('family-person-pane-saved', queueApply);
     window.addEventListener('family-graph-rendered', apply);
