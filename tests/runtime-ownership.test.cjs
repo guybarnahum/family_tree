@@ -10,8 +10,8 @@ const importExport = read('public/import-export.js');
 const interaction = read('public/interaction-refinement.js');
 const presentation = read('public/presentation-refinement.js');
 const selection = read('public/selection-controller.js');
-const sliceGeometry = read('public/slice-a-geometry.js');
-const slicePolish = read('public/slice-a-polish.js');
+const graphCardGeometry = read('public/graph-card-geometry.js');
+const personPaneEditing = read('public/person-pane-editing.js');
 const faceFootprint = read('public/node-face-footprint.js');
 const bootstrap = read('public/runtime-bootstrap.js');
 const graphView = read('public/graph-view.js');
@@ -38,7 +38,7 @@ assert(!interaction.includes("fetch('/api/graph'"), 'interaction must not fetch 
 assert(!interaction.includes('history.replaceState'), 'interaction must not wrap selection history');
 assert(!/\blayoutAndRender\s*\(\s*\)/.test(interaction), 'interaction must not request corrective layouts');
 
-// M4-A: SelectionController is the final active history owner. Presentation is no longer part
+// SelectionController is the final active history owner. Presentation is no longer part
 // of the history chain; remaining legacy wrappers are overwritten when runtime-ready fires.
 assert(selection.includes('function installHistoryOwner()'), 'selection controller must expose history ownership install');
 assert(selection.includes("window.addEventListener('family-runtime-ready', installHistoryOwner)"),
@@ -47,7 +47,7 @@ assert(!/history\.replaceState\s*=/.test(presentation), 'presentation must not w
 assert(!/history\.pushState\s*=/.test(presentation), 'presentation must not wrap pushState');
 assert(!/new\s+MutationObserver/.test(presentation), 'presentation must use render lifecycle, not card DOM observation');
 
-// M4-B: generic legacy layout/anchor calls are compatibility no-ops. Geometry-changing feature
+// Generic legacy layout/anchor calls are compatibility no-ops. Geometry-changing feature
 // modules use the explicit controller API instead of creating their own render generations.
 assert(controller.includes('legacyLayoutRequestsIgnored'), 'controller must track ignored legacy layouts');
 assert(controller.includes('legacyViewportRequestsIgnored'), 'controller must track ignored legacy anchor restores');
@@ -59,8 +59,8 @@ assert(!/\blayoutAndRender\s*\(\s*\)/.test(presentation), 'presentation must not
 assert(!/viewport\.(?:scrollLeft|scrollTop)\s*=|viewport\.scrollTo\s*\(/.test(presentation),
   'presentation must not own viewport positioning');
 for (const [name, source] of [
-  ['slice-a-geometry', sliceGeometry],
-  ['slice-a-polish', slicePolish],
+  ['graph-card-geometry', graphCardGeometry],
+  ['person-pane-editing', personPaneEditing],
   ['node-face-footprint', faceFootprint]
 ]) {
   assert(!/\blayoutAndRender\s*\(\s*\)/.test(source), `${name} must not invoke legacy layout`);
@@ -73,6 +73,9 @@ assert(bootstrap.includes("'/node-hover.js'"), 'bootstrap must explicitly own no
 assert(bootstrap.includes("'/visual-roles.js'"), 'bootstrap must install visual roles');
 assert(bootstrap.includes("'/graph-sync.js'"), 'bootstrap must own sync startup');
 assert(bootstrap.includes('await window.startFamilyGraph()'), 'bootstrap must explicitly start the graph');
+assert(bootstrap.includes("'/person-pane-editing.js'"), 'bootstrap must load semantic person-pane editing module');
+assert(bootstrap.includes("'/graph-card-geometry.js'"), 'bootstrap must load semantic graph-card geometry module');
+assert(!bootstrap.includes('slice-a-'), 'bootstrap must not retain slice-derived feature names');
 for (const retired of [
   'revision-layout-guard.js',
   'graph-render-stability.js',
