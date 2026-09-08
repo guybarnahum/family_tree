@@ -15,6 +15,15 @@
 
         .absolute-card { padding-bottom: 30px !important; }
 
+        #cards-layer .absolute-card [data-action="add-spouse"],
+        #cards-layer .absolute-card.graph-root [data-action="add-spouse"] {
+            top: 0 !important;
+            left: 100% !important;
+            right: auto !important;
+            transform: translate(-50%, -50%) !important;
+            white-space: nowrap !important;
+        }
+
         .absolute-card h2[data-field="name"] {
             text-align: center !important;
             width: 100%;
@@ -59,6 +68,7 @@
                 min-width: min(220px, calc(100vw - 44px)) !important;
                 width: min(248px, calc(100vw - 44px)) !important;
                 max-width: min(272px, calc(100vw - 32px)) !important;
+                min-height: 0 !important;
                 padding: 12px 14px 18px !important;
                 border-color: rgba(52, 78, 65, 0.78) !important;
                 border-top-color: #344e41 !important;
