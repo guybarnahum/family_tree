@@ -44,7 +44,7 @@
     }
 
     function fieldValue(element) {
-        return String(element.textContent || '').trim();
+        return String(element.dataset.value ?? element.textContent ?? '').trim();
     }
 
     function rootCardName(id) {
@@ -137,7 +137,8 @@
             showStatus('נשמר בהצלחה');
         } catch (error) {
             console.error('Failed to save person detail:', error);
-            element.textContent = original;
+            if (element.dataset.personAttribute) element.dataset.value = original;
+            else element.textContent = original;
             if (person) {
                 if (field === 'metadata') person.metadata = priorMetadata;
                 else person[field] = original;
@@ -147,35 +148,13 @@
         }
     }
 
-    pane.addEventListener('click', async event => {
+    pane.addEventListener('click', event => {
         const button = event.target.closest('[data-person-attribute]');
         if (!button) return;
-        const id = button.dataset.id;
-        const key = button.dataset.personAttribute;
-        const cycle = key === 'sex' ? [null, 'female', 'male'] : [null, 'dead'];
-        const person = localPerson(id);
-        const priorMetadata = metadataFor(person);
-        const current = priorMetadata[key] || null;
-        const nextValue = cycle[(cycle.indexOf(current) + 1) % cycle.length];
-        const next = { ...priorMetadata };
-        if (nextValue) next[key] = nextValue;
-        else delete next[key];
-        const nextMetadata = Metadata.normalize(next);
-        if (JSON.stringify(priorMetadata) === JSON.stringify(nextMetadata)) return;
-
-        showStatus('שומר...');
-        try {
-            const result = await Mutations.updatePerson(id, { metadata: nextMetadata }, { reason: 'person-attribute-save' });
-            if (!result.changed) return;
-            if (person) person.metadata = nextMetadata;
-            window.dispatchEvent(new CustomEvent('family-person-pane-saved', {
-                detail: { id, field: 'metadata', key, value: nextMetadata[key] || null, metadata: nextMetadata }
-            }));
-            showStatus('נשמר בהצלחה');
-        } catch (error) {
-            console.error('Failed to save person attribute:', error);
-            showStatus('שגיאה בשמירה');
-        }
+        const current = button.dataset.value || '';
+        const cycle = button.dataset.personAttribute === 'sex' ? ['', 'female', 'male'] : ['', 'dead'];
+        button.dataset.value = cycle[(cycle.indexOf(current) + 1) % cycle.length];
+        void savePaneField(button, current);
     });
 
     pane.addEventListener('focusin', event => {
