@@ -48,8 +48,7 @@
         }
 
         #cards-layer .absolute-card p[data-field="dates"],
-        #cards-layer .absolute-card p[data-field="description"],
-        #cards-layer .absolute-card .graph-select-zone {
+        #cards-layer .absolute-card p[data-field="description"] {
             display: none !important;
         }
 
