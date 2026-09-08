@@ -1,14 +1,10 @@
-// M3 canonical client graph store.
-//
-// One browser-side owner for the canonical graph document, revision/dirty/stale state,
-// persistent cache, shared topology indexes, and /api/graph reads. Legacy algorithm modules
-// may still fetch('/api/graph'), but those reads are transparently served from this same store.
+// Canonical browser-side family graph state. FamilyApi owns network transport.
 (() => {
     if (window.FamilyGraphStore) return;
+    const Api = window.FamilyApi;
+    if (!Api) return console.warn('FamilyApi must load before FamilyGraphStore');
 
     const STORAGE_KEY = 'family-tree.graph-cache.v1';
-    const nativeFetch = window.fetch.bind(window);
-
     let graph = null;
     let savedAt = null;
     let revision = null;
@@ -19,38 +15,22 @@
     let structuralSignature = '';
     let generation = 0;
     let networkPromise = null;
-
     let peopleById = new Map();
     let parentsByChild = new Map();
     let childrenByParent = new Map();
     let spousesByPerson = new Map();
 
     const diagnostics = {
-        cacheLoads: 0,
-        cacheWrites: 0,
-        memoryReads: 0,
-        networkReads: 0,
-        fallbackReads: 0,
-        networkErrors: 0,
-        graphReplacements: 0,
-        personUpdates: 0,
-        observedMutations: 0,
-        lastFetchSource: '',
-        lastFetchAt: null,
-        lastFetchLatencyMs: null,
-        lastChangeReason: '',
+        cacheLoads: 0, cacheWrites: 0, memoryReads: 0, networkReads: 0,
+        fallbackReads: 0, networkErrors: 0, graphReplacements: 0,
+        personUpdates: 0, observedMutations: 0, lastFetchSource: '',
+        lastFetchAt: null, lastFetchLatencyMs: null, lastChangeReason: '',
         lastStructuralChanged: false
     };
 
-    function isGraphDocument(value) {
-        return !!value && typeof value === 'object' &&
-            Array.isArray(value.people) && Array.isArray(value.relationships);
-    }
-
-    function finiteRevision(value) {
-        const result = Number(value);
-        return Number.isInteger(result) && result >= 1 ? result : null;
-    }
+    const finiteRevision = value => Api.finiteRevision(value);
+    const isGraphDocument = value => !!value && typeof value === 'object' &&
+        Array.isArray(value.people) && Array.isArray(value.relationships);
 
     function addSet(map, key, value) {
         if (!map.has(key)) map.set(key, new Set());
@@ -71,7 +51,6 @@
         parentsByChild = new Map();
         childrenByParent = new Map();
         spousesByPerson = new Map();
-
         for (const relation of graph?.relationships || []) {
             if (relation.type === 'parent') {
                 addSet(parentsByChild, relation.person2Id, relation.person1Id);
@@ -85,77 +64,41 @@
 
     function snapshot() {
         return {
-            graph,
-            savedAt,
-            revision,
-            serverRevision,
-            stale,
-            dirty,
-            source,
-            generation,
-            structuralSignature,
-            indexes: {
-                peopleById,
-                parentsByChild,
-                childrenByParent,
-                spousesByPerson
-            }
+            graph, savedAt, revision, serverRevision, stale, dirty, source,
+            generation, structuralSignature,
+            indexes: { peopleById, parentsByChild, childrenByParent, spousesByPerson }
         };
     }
 
     function expose() {
         window.__familyGraphStoreDiagnostics = {
-            ...diagnostics,
-            generation,
-            revision,
-            serverRevision,
-            stale,
-            dirty,
-            source,
-            savedAt,
+            ...diagnostics, generation, revision, serverRevision, stale, dirty, source, savedAt,
             people: graph?.people?.length || 0,
             relationships: graph?.relationships?.length || 0
         };
     }
 
-    function persistentEntry() {
-        return graph ? {
-            savedAt: savedAt || Date.now(),
-            revision,
-            serverRevision,
-            stale,
-            dirty,
-            graph
-        } : null;
-    }
-
     function persist() {
-        const entry = persistentEntry();
-        if (!entry) return false;
+        if (!graph) return false;
         try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(entry));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                savedAt: savedAt || Date.now(), revision, serverRevision, stale, dirty, graph
+            }));
             diagnostics.cacheWrites += 1;
             expose();
             return true;
-        } catch (_) {
-            return false;
-        }
+        } catch (_) { return false; }
     }
 
-    function emitStoreChange(reason, { structuralChanged = false, scope = 'graph' } = {}) {
+    function emitStoreChange(reason, structuralChanged = false, scope = 'graph') {
         diagnostics.lastChangeReason = reason || 'graph-change';
         diagnostics.lastStructuralChanged = !!structuralChanged;
         expose();
         window.dispatchEvent(new CustomEvent('family-graph-store-changed', {
             detail: {
-                reason: diagnostics.lastChangeReason,
-                scope,
-                structuralChanged: !!structuralChanged,
-                generation,
-                revision,
-                serverRevision,
-                stale,
-                dirty
+                reason: diagnostics.lastChangeReason, scope,
+                structuralChanged: !!structuralChanged, generation,
+                revision, serverRevision, stale, dirty
             }
         }));
     }
@@ -169,43 +112,32 @@
         window.dispatchEvent(new CustomEvent('family-graph-store-fetch', { detail: payload }));
     }
 
-    function acceptGraph(value, {
-        revision: nextRevision = null,
-        source: nextSource = 'local',
-        clean = true,
-        reason = 'graph-replace',
-        emit = true
-    } = {}) {
+    function replace(value, options = {}) {
         if (!isGraphDocument(value)) throw new Error('Invalid family graph document');
         const before = structuralSignature;
         graph = value;
         structuralSignature = structureOf(value);
         const structuralChanged = before !== structuralSignature;
-        revision = finiteRevision(nextRevision) || revision;
-        if (clean) {
+        revision = finiteRevision(options.revision) || revision;
+        if (options.clean !== false) {
             serverRevision = revision || serverRevision;
             stale = false;
             dirty = false;
         }
-        source = nextSource;
+        source = options.source || 'local';
         savedAt = Date.now();
         generation += 1;
         diagnostics.graphReplacements += 1;
         rebuildIndexes();
         persist();
-        if (emit) emitStoreChange(reason, { structuralChanged });
+        if (options.emit !== false) emitStoreChange(options.reason || 'graph-replace', structuralChanged);
         return snapshot();
     }
 
     function loadPersisted() {
         try {
-            const raw = localStorage.getItem(STORAGE_KEY);
-            if (!raw) return false;
-            const entry = JSON.parse(raw);
-            if (!entry || !Number.isFinite(entry.savedAt) || !isGraphDocument(entry.graph)) {
-                localStorage.removeItem(STORAGE_KEY);
-                return false;
-            }
+            const entry = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+            if (!entry || !Number.isFinite(entry.savedAt) || !isGraphDocument(entry.graph)) return false;
             graph = entry.graph;
             savedAt = entry.savedAt;
             revision = finiteRevision(entry.revision);
@@ -219,114 +151,46 @@
             rebuildIndexes();
             expose();
             return true;
-        } catch (_) {
-            return false;
-        }
+        } catch (_) { return false; }
     }
 
-    function markStale(nextServerRevision = null) {
+    function markStale(value = null) {
         if (!graph) return false;
         stale = true;
-        const value = finiteRevision(nextServerRevision);
-        if (value) serverRevision = value;
-        persist();
-        expose();
-        return true;
+        serverRevision = finiteRevision(value) || serverRevision;
+        persist(); expose(); return true;
     }
 
-    function markDirty(nextServerRevision = null) {
+    function markDirty(value = null) {
         if (!graph) return false;
         dirty = true;
-        const value = finiteRevision(nextServerRevision);
-        if (value) serverRevision = value;
-        persist();
-        expose();
-        return true;
+        serverRevision = finiteRevision(value) || serverRevision;
+        persist(); expose(); return true;
     }
 
-    function markClean(nextRevision = null) {
+    function markClean(value = null) {
         if (!graph) return false;
-        const value = finiteRevision(nextRevision) || revision;
-        revision = value;
-        serverRevision = value || serverRevision;
-        stale = false;
-        dirty = false;
-        persist();
-        expose();
-        return true;
+        revision = finiteRevision(value) || revision;
+        serverRevision = revision || serverRevision;
+        stale = false; dirty = false;
+        persist(); expose(); return true;
     }
 
-    function acknowledgeRevision(nextRevision, { graphDirty = false } = {}) {
-        const value = finiteRevision(nextRevision);
-        if (!value) return false;
-        serverRevision = value;
+    function acknowledgeRevision(value, { graphDirty = false } = {}) {
+        const next = finiteRevision(value);
+        if (!next) return false;
+        serverRevision = next;
         if (graphDirty) dirty = true;
-        persist();
-        expose();
-        return true;
+        persist(); expose(); return true;
     }
 
-    function clear() {
-        graph = null;
-        savedAt = null;
-        revision = null;
-        serverRevision = null;
-        stale = false;
-        dirty = false;
-        source = 'empty';
-        structuralSignature = '';
-        generation += 1;
-        rebuildIndexes();
-        try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
-        emitStoreChange('clear', { structuralChanged: true });
+    function noteMutation({ scope = 'data', revision: value = null } = {}) {
+        serverRevision = finiteRevision(value) || serverRevision;
+        if (scope === 'graph') dirty = true;
+        persist(); expose();
     }
 
-    function ageMs(value = snapshot()) {
-        const timestamp = value?.savedAt;
-        return Number.isFinite(timestamp) ? Math.max(0, Date.now() - timestamp) : null;
-    }
-
-    function sameOriginUrl(input) {
-        try {
-            const raw = input instanceof Request ? input.url : String(input);
-            const url = new URL(raw, window.location.href);
-            return url.origin === window.location.origin ? url : null;
-        } catch (_) {
-            return null;
-        }
-    }
-
-    function graphRequestInfo(input, init) {
-        const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
-        if (method !== 'GET') return null;
-        const url = sameOriginUrl(input);
-        return url?.pathname === '/api/graph' ? { url } : null;
-    }
-
-    function mutationRequestInfo(input, init) {
-        const method = String(init?.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
-        if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return null;
-        const url = sameOriginUrl(input);
-        if (!url) return null;
-
-        if (url.pathname === '/api/graph' || url.pathname === '/api/tree' || url.pathname.startsWith('/api/nodes')) {
-            return { scope: 'graph' };
-        }
-        if (url.pathname === '/api/media' || url.pathname.startsWith('/api/media/') ||
-            url.pathname === '/api/faces' || url.pathname.startsWith('/api/faces/')) {
-            return { scope: 'data' };
-        }
-        return null;
-    }
-
-    function revisionFromResponse(response) {
-        return finiteRevision(
-            response?.headers?.get('X-Family-Graph-Revision') ||
-            response?.headers?.get('X-Family-Revision')
-        );
-    }
-
-    function graphResponse({ fallback = false } = {}) {
+    function graphResponse(fallback = false) {
         if (!graph) return null;
         const headers = new Headers({
             'Content-Type': 'application/json; charset=UTF-8',
@@ -342,23 +206,14 @@
         const Status = window.FamilyGraphStatus;
         if (!Status) return;
         const classified = Status.classify(error);
-        const retry = () => refresh({ authoritative: false, reason: 'retry' });
-
+        const retry = () => refresh({ reason: 'retry' });
         if (!graph) {
-            Status.show({
-                kind: classified.kind,
-                mode: 'full',
-                retry,
-                details: { status: classified, text: classified.text }
-            });
+            Status.show({ kind: classified.kind, mode: 'full', retry,
+                details: { status: classified, text: classified.text } });
             return;
         }
-
         Status.show({
-            kind: classified.kind,
-            mode: 'banner',
-            savedAt,
-            retry,
+            kind: classified.kind, mode: 'banner', savedAt, retry,
             title: `מוצג עותק שמור ${Status.ageLabel(savedAt)}`,
             description: classified.kind === 'quota'
                 ? 'מסד הנתונים הגיע למגבלת השימוש; העץ המוצג הוא מהטעינה האחרונה.'
@@ -367,31 +222,14 @@
         });
     }
 
-    async function fetchGraph(input = '/api/graph', init = { cache: 'no-store' }, {
-        forceNetwork = false,
-        authoritative = false,
-        reason = 'graph-read'
-    } = {}) {
-        if (graph && !forceNetwork && !stale && !dirty) {
-            diagnostics.memoryReads += 1;
-            emitFetch({
-                source: 'store',
-                revision,
-                people: graph.people.length,
-                relationships: graph.relationships.length
-            });
-            return graphResponse();
-        }
-
-        if (networkPromise) return networkPromise.then(result => result.clone());
-
+    async function networkRead({ authoritative = false, reason = 'graph-read' } = {}) {
+        if (networkPromise) return networkPromise.then(response => response.clone());
         const started = performance.now();
         networkPromise = (async () => {
             try {
-                const response = await nativeFetch(input, init);
+                const response = await Api.request('/api/graph', { cache: 'no-store' });
                 if (!response.ok) {
-                    let body = '';
-                    try { body = await response.clone().text(); } catch (_) {}
+                    const body = await response.clone().text().catch(() => '');
                     const error = new Error(body || `HTTP ${response.status}`);
                     error.status = response.status;
                     error.body = body;
@@ -399,121 +237,90 @@
                 }
                 const value = await response.clone().json();
                 if (!isGraphDocument(value)) throw new Error('Graph response was not valid graph JSON');
-                const nextRevision = revisionFromResponse(response) || serverRevision || revision;
-                acceptGraph(value, {
-                    revision: nextRevision,
-                    source: 'network',
-                    clean: true,
-                    reason
-                });
+                const nextRevision = Api.revisionFromResponse(response) || serverRevision || revision;
+                replace(value, { revision: nextRevision, source: 'network', reason });
                 diagnostics.networkReads += 1;
-                emitFetch({
-                    source: 'network',
-                    revision: nextRevision,
-                    people: value.people.length,
-                    relationships: value.relationships.length,
-                    latencyMs: Math.round(performance.now() - started)
-                });
+                emitFetch({ source: 'network', revision: nextRevision,
+                    people: value.people.length, relationships: value.relationships.length,
+                    latencyMs: Math.round(performance.now() - started) });
                 window.FamilyGraphStatus?.clear?.();
                 return response;
             } catch (error) {
                 diagnostics.networkErrors += 1;
-                if (graph) {
-                    stale = true;
-                    persist();
-                    diagnostics.fallbackReads += 1;
-                }
+                if (graph) { stale = true; diagnostics.fallbackReads += 1; persist(); }
                 showFailure(error);
                 emitFetch({ source: 'error', kind: window.FamilyGraphStatus?.classify?.(error)?.kind || 'network' });
-                if (graph && !authoritative) return graphResponse({ fallback: true });
+                if (graph && !authoritative) return graphResponse(true);
                 throw error;
             } finally {
                 networkPromise = null;
                 expose();
             }
         })();
-        return networkPromise.then(result => result.clone());
+        return networkPromise.then(response => response.clone());
     }
 
     async function read({ refresh: forceNetwork = false, authoritative = false, reason = 'graph-read' } = {}) {
-        const response = await fetchGraph('/api/graph', { cache: 'no-store' }, {
-            forceNetwork,
-            authoritative,
-            reason
-        });
+        if (graph && !forceNetwork && !stale && !dirty) {
+            diagnostics.memoryReads += 1;
+            emitFetch({ source: 'store', revision,
+                people: graph.people.length, relationships: graph.relationships.length });
+            return snapshot();
+        }
+        const response = await networkRead({ authoritative, reason });
         if (authoritative && response.headers.get('X-Family-Graph-Stale') === '1') {
             throw new Error('Authoritative graph is unavailable');
         }
         return snapshot();
     }
 
-    async function refresh({ serverRevision: nextServerRevision = null, authoritative = false, reason = 'refresh' } = {}) {
-        markStale(nextServerRevision);
+    async function refresh({ serverRevision: value = null, authoritative = false, reason = 'refresh' } = {}) {
+        markStale(value);
         return read({ refresh: true, authoritative, reason });
     }
 
-    function updatePerson(personId, patch, { revision: nextRevision = null, reason = 'person-update' } = {}) {
+    function updatePerson(personId, patch, { revision: value = null, reason = 'person-update' } = {}) {
         const person = peopleById.get(personId);
         if (!person || !patch || typeof patch !== 'object') return false;
         Object.assign(person, patch);
-        const value = finiteRevision(nextRevision);
-        if (value) {
-            revision = value;
-            serverRevision = value;
-            stale = false;
-            dirty = false;
+        const next = finiteRevision(value);
+        if (next) {
+            revision = next; serverRevision = next; stale = false; dirty = false;
         }
         savedAt = Date.now();
         generation += 1;
         diagnostics.personUpdates += 1;
         structuralSignature = structureOf(graph);
         persist();
-        emitStoreChange(reason, { structuralChanged: Object.prototype.hasOwnProperty.call(patch, 'name'), scope: 'person' });
+        emitStoreChange(reason, Object.prototype.hasOwnProperty.call(patch, 'name'), 'person');
         return true;
     }
 
-    function noteMutation({ scope = 'data', revision: nextRevision = null } = {}) {
-        const value = finiteRevision(nextRevision);
-        if (value) serverRevision = value;
-        if (scope === 'graph') dirty = true;
-        persist();
-        expose();
+    function clear() {
+        graph = null; savedAt = null; revision = null; serverRevision = null;
+        stale = false; dirty = false; source = 'empty'; structuralSignature = '';
+        generation += 1; rebuildIndexes();
+        try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+        emitStoreChange('clear', true);
+    }
+
+    function ageMs(value = snapshot()) {
+        return Number.isFinite(value?.savedAt) ? Math.max(0, Date.now() - value.savedAt) : null;
     }
 
     loadPersisted();
-
-    window.fetch = async function graphStoreFetch(input, init) {
-        const graphRead = graphRequestInfo(input, init);
-        if (graphRead) return fetchGraph(input, init || { cache: 'no-store' });
-
-        const mutation = mutationRequestInfo(input, init);
-        const response = await nativeFetch(input, init);
-        if (response.ok && mutation) {
-            diagnostics.observedMutations += 1;
-            noteMutation({ scope: mutation.scope, revision: revisionFromResponse(response) });
-        }
-        return response;
-    };
-
-    window.FamilyGraphStore = Object.freeze({
-        snapshot,
-        read,
-        refresh,
-        replace: (value, options = {}) => acceptGraph(value, options),
-        indexes: () => snapshot().indexes,
-        person: id => peopleById.get(id) || null,
-        updatePerson,
-        markStale,
-        markDirty,
-        markClean,
-        acknowledgeRevision,
-        noteMutation,
-        clear,
-        ageMs,
-        isGraphDocument,
-        finiteRevision,
-        nativeFetch: (...args) => nativeFetch(...args)
+    window.addEventListener('family-api-mutation', event => {
+        diagnostics.observedMutations += 1;
+        const detail = event.detail || {};
+        noteMutation({ scope: detail.scope === 'graph' ? 'graph' : 'data', revision: detail.revision });
     });
 
+    window.FamilyGraphStore = Object.freeze({
+        snapshot, read, refresh, replace,
+        indexes: () => snapshot().indexes,
+        person: id => peopleById.get(id) || null,
+        updatePerson, markStale, markDirty, markClean, acknowledgeRevision,
+        noteMutation, clear, ageMs, isGraphDocument, finiteRevision
+    });
     expose();
 })();
