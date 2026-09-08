@@ -11,6 +11,7 @@
 
     const Metadata = window.FamilyPersonMetadata || {
         metadataObject: value => value && typeof value === 'object' && !Array.isArray(value) ? value : {},
+        normalize: value => ({ ...(value || {}) }),
         withField(metadata, key, value) {
             const next = { ...(metadata || {}) };
             const text = String(value ?? '').trim();
@@ -102,9 +103,9 @@
         if (field === 'metadata') {
             if (!metadataKey) return;
             const structuredPlace = selectedPlace(element, value);
-            nextMetadata = structuredPlace
+            nextMetadata = Metadata.normalize(structuredPlace
                 ? { ...priorMetadata, [metadataKey]: structuredPlace }
-                : Metadata.withField(priorMetadata, metadataKey, value, metadataKind);
+                : Metadata.withField(priorMetadata, metadataKey, value, metadataKind));
             payload = { metadata: nextMetadata };
         } else {
             payload = { [field]: value };
@@ -145,6 +146,37 @@
             showStatus('שגיאה בשמירה');
         }
     }
+
+    pane.addEventListener('click', async event => {
+        const button = event.target.closest('[data-person-attribute]');
+        if (!button) return;
+        const id = button.dataset.id;
+        const key = button.dataset.personAttribute;
+        const cycle = key === 'sex' ? [null, 'female', 'male'] : [null, 'dead'];
+        const person = localPerson(id);
+        const priorMetadata = metadataFor(person);
+        const current = priorMetadata[key] || null;
+        const nextValue = cycle[(cycle.indexOf(current) + 1) % cycle.length];
+        const next = { ...priorMetadata };
+        if (nextValue) next[key] = nextValue;
+        else delete next[key];
+        const nextMetadata = Metadata.normalize(next);
+        if (JSON.stringify(priorMetadata) === JSON.stringify(nextMetadata)) return;
+
+        showStatus('שומר...');
+        try {
+            const result = await Mutations.updatePerson(id, { metadata: nextMetadata }, { reason: 'person-attribute-save' });
+            if (!result.changed) return;
+            if (person) person.metadata = nextMetadata;
+            window.dispatchEvent(new CustomEvent('family-person-pane-saved', {
+                detail: { id, field: 'metadata', key, value: nextMetadata[key] || null, metadata: nextMetadata }
+            }));
+            showStatus('נשמר בהצלחה');
+        } catch (error) {
+            console.error('Failed to save person attribute:', error);
+            showStatus('שגיאה בשמירה');
+        }
+    });
 
     pane.addEventListener('focusin', event => {
         if (!editableTarget(event.target)) return;
