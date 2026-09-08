@@ -22,7 +22,6 @@
     let installedMeasure = false;
     let lastAvatarSignature = '';
     let checkQueued = false;
-    let relayoutQueued = false;
 
     function avatarOutset(card) {
         const avatar = card?.querySelector('.node-face-avatar');
@@ -43,8 +42,6 @@
                 const outset = avatarOutset(card);
                 node.cardBodyWidth = bodyWidth;
                 node.cardFaceOutset = outset;
-                // Only the outside half-circle enlarges the node footprint. Keeping cardWidth
-                // as the footprint width lets all existing row/unit packers honor it naturally.
                 node.cardWidth = bodyWidth + outset;
             }
             return result;
@@ -62,13 +59,11 @@
             .join('|');
     }
 
-    function queueRelayout() {
-        if (relayoutQueued || typeof layoutAndRender !== 'function' || !globalNodes?.length) return;
-        relayoutQueued = true;
-        requestAnimationFrame(() => {
-            relayoutQueued = false;
-            try { layoutAndRender(); }
-            catch (error) { console.warn('Unable to reflow node face footprint:', error); }
+    function requestRelayout() {
+        if (!globalNodes?.length) return;
+        void window.FamilyRenderController?.requestLayout?.({
+            reason: 'node-face-footprint',
+            preserveAnchor: true
         });
     }
 
@@ -80,9 +75,7 @@
         const hadPrevious = !!lastAvatarSignature;
         const hasCurrent = !!signature;
         lastAvatarSignature = signature;
-        // A portrait set change changes horizontal footprint. One coalesced layout pass is
-        // enough; crop/primary-face changes for the same people do not cause a reflow.
-        if (hadPrevious || hasCurrent) queueRelayout();
+        if (hadPrevious || hasCurrent) requestRelayout();
     }
 
     function queueCheck() {
