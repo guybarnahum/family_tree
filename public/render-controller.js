@@ -119,7 +119,9 @@
             svgLayerEl.innerHTML = '';
             return;
         }
+        window.FamilyNodeFaceDecoration?.apply?.();
         measureCards();
+        window.FamilyNodeFaceDecoration?.extendMeasurements?.();
         buildFamilyUnits();
         assignGenerations();
         const byGen = layoutUnits();
