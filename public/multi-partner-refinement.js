@@ -709,10 +709,4 @@
     const style = document.createElement('style');
     style.textContent = `.absolute-card [data-action="add-spouse"] { white-space: nowrap; }`;
     document.head.appendChild(style);
-
-    loadGraphDocument(true).then(() => {
-        if (!globalNodes?.length) return;
-        renderCards();
-        requestAnimationFrame(() => layoutAndRender());
-    }).catch(error => console.warn('Unable to initialize multi-partner layout:', error));
 })();
