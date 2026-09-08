@@ -24,7 +24,7 @@ Production: `family.barnahum.com`. Stack: Cloudflare Worker + D1 + R2 + static f
 
 ## M4 status
 
-M4 is in its final cleanup phase:
+M4 is closed. The user confirmed the final cleanup head validated successfully.
 
 ```text
 M4-A  one selection authority             done
@@ -33,12 +33,10 @@ M4-C  explicit mutation layer             done
 M4-D  shell-only index                    done
 M4-E  one transport/data path             done
 M4-F  direct registered layout pipeline   done
-M4-G  compatibility/dead-code deletion    active, late stage
+M4-G  compatibility/dead-code deletion    done
 ```
 
-M4-G is deletion-first: remove code only when observable behavior already has a clear owner. Do not recreate compatibility wrappers while cleaning them up.
-
-The current implementation sweep is at a local-validation boundary. No known architectural repair MutationObserver remains in the runtime; the remaining timers/RAFs are owner-local behavior or browser/platform boundaries. Do not declare M4-G complete until the current head is locally validated.
+M4-G was deletion-first: code was removed only when observable behavior already had a clear owner. No known architectural repair MutationObserver remains in the runtime; remaining timers/RAFs are owner-local behavior or browser/platform boundaries.
 
 ## Product invariants
 
@@ -301,15 +299,13 @@ There are no remaining face-stack MutationObservers. The former `person-picker-r
 
 `print-polish.js` and its body MutationObserver are deleted. The remaining double-RAF before `window.print()` and Safari cleanup timer are browser/platform boundaries, not render-repair architecture.
 
-## Deletion policy / remaining candidates
+## Post-M4 cleanup policy
 
 Deletion-first does not mean “zero observers” or “zero timers.” Keep owner-local mechanisms when the browser/UI does not provide a better explicit lifecycle.
 
-The current reachability sweep found no remaining known architectural repair MutationObserver or production debug loop. Remaining timing mechanisms are intentional boundaries/behaviors such as GraphSync polling/coalescing, autocomplete debounce/focus timing, RenderController batching, pane/presentation measurement, status fade, object-URL cleanup, upstream request timeout, and browser print timing.
+The final M4 reachability sweep found no remaining known architectural repair MutationObserver or production debug loop. Remaining timing mechanisms are intentional boundaries/behaviors such as GraphSync polling/coalescing, autocomplete debounce/focus timing, RenderController batching, pane/presentation measurement, status fade, object-URL cleanup, upstream request timeout, and browser print timing.
 
-High-value next step is local validation of the current cleanup head. If it passes, M4-G is a candidate to close; further work should be opportunistic stale-comment/naming cleanup rather than another architectural rewrite.
-
-Do not redesign the proven layout algorithms during cleanup.
+M4 is closed. Future cleanup should be opportunistic stale-comment/naming removal or behavior-backed simplification, not another compatibility/ownership rewrite. Do not redesign the proven layout algorithms without a concrete product or correctness reason.
 
 ## Tests
 
