@@ -5,13 +5,6 @@
 
     const style = document.createElement('style');
     style.textContent = `
-        /* The whole card is already the select/reroot target. Never reserve a second
-           select-to-center strip, including on the selected mobile card. */
-        #cards-layer .absolute-card .graph-select-zone,
-        #cards-layer .absolute-card.graph-root .graph-select-zone {
-            display: none !important;
-        }
-
         /* Keep the build marker available for debugging without leaving permanent chrome.
            Its invisible text box is the hover target; hover grows/fades it into view. */
         #family-tree-build {
