@@ -5,12 +5,11 @@
 
     const modal = document.getElementById('person-media-modal');
     const overlay = modal?.querySelector('.face-overlay');
-    const editor = modal?.querySelector('.face-editor');
     const drawButton = modal?.querySelector('.face-draw-button');
     const personSelect = modal?.querySelector('.face-person-select');
     const hint = modal?.querySelector('.face-toolbar-hint');
     const Identity = window.FamilyPersonIdentity;
-    if (!modal || !overlay || !editor || !drawButton || !personSelect) return;
+    if (!modal || !overlay || !drawButton || !personSelect) return;
 
     const style = document.createElement('style');
     style.textContent = `
@@ -251,20 +250,15 @@
         if (!searchWrap.contains(event.target)) closeResults();
     }, true);
 
-    // The core editor repopulates the hidden select each time a face is selected.
-    new MutationObserver(() => {
-        syncSearchFromSelection();
-        if (document.activeElement === input) renderResults();
-    }).observe(personSelect, { childList: true, subtree: true, attributes: true });
-
-    new MutationObserver(() => {
-        if (editor.classList.contains('open')) syncSearchFromSelection();
-        else {
+    window.addEventListener('family-face-editor-state', event => {
+        if (!event.detail?.open) {
             input.value = '';
             closeResults();
+            return;
         }
-    }).observe(editor, { attributes: true, attributeFilter: ['class'] });
+        syncSearchFromSelection();
+        if (document.activeElement === input) renderResults();
+    });
 
-    personSelect.addEventListener('change', () => requestAnimationFrame(syncSearchFromSelection));
     syncSearchFromSelection();
 })();
