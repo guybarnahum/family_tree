@@ -10,7 +10,7 @@
 
     const Metadata = window.FamilyPersonMetadata || {
         metadataObject: value => value && typeof value === 'object' && !Array.isArray(value) ? value : {},
-        normalize: value => value && typeof value === 'object' && !Array.isArray(value) ? value : {},
+        normalize: value => ({ ...(value || {}) }),
         placeText: value => typeof value === 'string' ? value.trim() : String(value?.text ?? '').trim(),
         inferCountryCode: () => null,
         flagEmoji: () => '',
@@ -602,7 +602,10 @@
                     'absolute -top-2.5 left-1/2 -translate-x-1/2 bg-leaf-light text-white text-[8px] px-2 py-0.5 rounded-full hover:bg-leaf shadow z-30 transition whitespace-nowrap');
             }
             const spouse = card.querySelector('[data-action="add-spouse"]');
-            if (spouse) spouse.textContent = '+ בן/בת זוג';
+            if (spouse) {
+                const sex = metadataForPerson(Store.person(card.dataset.nodeId)).sex;
+                spouse.textContent = sex === 'male' ? '+ בת זוג' : sex === 'female' ? '+ בן זוג' : '+ בן/בת זוג';
+            }
             const child = card.querySelector('[data-action="add-child"]');
             if (child) child.textContent = '+ ילד';
         });
@@ -647,7 +650,7 @@
     window.addEventListener('family-selection-changed', renderPerson);
     window.addEventListener('family-graph-rendered', refreshFromGraph);
     window.addEventListener('family-person-pane-saved', event => {
-        if (event.detail?.id === currentRootId() && event.detail?.field === 'metadata') renderPerson();
+        if (event.detail?.id === currentRootId() && event.detail?.field === 'metadata') refreshFromGraph();
     });
 
     mobileQuery.addEventListener?.('change', () => {
