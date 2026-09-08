@@ -2,7 +2,6 @@
 
 const assert = require('assert');
 const fs = require('fs');
-
 const read = path => fs.readFileSync(path, 'utf8');
 
 const nodeHover = read('public/node-hover.js');
@@ -16,6 +15,7 @@ const faceFootprint = read('public/node-face-footprint.js');
 const bootstrap = read('public/runtime-bootstrap.js');
 const graphView = read('public/graph-view.js');
 const controller = read('public/render-controller.js');
+const api = read('public/family-api.js');
 const store = read('public/graph-store.js');
 const sync = read('public/graph-sync.js');
 const visualRoles = read('public/visual-roles.js');
@@ -32,14 +32,14 @@ assert(!nodeHover.includes('history.replaceState'), 'node-hover must not own sel
 
 assert(!importExport.includes('history.replaceState'), 'import/export must not own selection persistence');
 assert(!importExport.includes('startFamilyGraph?.()'), 'import/export must not start the runtime');
-assert(!importExport.includes('interaction-refinement.js'), 'import/export must not dynamically load interaction');
+assert(importExport.includes('FamilyGraphStore') && importExport.includes('FamilyMutations'),
+  'import/export must use canonical graph owners');
+assert(!importExport.includes("fetch('/api/graph'"), 'import/export must not bypass graph owners');
 
 assert(!interaction.includes("fetch('/api/graph'"), 'interaction must not fetch canonical graph for styling');
 assert(!interaction.includes('history.replaceState'), 'interaction must not wrap selection history');
 assert(!/\blayoutAndRender\s*\(\s*\)/.test(interaction), 'interaction must not request corrective layouts');
 
-// SelectionController is the final active history owner. Presentation is no longer part
-// of the history chain; remaining legacy wrappers are overwritten when runtime-ready fires.
 assert(selection.includes('function installHistoryOwner()'), 'selection controller must expose history ownership install');
 assert(selection.includes("window.addEventListener('family-runtime-ready', installHistoryOwner)"),
   'selection controller must reclaim history after legacy feature bootstrap');
@@ -47,8 +47,6 @@ assert(!/history\.replaceState\s*=/.test(presentation), 'presentation must not w
 assert(!/history\.pushState\s*=/.test(presentation), 'presentation must not wrap pushState');
 assert(!/new\s+MutationObserver/.test(presentation), 'presentation must use render lifecycle, not card DOM observation');
 
-// Generic legacy layout/anchor calls are compatibility no-ops. Geometry-changing feature
-// modules use the explicit controller API instead of creating their own render generations.
 assert(controller.includes('legacyLayoutRequestsIgnored'), 'controller must track ignored legacy layouts');
 assert(controller.includes('legacyViewportRequestsIgnored'), 'controller must track ignored legacy anchor restores');
 assert(controller.includes('function controlledLayoutAndRender()'), 'controller must own legacy layout facade');
@@ -77,23 +75,17 @@ assert(bootstrap.includes("'/person-pane-editing.js'"), 'bootstrap must load sem
 assert(bootstrap.includes("'/graph-card-geometry.js'"), 'bootstrap must load semantic graph-card geometry module');
 assert(!bootstrap.includes('slice-a-'), 'bootstrap must not retain slice-derived feature names');
 for (const retired of [
-  'revision-layout-guard.js',
-  'graph-render-stability.js',
-  'root-context-refinement.js',
-  'root-selection-coherence.js'
+  'revision-layout-guard.js', 'graph-render-stability.js',
+  'root-context-refinement.js', 'root-selection-coherence.js'
 ]) {
   assert(!bootstrap.includes(retired), `${retired} must not load`);
   assert(!fs.existsSync(`public/${retired}`), `${retired} must be physically removed`);
 }
 
 for (const stage of [
-  "name: 'relationship-compaction'",
-  "name: 'planar'",
-  "name: 'member-order'",
-  "name: 'bridge-compaction'"
-]) {
-  assert(bootstrap.includes(stage), `bootstrap must register ${stage}`);
-}
+  "name: 'relationship-compaction'", "name: 'planar'",
+  "name: 'member-order'", "name: 'bridge-compaction'"
+]) assert(bootstrap.includes(stage), `bootstrap must register ${stage}`);
 assert(bootstrap.includes("name: 'planar-router'"), 'bootstrap must register final connector stage');
 assert(bootstrap.includes('ownsPrefix: true'), 'member-order must explicitly own its feedback prefix');
 
@@ -109,16 +101,13 @@ assert(layoutInstall < graphStart, 'final named layout pipeline must install bef
 assert(graphStart < syncInstall, 'sync must start only after the first committed graph render');
 
 assert(graphView.includes('controller.renderProjection({'), 'graph-view must commit projection through RenderController');
-assert(graphView.includes('await controller.prepare({'), 'structural graph loads must prepare named stages first');
-const renderBody = graphView.slice(
-  graphView.indexOf('function renderGraphView'),
-  graphView.indexOf('function chooseInitialRoot')
-);
-const controllerPath = renderBody.indexOf('controller.renderProjection({');
-const fallbackPath = renderBody.indexOf('requestAnimationFrame(() => {');
-assert(controllerPath >= 0, 'renderGraphView must expose the controller path');
-assert(fallbackPath < 0 || controllerPath < fallbackPath,
-  'the authoritative controller path must precede any development-only fallback');
+assert(graphView.includes('await controller?.prepare?.({'), 'structural graph loads must prepare named stages first');
+assert(graphView.includes('FamilyGraphStore'), 'graph-view must consume GraphStore');
+assert(!graphView.includes("fetch('/api/graph'"), 'graph-view must not bypass GraphStore');
+assert(!graphView.includes('history.replaceState'), 'graph-view must not own selection history');
+assert(!graphView.includes('baseSaveEdit'), 'graph-view must not retain saveEdit wrappers');
+assert(!graphView.includes('requestAnimationFrame(() => {\n                layoutAndRender'),
+  'graph-view must not retain legacy render fallback');
 
 assert(controller.includes('function baseGeometry()'), 'RenderController must own base geometry');
 assert(controller.includes('function runThrough('), 'RenderController must own named-stage execution');
@@ -126,25 +115,32 @@ assert(controller.includes('function completeVisualCommit('), 'RenderController 
 assert(controller.includes("window.dispatchEvent(new CustomEvent('family-graph-rendered'"),
   'RenderController must publish committed render generations');
 
+assert(api.includes('window.FamilyApi = Object.freeze'), 'FamilyApi must own explicit browser transport');
+assert(api.includes('const nativeFetch = window.fetch.bind(window)'), 'FamilyApi must capture native fetch once');
+assert(!api.includes('window.fetch ='), 'FamilyApi must not monkey-patch window.fetch');
+assert(api.includes("new CustomEvent('family-api-mutation'"), 'FamilyApi must publish explicit mutation events');
+assert(!fs.existsSync('public/media-resilience.js'), 'old global media fetch wrapper must be removed');
+
 assert(store.includes('window.FamilyGraphStore = Object.freeze'), 'GraphStore must own canonical client graph state');
-assert(store.includes('window.fetch = async function graphStoreFetch'), 'GraphStore must own /api/graph read interception');
+assert(store.includes('const Api = window.FamilyApi'), 'GraphStore must use FamilyApi transport');
+assert(!store.includes('window.fetch ='), 'GraphStore must not monkey-patch fetch');
+assert(!store.includes('nativeFetch'), 'GraphStore must not own native transport');
 assert(store.includes('peopleById') && store.includes('parentsByChild') && store.includes('spousesByPerson'),
   'GraphStore must own shared topology indexes');
 assert(!store.includes('FamilyGraphCache'), 'GraphStore must not expose a cache compatibility API');
-assert(!store.includes("family-graph-fetch'"), 'GraphStore must not emit the retired graph-fetch event');
 assert(!fs.existsSync('public/graph-cache.js'), 'old graph-cache file must be removed');
 assert(!fs.existsSync('public/graph-resilience.js'), 'old graph-resilience file must be removed');
 
 assert(sync.includes('const Store = window.FamilyGraphStore'), 'sync must consume GraphStore');
+assert(sync.includes('const Api = window.FamilyApi'), 'sync must consume FamilyApi');
+assert(!sync.includes('window.fetch ='), 'sync must not monkey-patch fetch');
+assert(sync.includes("window.addEventListener('family-api-mutation'"),
+  'sync must observe explicit mutation events');
 for (const retiredToken of [
-  '__familyRevisionReconcileToken',
-  '__familyGraphMutationLayoutToken',
-  'settleRenderWindow',
-  'family-revision-layout-suppressed',
+  '__familyRevisionReconcileToken', '__familyGraphMutationLayoutToken',
+  'settleRenderWindow', 'family-revision-layout-suppressed',
   'family-noop-resize-layout-suppressed'
-]) {
-  assert(!sync.includes(retiredToken), `sync must not retain ${retiredToken}`);
-}
+]) assert(!sync.includes(retiredToken), `sync must not retain ${retiredToken}`);
 
 assert(!visualRoles.includes('new MutationObserver'), 'visual roles must use explicit lifecycle events');
 assert(visualRoles.includes('FamilyGraphStore'), 'visual roles must use shared Store indexes');
@@ -165,7 +161,11 @@ for (const active of [sync, visualRoles, parentLimit, identity, pickerRefresh, u
   assert(!active.includes('FamilyGraphCache'), 'active runtime modules must not reference FamilyGraphCache');
 }
 
+assert(entry.includes("'/family-api.js'"), 'entry must install FamilyApi before GraphStore');
+assert(entry.indexOf("'/family-api.js'") < entry.indexOf("'/graph-store.js'"),
+  'FamilyApi must load before GraphStore');
 assert(entry.includes("'/graph-store.js'"), 'entry must install GraphStore foundation');
+assert(!entry.includes("'/media-resilience.js'"), 'entry must not install retired media wrapper');
 assert(!entry.includes("'/graph-cache.js'"), 'entry must not install retired graph cache');
 assert(!entry.includes("'/graph-resilience.js'"), 'entry must not install retired graph resilience');
 assert(entry.includes("if (!url.pathname.startsWith('/api/'))"), 'entry must own frontend asset handling directly');
