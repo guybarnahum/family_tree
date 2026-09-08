@@ -18,6 +18,7 @@ const parentLimit = read('public/parent-limit.js');
 const identity = read('public/person-identity.js');
 const pickerRefresh = read('public/person-picker-refresh.js');
 const unionActions = read('public/union-child-actions.js');
+const multiPartner = read('public/multi-partner-refinement.js');
 const entry = read('src/entry.js');
 
 assert(!nodeHover.includes('appendScript('), 'node-hover must not bootstrap runtime scripts');
@@ -117,6 +118,12 @@ assert(pickerRefresh.includes('FamilyGraphStore'), 'picker refresh must use Grap
 assert(unionActions.includes('FamilyGraphStore'), 'union actions must use GraphStore');
 assert(!unionActions.includes('new MutationObserver'), 'union actions must use explicit render/store lifecycle');
 assert(!unionActions.includes('unionChildAwareLayout'), 'union actions must not wrap layout ownership');
+assert(!multiPartner.includes('loadGraphDocument(true).then'),
+  'multi-partner must not autonomously render after loading relationship data');
+assert(!multiPartner.includes('renderCards();'),
+  'multi-partner must not recreate cards outside graph-view projection ownership');
+assert(!multiPartner.includes('requestAnimationFrame(() => layoutAndRender())'),
+  'multi-partner must not schedule its own layout generation');
 for (const active of [sync, visualRoles, parentLimit, identity, pickerRefresh, unionActions]) {
   assert(!active.includes('FamilyGraphCache'), 'active runtime modules must not reference FamilyGraphCache');
 }
