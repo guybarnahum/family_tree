@@ -17,17 +17,16 @@ const listeners = new Map();
 const field = {
   dataset: { field: 'name' },
   textContent: 'Sophia Bar-Nahum',
-  // Simulate the layout-sensitive value that caused the production bug while canvas was hidden.
-  innerText: '',
+  innerText: '', // reproduce the old hidden-layout failure mode
   classList: new ClassListStub(),
   closest(selector) {
-    return selector.includes('contenteditable') ? this : null;
+    return selector.includes('[data-field]') ? this : null;
   }
 };
 
 const cardsLayer = {
   querySelectorAll(selector) {
-    return selector.includes('[contenteditable="true"][data-field]') ? [field] : [];
+    return selector.includes('.absolute-card [data-field]') ? [field] : [];
   },
   addEventListener(type, handler) {
     if (!listeners.has(type)) listeners.set(type, []);
@@ -68,7 +67,7 @@ assert.strictEqual(
 
 field.textContent = 'שם';
 context.dispatchEvent({ type: 'family-graph-rendered' });
-assert.strictEqual(field.classList.contains('default-node-text'), true, 'literal placeholder should be marked');
+assert.strictEqual(field.classList.contains('default-node-text'), true, 'literal placeholder should be marked on read-only cards');
 
 field.textContent = 'Itai Nahum';
 context.dispatchEvent({ type: 'family-graph-rendered' });
