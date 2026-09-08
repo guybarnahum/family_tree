@@ -89,7 +89,6 @@
             ['/node-face-decoration.js', 'data-family-node-face-decoration'],
             ['/union-child-actions.js', 'data-family-union-child-actions'],
             ['/person-pane-position.js', 'data-family-person-pane-position'],
-            ['/mobile-chrome.js', 'data-family-mobile-chrome'],
             ['/person-pane-editing.js', 'data-family-person-pane-editing'],
             ['/print-refinement.js', 'data-family-print']
         ];
