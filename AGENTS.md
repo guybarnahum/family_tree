@@ -150,6 +150,9 @@ root-selection-coherence.js
 print-polish.js
 parent-limit.js
 interaction-refinement.js
+person-picker-refresh.js
+face-open-selection.js
+graph-card-geometry.js
 ```
 
 ## Projection / visual roles
@@ -201,6 +204,10 @@ planar-router              prepare:60 + final connector owner
 
 Member-order feedback explicitly calls `FamilyRenderController.runThrough('planar')`. Never add corrective render/centering RAFs, timers or observers.
 
+`family-core.js` now directly owns the compact generation-centered vertical geometry that previously won through `graph-card-geometry.js`: desktop gap 96, mobile gap 84, compact fallback band 56, and mobile top padding 150. `graph-card-geometry.js` is deleted and `mobile-refinement.js` no longer replaces `assignVerticalPositions`.
+
+`mobile-refinement.js` still owns a mobile-only horizontal spacing override (`unitSeparation` / `simplePack`, gap 48). That remaining monkey patch should eventually move into foundational geometry rather than gain another wrapper.
+
 `union-child-actions.js` is commit-only presentation. RenderController calls `FamilyUnionChildActions.refresh()` after final geometry; the module no longer listens to Store/render/pane/identity events or queues its own RAF pass.
 
 ## Person pane / mobile
@@ -213,23 +220,21 @@ Member-order feedback explicitly calls `FamilyRenderController.runThrough('plana
 
 `place-autocomplete.js` consumes pane selection/render/save lifecycle directly for stored flags; its pane-body MutationObserver and RAF repair passes are deleted. Autocomplete debounce/focus timing remains local input behavior.
 
-`mobile-refinement.js` owns only responsive CSS and spacing primitives. It does not self-load modules, draw connectors, reroot, or perform startup/corrective centering.
+`person-media.js` now consumes explicit selection/render/save lifecycle and calls `ensureSection()` synchronously. Its pane-body MutationObserver, RAF queue, unused cards-layer dependency and stale edit-state compatibility writes are deleted.
 
 ## Media / faces / pickers
 
 D1 stores metadata; originals live in R2. Preferred face is `metadata.primaryFaceId` and must belong to that person or deterministic fallback applies.
 
+`face-tagging.js` owns face-editor people population from the current GraphStore, uses `FamilyPersonIdentity` for disambiguated labels, and chooses the initial selected face itself (selected person's tagged face, otherwise the first face). The former `person-picker-refresh.js` and `face-open-selection.js` repair layers are deleted; there is no 90-frame polling or synthetic pointer selection.
+
+`person-identity.js` owns canonical normalized/disambiguated labels. `person-picker-labels.js` still exists only as presentation decoration for graph/face search results and select options; remove it only after those producers render `Identity.describe(...)` directly.
+
 Graph-card face decoration uses committed render/face lifecycle directly. `node-face-decoration.js` applies synchronously at those boundaries; its old extra RAF apply queue and unrelated pane-metadata refresh listener are deleted.
 
 `node-face-footprint.js` still wraps `measureCards`; do not move that monkey patch elsewhere. The proper cleanup is to make foundational card measurement account for avatar overflow, then delete the module.
 
-`face-primary.js` refreshes preferred-face state from authoritative `family-api-mutation` events instead of delayed retry timers. Modal-local observers may remain where they genuinely observe local interaction state.
-
-`person-identity.js` owns canonical normalized/disambiguated labels. `person-picker-labels.js` no longer observes `document.body`; it reacts only to picker input/focus and Identity updates.
-
-`person-picker-refresh.js` still exists and is a candidate for deletion by moving face-select/search refresh fully into their producer modules. `face-open-selection.js` is also repair architecture (polling + synthetic pointer events); its behavior should move into `face-tagging.js`, not into another wrapper.
-
-`person-media.js` still watches pane-body insertion. Replace that with the explicit PersonPane selection/render lifecycle when editing its owner; do not add another observer/event bridge.
+`face-tagging-ux.js` and `face-primary.js` still contain modal-local observers. They are candidates for consolidation only if FaceTagging explicitly owns/publishes the corresponding editor state; do not replace them with another observer/event bridge.
 
 ## Print
 
@@ -243,12 +248,12 @@ Deletion-first does not mean “zero observers.” Keep local observers when the
 
 High-value remaining candidates:
 
-- producer-owned face/search labels and picker data → delete `person-picker-refresh.js`, potentially `person-picker-labels.js`;
-- move initial tagged-face selection into `face-tagging.js` → delete `face-open-selection.js` and its 90-frame/synthetic-pointer repair path;
-- explicit PersonPane lifecycle in `person-media.js` → delete its pane-body observer/RAF queue;
 - integrate avatar overflow into foundational `measureCards` → delete `node-face-footprint.js`;
-- integrate compact generation vertical geometry into the real geometry owner → delete `graph-card-geometry.js` and its `assignVerticalPositions` monkey patch;
-- remove stale `.graph-select-zone` selectors from older mobile/person-pane/print CSS when touching those owners.
+- move mobile horizontal spacing into foundational geometry → remove `unitSeparation` / `simplePack` monkey patches from `mobile-refinement.js`;
+- make GraphView and face-search producers render `FamilyPersonIdentity.describe(...)` directly → delete `person-picker-labels.js` and remove it from foundations;
+- consolidate FaceTagging/face UX state only where doing so deletes the remaining local observer bridges;
+- remove stale `.graph-select-zone` selectors from person-pane/print CSS now that no module creates that element;
+- remove stale planning comments while touching their owners.
 
 Do not redesign the proven layout algorithms during cleanup.
 
