@@ -6,12 +6,15 @@ let unitByNodeId = new Map();
 
 const SPOUSE_EDGE_GAP = 34;
 const UNIT_GAP = 90;
-const GENERATION_GAP = 150;
 const CANVAS_PAD_X = 240;
 const CANVAS_PAD_TOP = 180;
 const CANVAS_PAD_BOTTOM = 220;
 const CARD_FALLBACK_WIDTH = 170;
 const CARD_FALLBACK_HEIGHT = 100;
+const DESKTOP_GENERATION_GAP = 96;
+const MOBILE_GENERATION_GAP = 84;
+const COMPACT_BAND_FALLBACK = 56;
+const MOBILE_CANVAS_PAD_TOP = 150;
 const ORDER_SWEEPS = 8;
 const POSITION_SWEEPS = 10;
 const CONNECTOR_KNEE_RADIUS = 10;
@@ -20,6 +23,7 @@ const viewport = document.getElementById('scroll-viewport');
 const canvas = document.getElementById('canvas');
 const cardsLayer = document.getElementById('cards-layer');
 const svgLayer = document.getElementById('svg-layer');
+const geometryMobileQuery = window.matchMedia('(max-width: 768px), (hover: none) and (pointer: coarse)');
 
 function escapeHTML(value) {
     return String(value ?? '')
@@ -361,12 +365,20 @@ function layoutUnits() {
 
 function assignVerticalPositions(byGen) {
     const gens = [...byGen.keys()].sort((a, b) => a - b);
-    let y = CANVAS_PAD_TOP;
+    const generationGap = geometryMobileQuery.matches ? MOBILE_GENERATION_GAP : DESKTOP_GENERATION_GAP;
+    let bandTop = geometryMobileQuery.matches ? MOBILE_CANVAS_PAD_TOP : CANVAS_PAD_TOP;
     for (const gen of gens) {
         const units = byGen.get(gen);
-        const bandHeight = Math.max(...units.map(unit => unit.height), CARD_FALLBACK_HEIGHT);
-        units.forEach(unit => unit.members.forEach(member => member.targetY = y));
-        y += bandHeight + GENERATION_GAP;
+        const bandHeight = Math.max(...units.map(unit => unit.height), COMPACT_BAND_FALLBACK);
+        const centerY = bandTop + bandHeight / 2;
+        for (const unit of units) {
+            unit.generationCenterY = centerY;
+            for (const member of unit.members) {
+                member.generationCenterY = centerY;
+                member.targetY = centerY - member.cardHeight / 2;
+            }
+        }
+        bandTop += bandHeight + generationGap;
     }
 }
 
