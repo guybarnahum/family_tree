@@ -45,6 +45,9 @@ parent('S', 'C');
 parent('O', 'C');
 parent('P', 'S');
 spouse('P', 'Q');
+// B is R's sibling, but is also reachable through the spouse-ancestry walk as P's spouse.
+// Root-family protection must win: siblings are never visually dimmed.
+spouse('P', 'B');
 parent('D', 'P');
 
 const cards = ['R', 'S', 'B', 'O', 'C', 'P', 'Q', 'D'].map(id =>
@@ -143,6 +146,10 @@ assert.strictEqual(card('R').classList.contains('graph-spouse-ancestor-deep'), f
 assert.strictEqual(card('R').dataset.familyVisualRole, 'root');
 
 assert.strictEqual(card('B').classList.contains('graph-context'), false);
+assert.strictEqual(card('B').classList.contains('graph-spouse-parent'), false,
+  'root sibling must not be dimmed even when reachable through spouse ancestry');
+assert.strictEqual(card('B').classList.contains('graph-spouse-ancestor-deep'), false,
+  'root sibling must never receive deep spouse-ancestry dimming');
 assert.strictEqual(card('B').dataset.familyVisualRole, 'sibling');
 
 assert.strictEqual(card('O').classList.contains('graph-context'), true);
