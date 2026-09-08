@@ -10,7 +10,6 @@
 
     let preferredByPerson = new Map();
     let refreshSerial = 0;
-    let applyFrame = 0;
 
     const style = document.createElement('style');
     style.textContent = `
@@ -62,7 +61,7 @@
         image.src = face.contentUrl || `/api/media/${encodeURIComponent(face.mediaId)}/content`;
         image.addEventListener('load', () => applyCrop(image, face), { once: true });
         avatar.appendChild(image);
-        if (image.complete && image.naturalWidth) requestAnimationFrame(() => applyCrop(image, face));
+        if (image.complete && image.naturalWidth) applyCrop(image, face);
         return avatar;
     }
 
@@ -81,14 +80,6 @@
         }
     }
 
-    function queueApply() {
-        if (applyFrame) cancelAnimationFrame(applyFrame);
-        applyFrame = requestAnimationFrame(() => {
-            applyFrame = 0;
-            apply();
-        });
-    }
-
     async function refresh() {
         const serial = ++refreshSerial;
         try {
@@ -99,19 +90,16 @@
             preferredByPerson = new Map(
                 (Array.isArray(payload.items) ? payload.items : []).map(item => [item.personId, item])
             );
-            queueApply();
+            apply();
         } catch (error) {
             console.warn('Unable to load preferred faces:', error);
         }
     }
 
-    window.addEventListener('family-graph-rendered', queueApply);
+    window.addEventListener('family-graph-rendered', apply);
     window.addEventListener('family-faces-changed', () => void refresh());
     window.addEventListener('family-face-primary-changed', () => void refresh());
     window.addEventListener('family-graph-synced', () => void refresh());
-    window.addEventListener('family-person-pane-saved', event => {
-        if (event.detail?.field === 'metadata') void refresh();
-    });
 
     void refresh();
 })();
