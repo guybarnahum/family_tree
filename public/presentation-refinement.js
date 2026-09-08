@@ -1,8 +1,8 @@
 // Presentation polish shared by desktop and mobile person-centric views.
+// M4-B: presentation owns CSS only; RenderController owns geometry + viewport commits.
 (() => {
-    const viewport = document.getElementById('scroll-viewport');
     const cardsLayer = document.getElementById('cards-layer');
-    if (!viewport || !cardsLayer) return;
+    if (!cardsLayer) return;
 
     const mobileQuery = window.matchMedia('(max-width: 768px), (hover: none) and (pointer: coarse)');
 
@@ -20,8 +20,6 @@
             transition: opacity 0.16s ease, transform 0.18s ease;
         }
 
-        /* Unselected cards read as clean name tiles. Details remain in normal flow so
-           the card rectangle does not change when hover reveals them. */
         .absolute-card:not(.graph-root):not(:hover):not(:focus-within) h2[data-field="name"] {
             transform: translateY(var(--idle-name-shift, 16px));
         }
@@ -50,8 +48,6 @@
         }
 
         @media (max-width: 768px), (hover: none) and (pointer: coarse) {
-            /* Compact context cards stay readable, while the selected card has enough
-               room for full dates, description and touch controls. */
             .absolute-card {
                 min-width: 150px !important;
                 max-width: 192px !important;
@@ -91,7 +87,6 @@
                 line-height: 1.38 !important;
             }
 
-            /* Touch has no dependable hover. Non-root = compact name tile; root = expanded. */
             .absolute-card:not(.graph-root) h2[data-field="name"] {
                 transform: translateY(var(--idle-name-shift, 14px)) !important;
             }
@@ -124,10 +119,6 @@
     function updateIdleNameShift(card) {
         const name = card.querySelector('h2[data-field="name"]');
         if (!name) return;
-
-        // offsetTop/offsetHeight ignore CSS transforms. Center the name against the real
-        // card box, so hidden details and the desktop recenter-footer reserve are both
-        // accounted for exactly instead of approximated from text heights.
         const cardHeight = card.clientHeight;
         const nameCenter = name.offsetTop + name.offsetHeight / 2;
         const desiredCenter = cardHeight / 2;
@@ -149,113 +140,17 @@
         });
     }
 
-    function currentRootId() {
-        const urlId = new URL(window.location.href).searchParams.get('person');
-        if (urlId) return urlId;
-        try { return localStorage.getItem('family-tree.anchor-person'); }
-        catch (_) { return null; }
-    }
-
-    function centerSelectedPerson() {
-        if (!mobileQuery.matches) return;
-        const rootId = currentRootId();
-        if (!rootId) return;
-        const card = document.getElementById(`card-${rootId}`);
-        if (!card) return;
-
-        const viewportRect = viewport.getBoundingClientRect();
-        const cardRect = card.getBoundingClientRect();
-        if (!cardRect.width || !cardRect.height) return;
-
-        const cardCenterX = cardRect.left + cardRect.width / 2;
-        const cardCenterY = cardRect.top + cardRect.height / 2;
-        const viewportCenterX = viewportRect.left + viewportRect.width / 2;
-        const viewportCenterY = viewportRect.top + viewportRect.height / 2;
-
-        const nextLeft = Math.max(0, viewport.scrollLeft + (cardCenterX - viewportCenterX));
-        const nextTop = Math.max(0, viewport.scrollTop + (cardCenterY - viewportCenterY));
-        viewport.scrollTo({ left: nextLeft, top: nextTop, behavior: 'auto' });
-    }
-
-    let centerFrame = 0;
-    let centerTimer = 0;
-    function queueMobileCenter() {
-        if (!mobileQuery.matches) return;
-        if (centerFrame) cancelAnimationFrame(centerFrame);
-        if (centerTimer) clearTimeout(centerTimer);
-
-        // Layout/refinement uses multiple animation frames. Wait until those settle, then
-        // correct using the actual rendered rectangle. The short delayed pass handles font
-        // metrics / mobile browser viewport settling without polling or a busy loop.
-        centerFrame = requestAnimationFrame(() => {
-            centerFrame = requestAnimationFrame(() => {
-                centerFrame = requestAnimationFrame(() => {
-                    centerFrame = 0;
-                    queueCardUpdate();
-                    centerSelectedPerson();
-                });
-            });
-        });
-        centerTimer = window.setTimeout(() => {
-            queueCardUpdate();
-            centerSelectedPerson();
-        }, 120);
-    }
-
-    function relayoutForPresentation() {
-        if (!globalNodes?.length) return;
-        try {
-            layoutAndRender();
-            queueCardUpdate();
-            queueMobileCenter();
-        } catch (error) {
-            console.warn('Unable to reflow presentation-sized cards:', error);
-        }
-    }
-
-    const observer = new MutationObserver(mutations => {
-        if (!mutations.some(mutation => mutation.type === 'childList')) return;
-        queueCardUpdate();
-        queueMobileCenter();
-    });
-    observer.observe(cardsLayer, { childList: true });
-
-    // Root changes replace the card set, but history events give us an additional reliable
-    // signal when selection comes from search/autocomplete.
-    const priorReplaceState = history.replaceState.bind(history);
-    history.replaceState = function presentationReplaceState(...args) {
-        const result = priorReplaceState(...args);
-        queueCardUpdate();
-        queueMobileCenter();
-        return result;
-    };
-
-    const priorPushState = history.pushState.bind(history);
-    history.pushState = function presentationPushState(...args) {
-        const result = priorPushState(...args);
-        queueCardUpdate();
-        queueMobileCenter();
-        return result;
-    };
-
-    window.addEventListener('popstate', () => {
-        queueCardUpdate();
-        queueMobileCenter();
-    });
-    window.addEventListener('resize', () => {
-        queueCardUpdate();
-        queueMobileCenter();
-    }, { passive: true });
-    window.addEventListener('orientationchange', () => {
-        requestAnimationFrame(relayoutForPresentation);
-    }, { passive: true });
+    window.addEventListener('family-graph-rendered', queueCardUpdate);
+    window.addEventListener('resize', queueCardUpdate, { passive: true });
     mobileQuery.addEventListener?.('change', () => {
-        requestAnimationFrame(relayoutForPresentation);
+        queueCardUpdate();
+        if (!globalNodes?.length) return;
+        void window.FamilyRenderController?.requestLayout?.({
+            reason: 'presentation-breakpoint',
+            preserveAnchor: false,
+            recenter: true
+        });
     });
 
-    // presentation-refinement loads after the mobile sizing layer. Re-measure exactly once
-    // after its CSS applies so connector geometry uses the wider selected card immediately.
-    requestAnimationFrame(() => {
-        requestAnimationFrame(relayoutForPresentation);
-    });
+    queueCardUpdate();
 })();
