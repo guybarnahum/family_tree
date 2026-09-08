@@ -204,12 +204,8 @@
         chooseResult(editor, result);
     });
 
-    // Person-pane markup is still replaced internally; this observer is pane-local, not a graph lifecycle bus.
-    const body = pane.querySelector('.person-pane-body');
-    if (body) {
-        new MutationObserver(() => requestAnimationFrame(syncAllStoredFlags))
-            .observe(body, { childList: true, subtree: true });
-    }
-    window.addEventListener('family-person-pane-saved', () => requestAnimationFrame(syncAllStoredFlags));
-    requestAnimationFrame(syncAllStoredFlags);
+    window.addEventListener('family-selection-changed', syncAllStoredFlags);
+    window.addEventListener('family-graph-rendered', syncAllStoredFlags);
+    window.addEventListener('family-person-pane-saved', syncAllStoredFlags);
+    syncAllStoredFlags();
 })();
