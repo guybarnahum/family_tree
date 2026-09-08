@@ -76,6 +76,14 @@
         return inferred;
     }
 
+    function person(personId) {
+        const value = peopleById.get(personId) || null;
+        const effectiveSex = sex(personId);
+        return value && effectiveSex && !value.metadata?.sex
+            ? { ...value, metadata: { ...(value.metadata || {}), sex: effectiveSex } }
+            : value;
+    }
+
     function snapshot() {
         return {
             graph, savedAt, revision, serverRevision, stale, dirty, source,
@@ -332,8 +340,7 @@
     window.FamilyGraphStore = Object.freeze({
         snapshot, read, refresh, replace,
         indexes: () => snapshot().indexes,
-        person: id => peopleById.get(id) || null,
-        sex,
+        person, sex,
         updatePerson, markStale, markDirty, markClean, acknowledgeRevision,
         noteMutation, clear, ageMs, isGraphDocument, finiteRevision
     });
