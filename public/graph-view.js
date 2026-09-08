@@ -358,12 +358,6 @@
         if (subtitle) subtitle.textContent = 'דורות של אהבה • גרור כדי לנווט';
         if (searchInput && document.activeElement !== searchInput) searchInput.value = '';
     }
-    function expansionSignature() {
-        return [...expandedBySource]
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([sourceId, branches]) => `${sourceId}:${[...branches].sort().join('|')}`)
-            .join(',');
-    }
 
     async function renderGraphView({ recenter = false, reason = 'projection' } = {}) {
         if (!graphRootId || !graphPeopleById.has(graphRootId)) return null;
@@ -373,7 +367,6 @@
         computeVisibleGraph();
         globalNodes = projectVisiblePeople();
         globalNodeMap = new Map(globalNodes.map(node => [node.id, node]));
-        dataSignature = `graph:${graphSignature}:${graphRootId}:${expansionSignature()}`;
         renderCards();
         decorateCards();
         updateRootUI();
@@ -560,7 +553,6 @@
             if (branches.size) expandedBySource.set(sourceId, new Set(branches));
             void renderGraphView({ recenter: false, reason: 'expand' });
         }
-        // Ordinary card selection is intentionally owned by SelectionController's capture listener.
     });
 
     window.addEventListener('family-selection-changed', event => {
@@ -583,12 +575,6 @@
     async function refresh({ force = false, recenter = false } = {}) {
         return loadGraph(force, { recenter });
     }
-
-    // Transitional global only for still-captured layout prepare modules. M4-F removes it.
-    loadTree = async function graphAwareLoadTree(_anchorId = null, force = false) {
-        return refresh({ force, recenter: false });
-    };
-    window.loadTree = loadTree;
 
     window.FamilyGraphView = Object.freeze({
         refresh,
