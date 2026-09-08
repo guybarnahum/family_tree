@@ -8,6 +8,11 @@ const read = path => fs.readFileSync(path, 'utf8');
 const nodeHover = read('public/node-hover.js');
 const importExport = read('public/import-export.js');
 const interaction = read('public/interaction-refinement.js');
+const presentation = read('public/presentation-refinement.js');
+const selection = read('public/selection-controller.js');
+const sliceGeometry = read('public/slice-a-geometry.js');
+const slicePolish = read('public/slice-a-polish.js');
+const faceFootprint = read('public/node-face-footprint.js');
 const bootstrap = read('public/runtime-bootstrap.js');
 const graphView = read('public/graph-view.js');
 const controller = read('public/render-controller.js');
@@ -31,7 +36,36 @@ assert(!importExport.includes('interaction-refinement.js'), 'import/export must 
 
 assert(!interaction.includes("fetch('/api/graph'"), 'interaction must not fetch canonical graph for styling');
 assert(!interaction.includes('history.replaceState'), 'interaction must not wrap selection history');
-assert(!interaction.includes('layoutAndRender()'), 'interaction must not request corrective layouts');
+assert(!/\blayoutAndRender\s*\(\s*\)/.test(interaction), 'interaction must not request corrective layouts');
+
+// M4-A: SelectionController is the final active history owner. Presentation is no longer part
+// of the history chain; remaining legacy wrappers are overwritten when runtime-ready fires.
+assert(selection.includes('function installHistoryOwner()'), 'selection controller must expose history ownership install');
+assert(selection.includes("window.addEventListener('family-runtime-ready', installHistoryOwner)"),
+  'selection controller must reclaim history after legacy feature bootstrap');
+assert(!/history\.replaceState\s*=/.test(presentation), 'presentation must not wrap replaceState');
+assert(!/history\.pushState\s*=/.test(presentation), 'presentation must not wrap pushState');
+assert(!/new\s+MutationObserver/.test(presentation), 'presentation must use render lifecycle, not card DOM observation');
+
+// M4-B: generic legacy layout/anchor calls are compatibility no-ops. Geometry-changing feature
+// modules use the explicit controller API instead of creating their own render generations.
+assert(controller.includes('legacyLayoutRequestsIgnored'), 'controller must track ignored legacy layouts');
+assert(controller.includes('legacyViewportRequestsIgnored'), 'controller must track ignored legacy anchor restores');
+assert(controller.includes('function controlledLayoutAndRender()'), 'controller must own legacy layout facade');
+assert(controller.includes('function controlledRestoreAnchor()'), 'controller must own legacy anchor facade');
+assert(controller.includes('function commitRootIdentity(rootId)'), 'controller must commit one authoritative DOM root');
+assert(controller.includes('requestLayout({'), 'controller must expose explicit layout requests');
+assert(!/\blayoutAndRender\s*\(\s*\)/.test(presentation), 'presentation must not invoke legacy layout');
+assert(!/viewport\.(?:scrollLeft|scrollTop)\s*=|viewport\.scrollTo\s*\(/.test(presentation),
+  'presentation must not own viewport positioning');
+for (const [name, source] of [
+  ['slice-a-geometry', sliceGeometry],
+  ['slice-a-polish', slicePolish],
+  ['node-face-footprint', faceFootprint]
+]) {
+  assert(!/\blayoutAndRender\s*\(\s*\)/.test(source), `${name} must not invoke legacy layout`);
+  assert(source.includes('FamilyRenderController'), `${name} must express geometry intent through RenderController`);
+}
 
 assert(bootstrap.includes("'/selection-controller.js'"), 'bootstrap must install selection controller');
 assert(bootstrap.includes("'/render-controller.js'"), 'bootstrap must install RenderController');
