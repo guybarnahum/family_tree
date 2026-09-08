@@ -3,7 +3,6 @@ let globalNodes = [];
 let globalNodeMap = new Map();
 let globalUnits = [];
 let unitByNodeId = new Map();
-let dataSignature = '';
 
 const SPOUSE_EDGE_GAP = 34;
 const UNIT_GAP = 90;
