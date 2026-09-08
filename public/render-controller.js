@@ -1,9 +1,9 @@
-// M2 explicit render ownership for the family graph.
+// M4-B explicit render + viewport ownership for the family graph.
 //
 // One projection generation owns one geometry commit:
 //   projection/cards -> named layout stages -> final connector route -> assertions -> center/anchor.
-// Historical layout modules are captured as named stages by runtime-bootstrap; they no longer
-// own the global layoutAndRender/loadTree chain at runtime.
+// Historical layout modules are captured as named stages by runtime-bootstrap. Their old
+// layoutAndRender callbacks are compatibility-only and are ignored after stage capture.
 (() => {
     if (window.FamilyRenderController) return;
 
@@ -29,9 +29,12 @@
         generationsCommitted: 0,
         generationsSuperseded: 0,
         externalLayouts: 0,
+        explicitLayoutRequests: 0,
+        legacyLayoutRequestsIgnored: 0,
         prepareRuns: 0,
         prepareLayoutRequestsSuppressed: 0,
         connectorRuns: 0,
+        viewportCommits: 0,
         lastGeneration: 0,
         lastReason: '',
         lastRootId: null,
@@ -168,9 +171,6 @@
         if (isRootRun) activeContext = context;
 
         try {
-            // Feedback stages (currently lineage member-order) intentionally own execution of
-            // the prefix because they may rerun it several times. Start at the last such stage,
-            // then run only later deltas. Without an owner, run base geometry then each delta.
             let ownerIndex = -1;
             for (let i = 0; i < selected.length; i++) {
                 if (selected[i].ownsPrefix) ownerIndex = i;
@@ -195,9 +195,6 @@
     }
 
     function runDeferredDiagnostics() {
-        // Old planar stage callbacks contain the useful planarity validator plus historical
-        // connector/assert paints. Execute only the final planar callback with paint/assert
-        // temporarily disabled, preserving diagnostics without creating another SVG generation.
         const planarCallbacks = capturedRafs.filter(item => item.stageName === 'planar');
         const planar = planarCallbacks.length ? planarCallbacks[planarCallbacks.length - 1] : null;
         capturedRafs = [];
@@ -218,22 +215,27 @@
     }
 
     function selectedRootId() {
-        const selected = window.FamilySelectionController?.getSelectedPersonId?.();
-        if (selected) return selected;
-        const card = cardsLayerEl.querySelector('.absolute-card.graph-root[data-node-id]');
-        if (card?.dataset.nodeId) return card.dataset.nodeId;
-        return new URL(window.location.href).searchParams.get('person') || null;
+        return window.FamilySelectionController?.getSelectedPersonId?.() || null;
     }
 
     function centerRoot(rootId = selectedRootId()) {
-        if (!rootId) return;
+        if (!rootId) return false;
         const node = globalNodeMap?.get(rootId);
-        if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.targetY)) return;
+        if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.targetY)) return false;
         viewportEl.scrollLeft = Math.max(0, node.x - viewportEl.clientWidth / 2);
         viewportEl.scrollTop = Math.max(
             0,
             node.targetY - viewportEl.clientHeight / 2 + (Number(node.cardHeight) || 0) / 2
         );
+        diagnostics.viewportCommits += 1;
+        return true;
+    }
+
+    function restoreCommittedAnchor(anchor) {
+        if (!anchor || typeof restoreAnchor !== 'function') return false;
+        restoreAnchor(anchor);
+        diagnostics.viewportCommits += 1;
+        return true;
     }
 
     function finalConnectors() {
@@ -250,11 +252,11 @@
         runDeferredDiagnostics();
         finalConnectors();
         if (typeof assertLayout === 'function') assertLayout();
-        window.FamilyVisualRoles?.refreshNow?.();
+        window.FamilyVisualRoles?.refreshNow?.(options.rootId || selectedRootId());
         window.FamilyUnionChildActions?.refresh?.();
 
         if (options.recenter) centerRoot(options.rootId);
-        else if (options.anchor && typeof restoreAnchor === 'function') restoreAnchor(options.anchor);
+        else if (options.anchor) restoreCommittedAnchor(options.anchor);
 
         diagnostics.generationsCommitted += 1;
         diagnostics.lastGeneration = generation;
@@ -273,8 +275,6 @@
             stages: [...context.stageOrder]
         };
         window.dispatchEvent(new CustomEvent('family-graph-rendered', { detail }));
-        // Compatibility event for feature modules; unlike the retired repair coordinator this
-        // is emitted directly by the one authoritative controller commit.
         window.dispatchEvent(new CustomEvent('family-graph-render-stable', { detail }));
     }
 
@@ -338,28 +338,45 @@
         });
     }
 
-    function requestLayout({ reason = 'layout-request', preserveAnchor = true } = {}) {
+    function requestLayout({
+        reason = 'layout-request',
+        preserveAnchor = true,
+        recenter = false,
+        anchorId = null,
+        hide = false
+    } = {}) {
         const rootId = selectedRootId();
-        const anchor = preserveAnchor && rootId && typeof captureAnchor === 'function'
-            ? captureAnchor(rootId)
+        const effectiveAnchorId = anchorId || rootId;
+        const anchor = !recenter && preserveAnchor && effectiveAnchorId && typeof captureAnchor === 'function'
+            ? captureAnchor(effectiveAnchorId)
             : null;
+        diagnostics.explicitLayoutRequests += 1;
+        expose();
         return schedule({
             kind: 'layout',
             rootId,
-            recenter: false,
+            recenter: !!recenter,
             anchor,
             reason,
-            hide: false
+            hide: !!hide
+        });
+    }
+
+    function requestRecenter({ personId = selectedRootId(), reason = 'recenter' } = {}) {
+        return requestLayout({
+            reason,
+            preserveAnchor: false,
+            recenter: true,
+            anchorId: personId
         });
     }
 
     function controlledLayoutAndRender() {
-        if (prepareDepth > 0) {
-            diagnostics.prepareLayoutRequestsSuppressed += 1;
-            expose();
-            return;
-        }
-        void requestLayout({ reason: 'layoutAndRender' });
+        if (prepareDepth > 0) diagnostics.prepareLayoutRequestsSuppressed += 1;
+        else diagnostics.legacyLayoutRequestsIgnored += 1;
+        expose();
+        // M4-B: no implicit render generation. Feature code must express intent through
+        // FamilyRenderController.requestLayout()/requestRecenter().
     }
 
     function installFacade() {
@@ -369,6 +386,11 @@
         return controlledLayoutAndRender;
     }
 
+    window.addEventListener('resize', () => {
+        if (!globalNodes?.length) return;
+        void requestLayout({ reason: 'viewport-resize', preserveAnchor: true });
+    }, { passive: true });
+
     window.FamilyRenderController = Object.freeze({
         registerLayoutStage,
         registerPrepareStage,
@@ -376,6 +398,8 @@
         prepare,
         renderProjection,
         requestLayout,
+        requestGeometryRefresh: requestLayout,
+        requestRecenter,
         centerRoot,
         installFacade,
         facade: () => controlledLayoutAndRender,
