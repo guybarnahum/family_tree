@@ -88,10 +88,11 @@ const globalNodeMap = new Map(cards.map(card => [
   card.dataset.nodeId,
   {
     id: card.dataset.nodeId,
-    viewRole: card.dataset.nodeId === 'B' ? 'context' : 'primary'
+    viewRole: card.dataset.nodeId === 'B' || card.dataset.nodeId === 'O' ? 'context' : 'primary'
   }
 ]));
 
+let selectedId = 'R';
 const window = {
   location: { href: 'https://family.example/?person=R' },
   FamilyGraphStore: {
@@ -100,7 +101,7 @@ const window = {
       indexes: { parentsByChild, childrenByParent, spousesByPerson, peopleById: new Map() }
     })
   },
-  FamilySelectionController: { getSelectedPersonId: () => 'R' },
+  FamilySelectionController: { getSelectedPersonId: () => selectedId },
   addEventListener(type, handler) {
     if (!listeners.has(type)) listeners.set(type, []);
     listeners.get(type).push(handler);
@@ -152,5 +153,28 @@ assert.strictEqual(card('C').dataset.familyVisualRole, 'other-union-context');
 assert.strictEqual(card('P').classList.contains('graph-spouse-parent'), true);
 assert.strictEqual(card('Q').classList.contains('graph-spouse-parent'), true);
 assert.strictEqual(card('D').classList.contains('graph-spouse-ancestor-deep'), true);
+
+// Pending reroot regression: SelectionController changes immediately when a contextual card is
+// clicked, but the old projection can remain on screen until RenderController commits the new
+// card set. Visual roles must stay bound to the rendered .graph-root during that interval.
+selectedId = 'O';
+window.dispatchEvent({ type: 'family-selection-changed', detail: { personId: 'O', previousPersonId: 'R' } });
+window.FamilyVisualRoles.refreshNow();
+assert.strictEqual(window.__familyVisualRoleDiagnostics.rootId, 'R');
+assert.strictEqual(window.__familyVisualRoleDiagnostics.selectedPersonId, 'O');
+assert.strictEqual(card('R').dataset.familyVisualRole, 'root');
+assert.strictEqual(card('R').classList.contains('graph-context'), false);
+assert.strictEqual(card('O').classList.contains('graph-context'), true);
+
+// Once the projection commits, the rendered root becomes authoritative. Even if the node carried
+// a contextual viewRole in the previous projection, the new root may never remain dimmed.
+card('R').classList.remove('graph-root');
+card('O').classList.add('graph-root');
+window.FamilyVisualRoles.refreshNow();
+assert.strictEqual(window.__familyVisualRoleDiagnostics.rootId, 'O');
+assert.strictEqual(card('O').dataset.familyVisualRole, 'root');
+assert.strictEqual(card('O').classList.contains('graph-context'), false);
+assert.strictEqual(card('O').classList.contains('graph-spouse-parent'), false);
+assert.strictEqual(card('O').classList.contains('graph-spouse-ancestor-deep'), false);
 
 console.log('visual-roles tests passed');
