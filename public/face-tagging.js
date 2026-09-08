@@ -207,17 +207,6 @@
         return Math.max(min, Math.min(max, value));
     }
 
-    function currentMediaId() {
-        try {
-            const url = new URL(image.currentSrc || image.src, window.location.href);
-            const parts = url.pathname.split('/').filter(Boolean);
-            if (parts[0] !== 'api' || parts[1] !== 'media' || parts[3] !== 'content') return null;
-            return decodeURIComponent(parts[2] || '');
-        } catch (_) {
-            return null;
-        }
-    }
-
     function personName(personId) {
         if (!personId) return 'לא מזוהה';
         return Identity?.describe?.(personId)?.name ||
@@ -340,21 +329,20 @@
             selectedFaceId = faces.find(face => selectedPersonId && face.personId === selectedPersonId)?.id ||
                 faces[0]?.id || null;
         }
-        renderFaces();
     }
 
-    async function activate() {
-        if (!modal.classList.contains('open')) return;
-        const id = currentMediaId();
+    async function activate(id) {
         if (!id) return;
         mediaId = id;
         const serial = ++activationSerial;
+        faces = [];
         selectedFaceId = null;
         setDrawMode(false);
         syncOverlayGeometry();
+        renderFaces();
         try {
             await Promise.all([loadPeople(), loadFaces(id, serial)]);
-            if (serial === activationSerial) renderFaces();
+            if (serial === activationSerial && id === mediaId) renderFaces();
         } catch (error) {
             console.warn('Unable to load face tags:', error);
         }
@@ -597,21 +585,15 @@
         }
     });
 
-    image.addEventListener('load', () => {
-        syncOverlayGeometry();
-        if (modal.classList.contains('open')) void activate();
-    });
+    image.addEventListener('load', syncOverlayGeometry);
     window.addEventListener('resize', syncOverlayGeometry, { passive: true });
     window.visualViewport?.addEventListener('resize', syncOverlayGeometry, { passive: true });
     window.addEventListener('family-person-disambiguation-updated', () => {
-        if (!modal.classList.contains('open')) return;
+        if (!mediaId) return;
         void loadPeople().then(() => renderFaces());
     });
-
-    new MutationObserver(() => {
-        if (modal.classList.contains('open')) requestAnimationFrame(() => void activate());
-        else deactivate();
-    }).observe(modal, { attributes: true, attributeFilter: ['class'] });
-
-    if (modal.classList.contains('open')) void activate();
+    window.addEventListener('family-person-media-opened', event => {
+        void activate(event.detail?.mediaId || null);
+    });
+    window.addEventListener('family-person-media-closed', deactivate);
 })();
