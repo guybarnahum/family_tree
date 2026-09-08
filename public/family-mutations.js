@@ -32,6 +32,8 @@
         return 'node_' + Math.random().toString(36).slice(2, 11);
     }
 
+    const oppositeSex = sex => sex === 'male' ? 'female' : sex === 'female' ? 'male' : null;
+
     function sameRelationship(a, b) {
         if (a.type !== b.type) return false;
         if (a.type === 'spouse') {
@@ -42,6 +44,14 @@
     }
 
     function addRelationship(value, relation) {
+        if (relation.type === 'spouse') {
+            const a = value.people.find(person => person.id === relation.person1Id);
+            const b = value.people.find(person => person.id === relation.person2Id);
+            const aSex = a?.metadata?.sex;
+            const bSex = b?.metadata?.sex;
+            if (a && !aSex && oppositeSex(bSex)) a.metadata = { ...(a.metadata || {}), sex: oppositeSex(bSex) };
+            if (b && !bSex && oppositeSex(aSex)) b.metadata = { ...(b.metadata || {}), sex: oppositeSex(aSex) };
+        }
         if (!value.relationships.some(existing => sameRelationship(existing, relation))) {
             value.relationships.push(relation);
         }
@@ -128,10 +138,27 @@
         const revision = Api.revisionFromResponse(response);
         Store.updatePerson(id, effective, { revision, reason });
         diagnostics.personWrites += 1;
-        diagnostics.lastAction = reason;
         diagnostics.lastError = null;
+
+        const inferredSex = oppositeSex(effective.metadata?.sex);
+        if (inferredSex) {
+            for (const relation of Store.snapshot().graph?.relationships || []) {
+                if (relation.type !== 'spouse') continue;
+                const spouseId = relation.person1Id === id
+                    ? relation.person2Id
+                    : relation.person2Id === id ? relation.person1Id : null;
+                const spouse = spouseId ? Store.person(spouseId) : null;
+                if (spouse && !spouse.metadata?.sex) {
+                    await updatePerson(spouseId, {
+                        metadata: { ...(spouse.metadata || {}), sex: inferredSex }
+                    }, { reason: 'infer-spouse-sex' });
+                }
+            }
+        }
+
+        diagnostics.lastAction = reason;
         expose();
-        return { changed: true, revision, patch: effective };
+        return { changed: true, revision: Store.snapshot().revision, patch: effective };
     }
 
     async function addSpouse(partnerId) {
