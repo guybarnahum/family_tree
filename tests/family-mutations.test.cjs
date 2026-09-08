@@ -21,7 +21,7 @@ let graph = {
 let revision = 1;
 let graphPuts = 0;
 let personPatches = 0;
-let loads = 0;
+let graphRefreshes = 0;
 let selected = 'A';
 const events = [];
 
@@ -72,13 +72,18 @@ const context = {
   confirm: () => true,
   showStatus() {},
   globalNodeMap: new Map(),
-  requestAnimationFrame(callback) { callback(); return 1; },
   CustomEvent: class CustomEvent {
     constructor(type, init = {}) { this.type = type; this.detail = init.detail; }
   },
   document: { getElementById(id) { return id === 'cards-layer' ? cardsLayer : null; } },
   dispatchEvent(event) { events.push(event); },
   FamilyGraphStore: Store,
+  FamilyGraphView: {
+    async refresh(options) {
+      graphRefreshes += 1;
+      assert.deepStrictEqual(options, { force: true, recenter: false });
+    }
+  },
   FamilyApi: {
     request: requestStub,
     revisionFromResponse(response) {
@@ -91,8 +96,7 @@ const context = {
     getSelectedPersonId: () => selected,
     selectPerson(id) { selected = id; return true; },
     replaceUrlPerson(id) { selected = id; return true; }
-  },
-  async loadTree() { loads += 1; }
+  }
 };
 context.window = context;
 vm.createContext(context);
@@ -133,7 +137,7 @@ vm.runInContext(source, context, { filename: 'family-mutations.js' });
   assert(!graph.people.some(person => person.id === childId));
   assert.strictEqual(selected, 'A', 'deleting the selected child should move selection to a surviving parent');
 
-  assert(loads >= 3, 'structural writes should refresh through the canonical graph loader');
+  assert(graphRefreshes >= 3, 'structural writes should refresh through FamilyGraphView');
   assert(graphPuts >= 3, 'structural actions should use transactional graph PUTs');
   assert(events.some(event => event.type === 'family-graph-mutated'));
 
