@@ -1,9 +1,12 @@
 // Crossing-safe orthogonal connector router for the visible family graph.
-// It runs after planar-layout.js: spouse/union geometry is preserved, while parent-child
-// buses receive distinct corridor lanes chosen by an explicit segment-intersection solver.
+// Spouse/union geometry is preserved while parent-child buses receive distinct corridor lanes.
 (() => {
     if (window.__familyPlanarRouterInstalled) return;
     window.__familyPlanarRouterInstalled = true;
+
+    const Store = window.FamilyGraphStore;
+    const Controller = window.FamilyRenderController;
+    if (!Store || !Controller) return;
 
     const UNION_LANE_CLEARANCE = 18;
     const UNION_LANE_STEP = 16;
@@ -11,44 +14,15 @@
     const MAX_SEARCH_STATES = 50000;
     const EPSILON = 0.5;
 
-    let graphDocument = null;
-    let graphPromise = null;
+    let graphReady = false;
     let parentsByChild = new Map();
     let spousesByPerson = new Map();
-    let installed = false;
 
-    function addSet(map, key, value) {
-        if (!map.has(key)) map.set(key, new Set());
-        map.get(key).add(value);
-    }
-
-    function rebuildIndexes() {
-        parentsByChild = new Map();
-        spousesByPerson = new Map();
-        for (const relation of graphDocument?.relationships || []) {
-            if (relation.type === 'parent') addSet(parentsByChild, relation.person2Id, relation.person1Id);
-            else if (relation.type === 'spouse') {
-                addSet(spousesByPerson, relation.person1Id, relation.person2Id);
-                addSet(spousesByPerson, relation.person2Id, relation.person1Id);
-            }
-        }
-    }
-
-    async function refreshGraph(force = false) {
-        if (graphDocument && !force) return graphDocument;
-        if (graphPromise && !force) return graphPromise;
-        graphPromise = fetch('/api/graph', { cache: 'no-store' })
-            .then(async response => {
-                if (!response.ok) throw new Error(await response.text());
-                return response.json();
-            })
-            .then(value => {
-                graphDocument = value;
-                rebuildIndexes();
-                return value;
-            })
-            .finally(() => { graphPromise = null; });
-        return graphPromise;
+    function prepareTopology() {
+        const snapshot = Store.snapshot();
+        graphReady = !!snapshot.graph;
+        parentsByChild = snapshot.indexes?.parentsByChild || new Map();
+        spousesByPerson = snapshot.indexes?.spousesByPerson || new Map();
     }
 
     function spouseIds(id) {
@@ -91,7 +65,6 @@
         const centerY = generationY(unit);
         const index = new Map(unit.members.map((member, i) => [member.id, i]));
         const pairs = [];
-
         for (const member of unit.members) {
             for (const spouseId of spouseIds(member.id)) {
                 const spouse = globalNodeMap.get(spouseId);
@@ -112,7 +85,6 @@
             const adjacent = Math.abs(index.get(a.id) - index.get(b.id)) === 1;
             const x1 = rightEdge(left);
             const x2 = leftEdge(right);
-
             if (adjacent) {
                 result.set(key, {
                     key: `union:${unit.id}:${key}`,
@@ -123,7 +95,6 @@
                 });
                 continue;
             }
-
             const laneY = maxBottom + UNION_LANE_CLEARANCE + (laneByPair.get(key) || 0) * UNION_LANE_STEP;
             const inset = Math.min(14, Math.max(8, (x2 - x1) * 0.08));
             result.set(key, {
@@ -141,29 +112,18 @@
     }
 
     function sourceForChild(parentUnit, child, geometry) {
-        const inUnit = parentIds(child.id)
-            .filter(parentId => unitByNodeId.get(parentId) === parentUnit);
-
+        const inUnit = parentIds(child.id).filter(parentId => unitByNodeId.get(parentId) === parentUnit);
         for (let i = 0; i < inUnit.length; i++) {
             for (let j = i + 1; j < inUnit.length; j++) {
                 if (!spouseEdge(inUnit[i], inUnit[j])) continue;
-                const key = pairKey(inUnit[i], inUnit[j]);
-                const union = geometry.get(key);
+                const union = geometry.get(pairKey(inUnit[i], inUnit[j]));
                 if (union) return union;
             }
         }
-
         if (inUnit.length) {
             const parent = globalNodeMap.get(inUnit[0]);
-            if (parent) {
-                return {
-                    key: `parent:${parentUnit.id}:${parent.id}`,
-                    x: parent.x,
-                    y: bottomEdge(parent)
-                };
-            }
+            if (parent) return { key: `parent:${parentUnit.id}:${parent.id}`, x: parent.x, y: bottomEdge(parent) };
         }
-
         if (parentUnit.members.length === 2) {
             return { key: `unit:${parentUnit.id}`, x: parentUnit.centerX, y: generationY(parentUnit) };
         }
@@ -174,7 +134,6 @@
     function buildRouteGroups() {
         const geometryByUnit = new Map();
         for (const unit of globalUnits) geometryByUnit.set(unit, unionGeometry(unit));
-
         const groupsByLayer = new Map();
         for (const parentUnit of globalUnits) {
             const children = globalNodes.filter(child =>
@@ -182,7 +141,6 @@
                 parentIds(child.id).some(parentId => unitByNodeId.get(parentId) === parentUnit)
             );
             const geometry = geometryByUnit.get(parentUnit) || new Map();
-
             for (const child of children) {
                 const source = sourceForChild(parentUnit, child, geometry);
                 const layerKey = `${parentUnit.gen}->${child.gen}`;
@@ -200,7 +158,6 @@
                 layer.get(source.key).edges.push({ childId: child.id, targetX: child.x, targetY: child.targetY });
             }
         }
-
         return { geometryByUnit, groupsByLayer };
     }
 
@@ -263,12 +220,10 @@
         const top = Math.max(...groups.map(group => group.clearY ?? group.sourceY)) + CORRIDOR_MARGIN;
         const bottom = minTargetY - CORRIDOR_MARGIN;
         const count = Math.max(groups.length, 1);
-
         if (!(bottom > top + 2)) {
             const middle = maxSourceY + Math.max(20, (minTargetY - maxSourceY) * 0.5);
             return Array.from({ length: count }, (_, index) => middle + index * 2);
         }
-
         const step = (bottom - top) / (count + 1);
         return Array.from({ length: count }, (_, index) => top + step * (index + 1));
     }
@@ -276,8 +231,6 @@
     function preferredLaneOrder(groups, lanes) {
         const sourceOrder = [...groups].sort((a, b) => a.sourceX - b.sourceX || a.key.localeCompare(b.key));
         const preferred = new Map();
-        // Reverse lane order is a strong default for overlapping monotone intervals: left
-        // sources take lower lanes and right sources upper lanes, reducing stem/bus crosses.
         sourceOrder.forEach((group, index) => preferred.set(group.key, lanes.length - 1 - index));
         return preferred;
     }
@@ -291,7 +244,6 @@
             const bSpan = Math.max(...b.edges.map(edge => Math.abs(edge.targetX - b.sourceX)), 0);
             return bSpan - aSpan || a.sourceX - b.sourceX || a.key.localeCompare(b.key);
         });
-
         let states = 0;
         let solution = null;
 
@@ -301,14 +253,10 @@
                 solution = new Map(assignments);
                 return;
             }
-
             const group = ordered[index];
             const candidateIndexes = lanes.map((_, laneIndex) => laneIndex)
                 .filter(laneIndex => !used.has(laneIndex))
-                .sort((a, b) =>
-                    Math.abs(a - preferred.get(group.key)) - Math.abs(b - preferred.get(group.key))
-                );
-
+                .sort((a, b) => Math.abs(a - preferred.get(group.key)) - Math.abs(b - preferred.get(group.key)));
             const ignored = new Set(group.edges.map(edge => edge.childId));
             for (const member of globalUnits.find(unit =>
                 unit.members.some(person => Math.abs(person.x - group.sourceX) < EPSILON)
@@ -320,7 +268,6 @@
                 const segments = routeSegments(group, laneY);
                 if (segments.some(seg => segmentCrossesAssigned(seg, assignedSegments))) continue;
                 if (segments.some(seg => segmentCrossesCard(seg, ignored))) continue;
-
                 used.add(laneIndex);
                 assignments.set(group.key, laneY);
                 visit(index + 1, used, assignments, [...assignedSegments, ...segments]);
@@ -333,8 +280,6 @@
         visit(0, new Set(), new Map(), []);
         if (solution) return { assignments: solution, crossings: 0 };
 
-        // Rare fallback for genuinely rejoining/non-planar visible structures: choose the
-        // least-conflicting unique lanes deterministically and report the residual count.
         const assignments = new Map();
         const used = new Set();
         const assignedSegments = [];
@@ -347,9 +292,7 @@
                 const segments = routeSegments(group, laneY);
                 let cost = 0;
                 for (const seg of segments) {
-                    for (const other of assignedSegments) {
-                        if (perpendicularIntersection(seg, other)) cost++;
-                    }
+                    for (const other of assignedSegments) if (perpendicularIntersection(seg, other)) cost++;
                 }
                 if (!best || cost < best.cost) best = { laneIndex, laneY, segments, cost };
             }
@@ -375,10 +318,9 @@
     }
 
     function crossingSafeDraw() {
-        if (!graphDocument || !globalUnits?.length) return;
+        if (!graphReady || !globalUnits?.length) return;
         const { geometryByUnit, groupsByLayer } = buildRouteGroups();
         let svg = '';
-
         for (const geometry of geometryByUnit.values()) {
             for (const union of geometry.values()) svg += svgPath(union.path, union.width);
         }
@@ -390,13 +332,10 @@
             const solved = solveLayer(groups);
             residualCrossings += solved.crossings;
             layerDiagnostics.push({ layerKey, groups: groups.length, crossings: solved.crossings });
-
             for (const group of groups) {
                 const laneY = solved.assignments.get(group.key) ??
                     group.sourceY + Math.max(48, (Math.min(...group.edges.map(edge => edge.targetY)) - group.sourceY) * 0.52);
-                for (const edge of group.edges) {
-                    svg += svgPath(pathForGroupEdge(group, edge, laneY));
-                }
+                for (const edge of group.edges) svg += svgPath(pathForGroupEdge(group, edge, laneY));
             }
         }
 
@@ -412,38 +351,7 @@
         }
     }
 
-    function installRouter() {
-        if (installed) return;
-        installed = true;
-        drawSVGLines = crossingSafeDraw;
-
-        const baseLoadTree = loadTree;
-        loadTree = async function routerAwareLoadTree(...args) {
-            const result = await baseLoadTree(...args);
-            try { await refreshGraph(true); }
-            catch (error) { console.warn('Unable to refresh connector routing graph:', error); }
-            return result;
-        };
-
-        requestAnimationFrame(() => {
-            try {
-                drawSVGLines();
-                if (typeof assertLayout === 'function') assertLayout();
-            } catch (error) {
-                console.warn('Unable to initialize crossing-safe connector routing:', error);
-            }
-        });
-    }
-
-    async function waitForPlanarLayout() {
-        for (let attempt = 0; attempt < 120; attempt++) {
-            if (window.__familyPlanarLayoutInstalled) return;
-            await new Promise(resolve => setTimeout(resolve, 20));
-        }
-        console.warn('Planar layout did not initialize before connector router');
-    }
-
-    Promise.all([waitForPlanarLayout(), refreshGraph(true)])
-        .then(installRouter)
-        .catch(error => console.warn('Unable to initialize crossing-safe connector router:', error));
+    Controller.registerPrepareStage({ name: 'planar-router', order: 60, run: prepareTopology });
+    Controller.registerConnectorStage({ name: 'planar-router', run: crossingSafeDraw });
+    prepareTopology();
 })();
