@@ -1,9 +1,7 @@
-// M4-B explicit render + viewport ownership for the family graph.
+// Explicit render + viewport ownership for the family graph.
 //
 // One projection generation owns one geometry commit:
-//   projection/cards -> named layout stages -> final connector route -> assertions -> center/anchor.
-// Historical layout modules are captured as named stages by runtime-bootstrap. Their old
-// layoutAndRender/restoreAnchor callbacks are compatibility-only and are ignored after capture.
+//   projection/cards -> named layout stages -> final connector route -> validation -> center/anchor.
 (() => {
     if (window.FamilyRenderController) return;
 
@@ -16,13 +14,13 @@
     const nativeRestoreAnchor = typeof restoreAnchor === 'function' ? restoreAnchor : null;
     const layoutStages = new Map();
     const prepareStages = new Map();
+    const validationStages = new Map();
     let connectorStage = null;
     let serial = 0;
     let frameId = 0;
     let pending = null;
     let runningStage = null;
     let activeContext = null;
-    let capturedRafs = [];
     let prepareDepth = 0;
 
     const diagnostics = {
@@ -36,6 +34,7 @@
         prepareRuns: 0,
         prepareLayoutRequestsSuppressed: 0,
         connectorRuns: 0,
+        validationRuns: 0,
         viewportCommits: 0,
         rootIdentityCommits: 0,
         lastGeneration: 0,
@@ -47,16 +46,18 @@
         lastStageDurationsMs: {},
         lastPrepareOrder: [],
         lastPrepareDurationsMs: {},
+        lastValidationOrder: [],
+        lastValidationDurationsMs: {},
         lastError: null
     };
 
-    function orderedLayoutStages() {
-        return [...layoutStages.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    function ordered(map) {
+        return [...map.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
     }
 
-    function orderedPrepareStages() {
-        return [...prepareStages.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
-    }
+    function orderedLayoutStages() { return ordered(layoutStages); }
+    function orderedPrepareStages() { return ordered(prepareStages); }
+    function orderedValidationStages() { return ordered(validationStages); }
 
     function expose() {
         window.__familyRenderControllerDiagnostics = {
@@ -67,6 +68,7 @@
                 ownsPrefix: !!stage.ownsPrefix
             })),
             prepareStages: orderedPrepareStages().map(stage => ({ name: stage.name, order: stage.order })),
+            validationStages: orderedValidationStages().map(stage => ({ name: stage.name, order: stage.order })),
             connectorStage: connectorStage?.name || null,
             pendingGeneration: pending?.id || null,
             runningStage,
@@ -83,6 +85,12 @@
     function registerPrepareStage({ name, order, run }) {
         if (!name || typeof run !== 'function') throw new Error('Prepare stage requires name + run');
         prepareStages.set(name, { name, order: Number(order) || 0, run });
+        expose();
+    }
+
+    function registerValidationStage({ name, order, run }) {
+        if (!name || typeof run !== 'function') throw new Error('Validation stage requires name + run');
+        validationStages.set(name, { name, order: Number(order) || 0, run });
         expose();
     }
 
@@ -129,20 +137,6 @@
         syncCardPositions();
     }
 
-    function withCapturedAnimationFrames(stageName, fn) {
-        const nativeRaf = window.requestAnimationFrame;
-        let nextFakeId = 1;
-        window.requestAnimationFrame = callback => {
-            capturedRafs.push({ stageName, callback });
-            return -nextFakeId++;
-        };
-        try {
-            return fn();
-        } finally {
-            window.requestAnimationFrame = nativeRaf;
-        }
-    }
-
     function addDuration(context, name, duration) {
         context.stageDurations[name] = Math.round(((context.stageDurations[name] || 0) + duration) * 100) / 100;
     }
@@ -150,11 +144,14 @@
     function invokeStage(stage, context) {
         runningStage = stage.name;
         const started = performance.now();
-        const value = withCapturedAnimationFrames(stage.name, () => stage.run(context));
-        addDuration(context, stage.name, performance.now() - started);
-        context.stageOrder.push(stage.name);
-        runningStage = null;
-        return value;
+        try {
+            const value = stage.run(context);
+            addDuration(context, stage.name, performance.now() - started);
+            context.stageOrder.push(stage.name);
+            return value;
+        } finally {
+            runningStage = null;
+        }
     }
 
     function runThrough(targetName = null, inheritedContext = null) {
@@ -166,10 +163,7 @@
 
         const selected = targetIndex < 0 ? [] : stages.slice(0, targetIndex + 1);
         const isRootRun = !inheritedContext;
-        const context = inheritedContext || {
-            stageOrder: [],
-            stageDurations: {}
-        };
+        const context = inheritedContext || { stageOrder: [], stageDurations: {} };
         const previousActive = activeContext;
         if (isRootRun) activeContext = context;
 
@@ -197,24 +191,22 @@
         }
     }
 
-    function runDeferredDiagnostics() {
-        const planarCallbacks = capturedRafs.filter(item => item.stageName === 'planar');
-        const planar = planarCallbacks.length ? planarCallbacks[planarCallbacks.length - 1] : null;
-        capturedRafs = [];
-        if (!planar) return;
-
-        const savedDraw = drawSVGLines;
-        const savedAssert = assertLayout;
-        try {
-            drawSVGLines = () => {};
-            assertLayout = () => {};
-            planar.callback(performance.now());
-        } catch (error) {
-            console.warn('Unable to run deferred planar diagnostics:', error);
-        } finally {
-            drawSVGLines = savedDraw;
-            assertLayout = savedAssert;
+    function runValidation() {
+        const order = [];
+        const durations = {};
+        for (const stage of orderedValidationStages()) {
+            runningStage = `validate:${stage.name}`;
+            const started = performance.now();
+            try { stage.run(); }
+            finally {
+                durations[stage.name] = Math.round((performance.now() - started) * 100) / 100;
+                order.push(stage.name);
+                runningStage = null;
+            }
         }
+        diagnostics.validationRuns += order.length;
+        diagnostics.lastValidationOrder = order;
+        diagnostics.lastValidationDurationsMs = durations;
     }
 
     function selectedRootId() {
@@ -269,9 +261,9 @@
 
     function completeVisualCommit(options, generation, context) {
         const rootId = options.rootId || selectedRootId();
-        runDeferredDiagnostics();
         finalConnectors();
         if (typeof assertLayout === 'function') assertLayout();
+        runValidation();
         commitRootIdentity(rootId);
         window.FamilyVisualRoles?.refreshNow?.(rootId);
         window.FamilyUnionChildActions?.refresh?.();
@@ -329,7 +321,6 @@
                 const transaction = pending;
                 if (!transaction || transaction.id !== generation) return;
                 pending = null;
-                capturedRafs = [];
 
                 try {
                     const context = runThrough(null);
@@ -349,14 +340,7 @@
     }
 
     function renderProjection({ rootId = selectedRootId(), recenter = false, anchor = null, reason = 'projection' } = {}) {
-        return schedule({
-            kind: 'projection',
-            rootId,
-            recenter: !!recenter,
-            anchor,
-            reason,
-            hide: true
-        });
+        return schedule({ kind: 'projection', rootId, recenter: !!recenter, anchor, reason, hide: true });
     }
 
     function requestLayout({
@@ -373,25 +357,15 @@
             : null;
         diagnostics.explicitLayoutRequests += 1;
         expose();
-        return schedule({
-            kind: 'layout',
-            rootId,
-            recenter: !!recenter,
-            anchor,
-            reason,
-            hide: !!hide
-        });
+        return schedule({ kind: 'layout', rootId, recenter: !!recenter, anchor, reason, hide: !!hide });
     }
 
     function requestRecenter({ personId = selectedRootId(), reason = 'recenter' } = {}) {
-        return requestLayout({
-            reason,
-            preserveAnchor: false,
-            recenter: true,
-            anchorId: personId
-        });
+        return requestLayout({ reason, preserveAnchor: false, recenter: true, anchorId: personId });
     }
 
+    // Temporary compatibility boundary for still-loaded presentation modules. These calls are
+    // intentionally inert; M4-G removes the remaining callers rather than making them render.
     function controlledLayoutAndRender() {
         if (prepareDepth > 0) diagnostics.prepareLayoutRequestsSuppressed += 1;
         else diagnostics.legacyLayoutRequestsIgnored += 1;
@@ -404,11 +378,11 @@
     }
 
     function installFacade() {
-        layoutAndRender = controlledLayoutAndRender;
         window.layoutAndRender = controlledLayoutAndRender;
+        if (typeof layoutAndRender !== 'undefined') layoutAndRender = controlledLayoutAndRender;
         if (nativeRestoreAnchor) {
-            restoreAnchor = controlledRestoreAnchor;
             window.restoreAnchor = controlledRestoreAnchor;
+            restoreAnchor = controlledRestoreAnchor;
         }
         expose();
         return controlledLayoutAndRender;
@@ -422,6 +396,7 @@
     window.FamilyRenderController = Object.freeze({
         registerLayoutStage,
         registerPrepareStage,
+        registerValidationStage,
         registerConnectorStage,
         prepare,
         renderProjection,
