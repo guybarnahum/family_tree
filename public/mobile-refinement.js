@@ -1,4 +1,4 @@
-// Responsive/touch styling plus shared generation-centered vertical spacing.
+// Responsive/touch styling plus mobile horizontal spacing.
 (() => {
     const mobileQuery = window.matchMedia('(max-width: 768px), (hover: none) and (pointer: coarse)');
 
@@ -129,8 +129,6 @@
                 line-height: 1.22 !important;
             }
 
-            .absolute-card:not(.graph-root) .graph-select-zone { display: none !important; }
-
             #cards-layer .absolute-card.graph-root {
                 min-width: min(228px, calc(100vw - 46px)) !important;
                 width: min(264px, calc(100vw - 40px)) !important;
@@ -246,24 +244,6 @@
                 color: #fff !important;
             }
 
-            #cards-layer .absolute-card.graph-root .graph-select-zone {
-                display: block !important;
-                left: 8px !important;
-                right: 8px !important;
-                bottom: 5px !important;
-                height: 21px !important;
-                opacity: 1 !important;
-                pointer-events: none !important;
-                transform: none !important;
-                background: rgba(163, 177, 138, 0.20) !important;
-                border: 0 !important;
-                border-top: 1px solid rgba(88, 129, 87, 0.16) !important;
-                border-radius: 0 0 8px 8px !important;
-                color: #344e41 !important;
-                font-size: 9px !important;
-                line-height: 20px !important;
-            }
-
             .graph-frontier {
                 min-width: 34px !important;
                 height: 34px !important;
@@ -296,28 +276,6 @@
     `;
     document.head.appendChild(style);
 
-    function installGenerationCenteredVerticalLayout(topPadding, generationGap, fallbackHeight) {
-        assignVerticalPositions = function generationCenteredVerticalPositions(byGen) {
-            const gens = [...byGen.keys()].sort((a, b) => a - b);
-            let bandTop = topPadding;
-            for (const gen of gens) {
-                const units = byGen.get(gen);
-                const bandHeight = Math.max(...units.map(unit => unit.height), fallbackHeight);
-                const centerY = bandTop + bandHeight / 2;
-                for (const unit of units) {
-                    unit.generationCenterY = centerY;
-                    for (const member of unit.members) {
-                        member.generationCenterY = centerY;
-                        member.targetY = centerY - member.cardHeight / 2;
-                    }
-                }
-                bandTop += bandHeight + generationGap;
-            }
-        };
-    }
-
-    installGenerationCenteredVerticalLayout(CANVAS_PAD_TOP, GENERATION_GAP, CARD_FALLBACK_HEIGHT);
-
     if (mobileQuery.matches) {
         unitSeparation = (left, right) => left.width / 2 + 48 + right.width / 2;
         simplePack = function mobileSimplePack(units) {
@@ -331,6 +289,5 @@
             const total = cursor - gap;
             units.forEach(unit => unit.centerX -= total / 2);
         };
-        installGenerationCenteredVerticalLayout(150, 112, 92);
     }
 })();
