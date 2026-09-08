@@ -133,7 +133,6 @@
                 min-width: min(228px, calc(100vw - 46px)) !important;
                 width: min(264px, calc(100vw - 40px)) !important;
                 max-width: min(286px, calc(100vw - 28px)) !important;
-                min-height: 138px !important;
                 padding: 20px 16px 40px !important;
                 border-radius: 13px !important;
                 outline-width: 3px !important;
