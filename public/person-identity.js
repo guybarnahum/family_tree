@@ -159,7 +159,7 @@
     function build(graph, sharedIndexes = null) {
         const people = (Array.isArray(graph?.people) ? graph.people : [])
             .filter(person => person && typeof person.id === 'string' && person.id)
-            .map(person => ({ ...person, name: normalizePersonName(person.name) }));
+            .map(person => ({ ...(window.FamilyGraphStore?.person?.(person.id) || person), name: normalizePersonName(person.name) }));
         const relationships = Array.isArray(graph?.relationships) ? graph.relationships : [];
 
         peopleById = new Map(people.map(person => [person.id, person]));
