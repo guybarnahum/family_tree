@@ -6,30 +6,48 @@ const vm = require('vm');
 
 const source = fs.readFileSync('public/graph-store.js', 'utf8');
 
-function createStoreContext(fetchImpl, { status = null } = {}) {
+function createStoreContext(requestImpl, { status = null } = {}) {
   const storage = new Map();
   const events = [];
+  const listeners = new Map();
   const localStorage = {
     getItem(key) { return storage.has(key) ? storage.get(key) : null; },
     setItem(key, value) { storage.set(key, String(value)); },
     removeItem(key) { storage.delete(key); }
   };
+  const finiteRevision = value => {
+    const result = Number(value);
+    return Number.isInteger(result) && result >= 1 ? result : null;
+  };
   const context = {
     console,
-    URL,
     Headers,
     Response,
-    Request,
     structuredClone,
     localStorage,
     performance: { now: (() => { let n = 0; return () => ++n; })() },
     CustomEvent: class CustomEvent {
       constructor(type, init = {}) { this.type = type; this.detail = init.detail; }
     },
-    fetch: fetchImpl,
-    location: { href: 'https://family.example/', origin: 'https://family.example' },
-    dispatchEvent(event) { events.push(event); },
-    FamilyGraphStatus: status
+    FamilyApi: {
+      request: requestImpl,
+      finiteRevision,
+      revisionFromResponse(response) {
+        return finiteRevision(
+          response?.headers?.get('X-Family-Graph-Revision') ||
+          response?.headers?.get('X-Family-Revision')
+        );
+      }
+    },
+    FamilyGraphStatus: status,
+    addEventListener(type, handler) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(handler);
+    },
+    dispatchEvent(event) {
+      events.push(event);
+      for (const handler of listeners.get(event.type) || []) handler(event);
+    }
   };
   context.window = context;
   vm.createContext(context);
@@ -39,40 +57,25 @@ function createStoreContext(fetchImpl, { status = null } = {}) {
 
 (async () => {
   let graphReads = 0;
-  let mutationReads = 0;
   const networkGraph = {
     format: 'family-graph', version: 2,
     people: [{ id: 'A', name: 'Alice', metadata: {} }, { id: 'B', name: 'Bob', metadata: {} }],
     relationships: [{ id: 'spouse:A:B', type: 'spouse', person1Id: 'A', person2Id: 'B' }]
   };
 
-  async function nativeFetch(input, init = {}) {
-    const url = new URL(String(input), 'https://family.example/');
-    const method = String(init.method || 'GET').toUpperCase();
-    if (url.pathname === '/api/graph' && method === 'GET') {
-      graphReads += 1;
-      return new Response(JSON.stringify(networkGraph), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Family-Graph-Revision': '2'
-        }
-      });
-    }
-    if (url.pathname === '/api/nodes/A' && method === 'PATCH') {
-      mutationReads += 1;
-      return new Response(JSON.stringify({ success: true }), {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Family-Graph-Revision': '3'
-        }
-      });
-    }
-    throw new Error(`unexpected fetch ${method} ${url.pathname}`);
+  async function request(input) {
+    assert.strictEqual(input, '/api/graph');
+    graphReads += 1;
+    return new Response(JSON.stringify(networkGraph), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Family-Graph-Revision': '2'
+      }
+    });
   }
 
-  const { context, Store, storage, events } = createStoreContext(nativeFetch);
+  const { context, Store, storage, events } = createStoreContext(request);
   assert(Store, 'FamilyGraphStore should install');
   assert.strictEqual(Store.snapshot().graph, null);
 
@@ -88,23 +91,23 @@ function createStoreContext(fetchImpl, { status = null } = {}) {
   assert(snapshot.indexes.parentsByChild.get('C').has('R'));
   assert(snapshot.indexes.childrenByParent.get('R').has('C'));
 
-  const cachedResponse = await context.fetch('/api/graph', { cache: 'no-store' });
+  await Store.read({ reason: 'clean-read' });
   assert.strictEqual(graphReads, 0, 'clean graph reads must stay in GraphStore');
-  assert.strictEqual(cachedResponse.headers.get('X-Family-Graph-Cache'), 'hit');
 
   Store.markStale(2);
   await Store.read({ reason: 'test-refresh' });
   snapshot = Store.snapshot();
-  assert.strictEqual(graphReads, 1, 'stale graph must refresh once from network');
+  assert.strictEqual(graphReads, 1, 'stale graph must refresh once through FamilyApi');
   assert.strictEqual(snapshot.revision, 2);
   assert(snapshot.indexes.spousesByPerson.get('A').has('B'));
   assert.strictEqual(snapshot.stale, false);
   assert.strictEqual(snapshot.dirty, false);
 
-  await context.fetch('/api/nodes/A', { method: 'PATCH' });
+  context.dispatchEvent(new context.CustomEvent('family-api-mutation', {
+    detail: { method: 'PATCH', path: '/api/nodes/A', scope: 'graph', revision: 3, at: Date.now() }
+  }));
   snapshot = Store.snapshot();
-  assert.strictEqual(mutationReads, 1);
-  assert.strictEqual(snapshot.dirty, true, 'graph mutation must dirty Store even before graph-sync exists');
+  assert.strictEqual(snapshot.dirty, true, 'graph mutation event must dirty Store');
   assert.strictEqual(snapshot.serverRevision, 3);
 
   Store.updatePerson('A', { name: 'Alicia' }, { revision: 3, reason: 'pane-name-saved' });
