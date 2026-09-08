@@ -1,7 +1,6 @@
 // Explicit render + viewport ownership for the family graph.
-//
 // One projection generation owns one geometry commit:
-//   projection/cards -> named layout stages -> final connector route -> validation -> center/anchor.
+// projection/cards -> layout stages -> connector -> validation -> center/anchor.
 (() => {
     if (window.FamilyRenderController) return;
 
@@ -11,7 +10,6 @@
     const svgLayerEl = document.getElementById('svg-layer');
     if (!viewportEl || !canvasEl || !cardsLayerEl || !svgLayerEl) return;
 
-    const nativeRestoreAnchor = typeof restoreAnchor === 'function' ? restoreAnchor : null;
     const layoutStages = new Map();
     const prepareStages = new Map();
     const validationStages = new Map();
@@ -29,10 +27,7 @@
         generationsSuperseded: 0,
         externalLayouts: 0,
         explicitLayoutRequests: 0,
-        legacyLayoutRequestsIgnored: 0,
-        legacyViewportRequestsIgnored: 0,
         prepareRuns: 0,
-        prepareLayoutRequestsSuppressed: 0,
         connectorRuns: 0,
         validationRuns: 0,
         viewportCommits: 0,
@@ -51,13 +46,10 @@
         lastError: null
     };
 
-    function ordered(map) {
-        return [...map.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
-    }
-
-    function orderedLayoutStages() { return ordered(layoutStages); }
-    function orderedPrepareStages() { return ordered(prepareStages); }
-    function orderedValidationStages() { return ordered(validationStages); }
+    const ordered = map => [...map.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    const orderedLayoutStages = () => ordered(layoutStages);
+    const orderedPrepareStages = () => ordered(prepareStages);
+    const orderedValidationStages = () => ordered(validationStages);
 
     function expose() {
         window.__familyRenderControllerDiagnostics = {
@@ -209,9 +201,7 @@
         diagnostics.lastValidationDurationsMs = durations;
     }
 
-    function selectedRootId() {
-        return window.FamilySelectionController?.getSelectedPersonId?.() || null;
-    }
+    const selectedRootId = () => window.FamilySelectionController?.getSelectedPersonId?.() || null;
 
     function commitRootIdentity(rootId) {
         if (!rootId) return false;
@@ -243,8 +233,8 @@
     }
 
     function restoreCommittedAnchor(anchor) {
-        if (!anchor || typeof nativeRestoreAnchor !== 'function') return false;
-        nativeRestoreAnchor(anchor);
+        if (!anchor || typeof restoreAnchor !== 'function') return false;
+        restoreAnchor(anchor);
         diagnostics.viewportCommits += 1;
         return true;
     }
@@ -254,8 +244,8 @@
             svgLayerEl.innerHTML = '';
             return;
         }
-        if (connectorStage) connectorStage.run();
-        else drawSVGLines();
+        if (!connectorStage) throw new Error('Connector stage is not registered');
+        connectorStage.run();
         diagnostics.connectorRuns += 1;
     }
 
@@ -280,15 +270,15 @@
         diagnostics.lastStageDurationsMs = { ...context.stageDurations };
         diagnostics.lastError = null;
 
-        const detail = {
-            kind: options.kind || 'layout',
-            rootId: diagnostics.lastRootId,
-            generation,
-            reason: diagnostics.lastReason,
-            stages: [...context.stageOrder]
-        };
-        window.dispatchEvent(new CustomEvent('family-graph-rendered', { detail }));
-        window.dispatchEvent(new CustomEvent('family-graph-render-stable', { detail }));
+        window.dispatchEvent(new CustomEvent('family-graph-rendered', {
+            detail: {
+                kind: options.kind || 'layout',
+                rootId: diagnostics.lastRootId,
+                generation,
+                reason: diagnostics.lastReason,
+                stages: [...context.stageOrder]
+            }
+        }));
     }
 
     function cancelPending(reason = 'superseded') {
@@ -364,30 +354,6 @@
         return requestLayout({ reason, preserveAnchor: false, recenter: true, anchorId: personId });
     }
 
-    // Temporary compatibility boundary for still-loaded presentation modules. These calls are
-    // intentionally inert; M4-G removes the remaining callers rather than making them render.
-    function controlledLayoutAndRender() {
-        if (prepareDepth > 0) diagnostics.prepareLayoutRequestsSuppressed += 1;
-        else diagnostics.legacyLayoutRequestsIgnored += 1;
-        expose();
-    }
-
-    function controlledRestoreAnchor() {
-        diagnostics.legacyViewportRequestsIgnored += 1;
-        expose();
-    }
-
-    function installFacade() {
-        window.layoutAndRender = controlledLayoutAndRender;
-        if (typeof layoutAndRender !== 'undefined') layoutAndRender = controlledLayoutAndRender;
-        if (nativeRestoreAnchor) {
-            window.restoreAnchor = controlledRestoreAnchor;
-            restoreAnchor = controlledRestoreAnchor;
-        }
-        expose();
-        return controlledLayoutAndRender;
-    }
-
     window.addEventListener('resize', () => {
         if (!globalNodes?.length) return;
         void requestLayout({ reason: 'viewport-resize', preserveAnchor: true });
@@ -404,11 +370,9 @@
         requestGeometryRefresh: requestLayout,
         requestRecenter,
         centerRoot,
-        installFacade,
-        facade: () => controlledLayoutAndRender,
         runThrough: name => runThrough(name, activeContext),
         snapshot: () => ({ ...window.__familyRenderControllerDiagnostics })
     });
 
-    installFacade();
+    expose();
 })();
