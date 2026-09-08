@@ -17,8 +17,8 @@ assert.strictEqual(Identity.normalizePersonName('Cafe\u0301'), 'Café');
 
 const graph = {
   people: [
-    { id: 'shalom_a', name: ' שלום  נחום ' },
-    { id: 'shalom_b', name: 'שלום נחום' },
+    { id: 'shalom_a', name: ' שלום  נחום ', metadata: { sex: 'male' } },
+    { id: 'shalom_b', name: 'שלום נחום', metadata: { sex: 'female' } },
     { id: 'yehiel', name: 'יהיאל' },
     { id: 'avraham', name: 'אברהם' },
     { id: 'unique', name: 'מרים נחום', metadata: { birthDate: '1942' } }
@@ -40,12 +40,12 @@ assert.deepStrictEqual(
   {
     id: 'shalom_a',
     name: 'שלום נחום',
-    qualifier: 'הורה: יהיאל',
+    qualifier: 'בן של יהיאל',
     ambiguous: true,
-    display: 'שלום נחום — הורה: יהיאל'
+    display: 'שלום נחום — בן של יהיאל'
   }
 );
-assert.strictEqual(Identity.describe('shalom_b').qualifier, 'הורה: אברהם');
+assert.strictEqual(Identity.describe('shalom_b').qualifier, 'בת של אברהם');
 assert.strictEqual(Identity.describe('unique').qualifier, '');
 assert(Identity.searchText('shalom_a').includes('יהיאל'));
 
