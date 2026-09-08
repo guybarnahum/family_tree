@@ -10,6 +10,7 @@
     const svgLayerEl = document.getElementById('svg-layer');
     if (!viewportEl || !canvasEl || !cardsLayerEl || !svgLayerEl) return;
 
+    const IDLE_RECENTER_MS = 30000;
     const layoutStages = new Map();
     const prepareStages = new Map();
     const validationStages = new Map();
@@ -20,6 +21,9 @@
     let runningStage = null;
     let activeContext = null;
     let prepareDepth = 0;
+    let idleTimer = 0;
+    let centerInsetX = 0;
+    let centerInsetY = 0;
 
     const diagnostics = {
         generationsStarted: 0,
@@ -32,11 +36,16 @@
         validationRuns: 0,
         viewportCommits: 0,
         rootIdentityCommits: 0,
+        idleRecenters: 0,
+        fallbackRecenters: 0,
         lastGeneration: 0,
         lastReason: '',
         lastRootId: null,
         lastStartedAt: null,
         lastCommittedAt: null,
+        lastInteractionAt: null,
+        lastIdleRecenterAt: null,
+        lastViewportReason: null,
         lastStageOrder: [],
         lastStageDurationsMs: {},
         lastPrepareOrder: [],
@@ -64,8 +73,24 @@
             connectorStage: connectorStage?.name || null,
             pendingGeneration: pending?.id || null,
             runningStage,
-            preparing: prepareDepth > 0
+            preparing: prepareDepth > 0,
+            idleRecenterMs: IDLE_RECENTER_MS,
+            centerInsetX,
+            centerInsetY
         };
+    }
+
+    function syncViewportCenteringInsets() {
+        const width = Math.max(0, Number(viewportEl.clientWidth) || Number(window.innerWidth) || 0);
+        const height = Math.max(0, Number(viewportEl.clientHeight) || Number(window.innerHeight) || 0);
+        centerInsetX = Math.ceil(width / 2);
+        centerInsetY = Math.ceil(height / 2);
+        viewportEl.style.boxSizing = 'border-box';
+        viewportEl.style.paddingLeft = `${centerInsetX}px`;
+        viewportEl.style.paddingRight = `${centerInsetX}px`;
+        viewportEl.style.paddingTop = `${centerInsetY}px`;
+        viewportEl.style.paddingBottom = `${centerInsetY}px`;
+        expose();
     }
 
     function registerLayoutStage({ name, order, run, ownsPrefix = false }) {
@@ -221,16 +246,51 @@
         return found;
     }
 
-    function centerRoot(rootId = selectedRootId()) {
-        if (!rootId) return false;
-        const node = globalNodeMap?.get(rootId);
-        if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.targetY)) return false;
-        viewportEl.scrollLeft = Math.max(0, node.x - viewportEl.clientWidth / 2);
-        viewportEl.scrollTop = Math.max(
-            0,
-            node.targetY - viewportEl.clientHeight / 2 + (Number(node.cardHeight) || 0) / 2
-        );
+    function finiteCenterNode(node) {
+        return !!node && Number.isFinite(node.x) && Number.isFinite(node.targetY);
+    }
+
+    function fallbackCenterNode(preferredId = null) {
+        const ids = [
+            preferredId,
+            selectedRootId(),
+            diagnostics.lastRootId,
+            window.FamilyGraphView?.rootId?.()
+        ].filter(Boolean);
+        for (const id of ids) {
+            const node = globalNodeMap?.get(id);
+            if (finiteCenterNode(node)) return node;
+        }
+
+        const nodes = (globalNodes || []).filter(finiteCenterNode);
+        if (!nodes.length) return null;
+        const centerY = node => node.targetY + (Number(node.cardHeight) || 0) / 2;
+        const minX = Math.min(...nodes.map(node => node.x));
+        const maxX = Math.max(...nodes.map(node => node.x));
+        const minY = Math.min(...nodes.map(centerY));
+        const maxY = Math.max(...nodes.map(centerY));
+        const graphCenterX = (minX + maxX) / 2;
+        const graphCenterY = (minY + maxY) / 2;
+        return nodes.reduce((best, node) => {
+            const dx = node.x - graphCenterX;
+            const dy = centerY(node) - graphCenterY;
+            const distance = dx * dx + dy * dy;
+            return !best || distance < best.distance ? { node, distance } : best;
+        }, null)?.node || nodes[0];
+    }
+
+    function centerRoot(rootId = selectedRootId(), { reason = 'center' } = {}) {
+        syncViewportCenteringInsets();
+        const node = fallbackCenterNode(rootId);
+        if (!node) return false;
+        if (!rootId || node.id !== rootId) diagnostics.fallbackRecenters += 1;
+
+        const nodeCenterY = node.targetY + (Number(node.cardHeight) || 0) / 2;
+        viewportEl.scrollLeft = Math.max(0, centerInsetX + node.x - viewportEl.clientWidth / 2);
+        viewportEl.scrollTop = Math.max(0, centerInsetY + nodeCenterY - viewportEl.clientHeight / 2);
         diagnostics.viewportCommits += 1;
+        diagnostics.lastViewportReason = reason;
+        expose();
         return true;
     }
 
@@ -238,6 +298,7 @@
         if (!anchor || typeof restoreAnchor !== 'function') return false;
         restoreAnchor(anchor);
         diagnostics.viewportCommits += 1;
+        diagnostics.lastViewportReason = 'anchor-restore';
         return true;
     }
 
@@ -260,7 +321,7 @@
         window.FamilyVisualRoles?.refreshNow?.(rootId);
         window.FamilyUnionChildActions?.refresh?.();
 
-        if (options.recenter) centerRoot(rootId);
+        if (options.recenter) centerRoot(rootId, { reason: options.reason || 'render-recenter' });
         else if (options.anchor) restoreCommittedAnchor(options.anchor);
 
         diagnostics.generationsCommitted += 1;
@@ -353,12 +414,61 @@
     }
 
     function requestRecenter({ personId = selectedRootId(), reason = 'recenter' } = {}) {
-        return requestLayout({ reason, preserveAnchor: false, recenter: true, anchorId: personId });
+        const centered = centerRoot(personId, { reason });
+        return Promise.resolve({ committed: centered, recentered: centered, reason });
     }
 
+    function interactionBlocksIdleRecenter() {
+        const active = document.activeElement;
+        if (active && (active.isContentEditable || active.matches?.('input, textarea, select, [contenteditable="true"]'))) {
+            return true;
+        }
+        return !!document.querySelector?.('#person-media-modal.open');
+    }
+
+    function scheduleIdleRecenter() {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = 0;
+        if (document.hidden) return;
+        idleTimer = setTimeout(() => {
+            idleTimer = 0;
+            if (document.hidden || pending || runningStage || interactionBlocksIdleRecenter()) {
+                scheduleIdleRecenter();
+                return;
+            }
+            if (centerRoot(selectedRootId(), { reason: 'idle-recenter' })) {
+                diagnostics.idleRecenters += 1;
+                diagnostics.lastIdleRecenterAt = new Date().toISOString();
+                expose();
+            }
+            scheduleIdleRecenter();
+        }, IDLE_RECENTER_MS);
+    }
+
+    function noteInteraction() {
+        diagnostics.lastInteractionAt = new Date().toISOString();
+        scheduleIdleRecenter();
+        expose();
+    }
+
+    for (const type of ['pointerdown', 'keydown', 'wheel', 'touchstart', 'focusin', 'input']) {
+        window.addEventListener(type, noteInteraction, { capture: true, passive: type === 'wheel' || type === 'touchstart' });
+    }
+    viewportEl.addEventListener?.('scroll', noteInteraction, { passive: true });
+    document.addEventListener?.('visibilitychange', () => {
+        if (document.hidden) {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = 0;
+            return;
+        }
+        noteInteraction();
+    });
+
     window.addEventListener('resize', () => {
+        syncViewportCenteringInsets();
+        scheduleIdleRecenter();
         if (!globalNodes?.length) return;
-        void requestLayout({ reason: 'viewport-resize', preserveAnchor: true });
+        void requestLayout({ reason: 'viewport-resize', preserveAnchor: false, recenter: true });
     }, { passive: true });
 
     window.FamilyRenderController = Object.freeze({
@@ -376,5 +486,7 @@
         snapshot: () => ({ ...window.__familyRenderControllerDiagnostics })
     });
 
+    syncViewportCenteringInsets();
+    scheduleIdleRecenter();
     expose();
 })();
