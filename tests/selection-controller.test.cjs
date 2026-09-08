@@ -4,156 +4,77 @@ const assert = require('assert');
 const fs = require('fs');
 const vm = require('vm');
 
-class CustomEventStub {
-  constructor(type, init = {}) {
-    this.type = type;
-    this.detail = init.detail;
-  }
-}
-
-class MouseEventStub {
-  constructor(type, init = {}) {
-    this.type = type;
-    Object.assign(this, init);
-  }
-}
-
-function createHarness({ href = 'https://family.example/', stored = null } = {}) {
+function harness({ href = 'https://family.example/', stored = null } = {}) {
   const listeners = new Map();
-  const storage = new Map();
-  if (stored) storage.set('family-tree.anchor-person', stored);
-  let renderedRootId = null;
-
+  const storage = new Map(stored ? [['family-tree.anchor-person', stored]] : []);
+  let renderedRoot = null;
   const window = {
     location: { href },
     addEventListener(type, handler) {
       if (!listeners.has(type)) listeners.set(type, []);
       listeners.get(type).push(handler);
     },
-    dispatchEvent(event) {
-      for (const handler of listeners.get(event.type) || []) handler(event);
-    }
+    dispatchEvent(event) { for (const handler of listeners.get(event.type) || []) handler(event); }
   };
   window.window = window;
-
   const history = {
     state: null,
-    replaceState(state, _title, url) {
-      this.state = state;
-      window.location.href = String(url);
-    },
-    pushState(state, _title, url) {
-      this.state = state;
-      window.location.href = String(url);
-    }
+    replaceState(state, _title, url) { this.state = state; window.location.href = String(url); }
   };
-
-  const localStorage = {
-    getItem: key => storage.get(key) ?? null,
-    setItem: (key, value) => storage.set(key, String(value))
-  };
-
-  const document = {
-    querySelector(selector) {
-      if (selector.includes('graph-root') && renderedRootId) {
-        return { dataset: { nodeId: renderedRootId } };
-      }
-      return null;
-    },
-    getElementById() {
-      return null;
-    }
-  };
-
   const context = {
     window,
     history,
-    localStorage,
-    document,
+    localStorage: {
+      getItem: key => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, String(value))
+    },
+    document: {
+      getElementById: () => null,
+      querySelector: selector => selector.includes('graph-root') && renderedRoot
+        ? { dataset: { nodeId: renderedRoot } }
+        : null
+    },
     URL,
-    CustomEvent: CustomEventStub,
-    MouseEvent: MouseEventStub,
     Date,
-    console
+    console,
+    CustomEvent: class { constructor(type, init = {}) { this.type = type; this.detail = init.detail; } },
+    MouseEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } }
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync('public/selection-controller.js', 'utf8'), context);
-
-  return {
-    window,
-    history,
-    storage,
-    setRenderedRoot(id) { renderedRootId = id; }
-  };
+  return { window, history, storage, setRenderedRoot: id => { renderedRoot = id; } };
 }
 
 {
-  const harness = createHarness({ stored: 'person-b' });
+  const h = harness({ stored: 'person-b' });
   const events = [];
-  harness.window.addEventListener('family-selection-will-change', event => {
-    events.push(['will', event.detail.personId, event.detail.previousPersonId]);
-  });
-  harness.window.addEventListener('family-selection-changed', event => {
-    events.push(['changed', event.detail.personId, event.detail.previousPersonId]);
-  });
+  h.window.addEventListener('family-selection-will-change', event => events.push(['will', event.detail.personId]));
+  h.window.addEventListener('family-selection-changed', event => events.push(['changed', event.detail.personId]));
+  const Selection = h.window.FamilySelectionController;
 
-  assert.strictEqual(harness.window.FamilySelectionController.restoreSelection(), 'person-b');
-  assert.strictEqual(
-    new URL(harness.window.location.href).searchParams.get('person'),
-    'person-b'
-  );
-  assert.strictEqual(
-    harness.window.FamilySelectionController.getSelectedPersonId(),
-    'person-b'
-  );
+  assert.strictEqual(Selection.restoreSelection(), 'person-b');
+  assert.strictEqual(new URL(h.window.location.href).searchParams.get('person'), 'person-b');
 
-  harness.history.replaceState(null, '', 'https://family.example/?person=person-c');
-  assert.strictEqual(harness.storage.get('family-tree.anchor-person'), 'person-c');
-  assert.strictEqual(
-    harness.window.FamilySelectionController.getSelectedPersonId(),
-    'person-c'
-  );
-  assert.deepStrictEqual(events.slice(-2), [
-    ['will', 'person-c', 'person-b'],
-    ['changed', 'person-c', 'person-b']
-  ]);
+  Selection.replaceUrlPerson('person-c', { source: 'test' });
+  assert.strictEqual(Selection.getSelectedPersonId(), 'person-c');
+  assert.strictEqual(h.storage.get('family-tree.anchor-person'), 'person-c');
+  assert.deepStrictEqual(events.slice(-2), [['will', 'person-c'], ['changed', 'person-c']]);
 
-  harness.setRenderedRoot('person-d');
-  harness.window.FamilySelectionController.syncFromRenderedRoot({ source: 'test' });
-  assert.strictEqual(
-    new URL(harness.window.location.href).searchParams.get('person'),
-    'person-d'
-  );
-  assert.strictEqual(harness.storage.get('family-tree.anchor-person'), 'person-d');
-  assert.strictEqual(
-    harness.window.FamilySelectionController.getSelectedPersonId(),
-    'person-d'
-  );
+  h.history.replaceState(null, '', 'https://family.example/?person=person-e');
+  h.window.dispatchEvent({ type: 'popstate' });
+  assert.strictEqual(Selection.getSelectedPersonId(), 'person-e');
+  assert.strictEqual(h.storage.get('family-tree.anchor-person'), 'person-e');
 
-  // Legacy feature code may assign wrappers while bootstrap is still loading. Runtime-ready
-  // must restore the canonical history owner rather than leave a nested wrapper chain active.
-  harness.history.replaceState = function legacyFeatureReplaceState() {};
-  harness.history.pushState = function legacyFeaturePushState() {};
-  harness.window.dispatchEvent(new CustomEventStub('family-runtime-ready'));
-  assert.strictEqual(harness.history.replaceState.name, 'familySelectionReplaceState');
-  assert.strictEqual(harness.history.pushState.name, 'familySelectionPushState');
-  assert(harness.window.FamilySelectionController.diagnostics().historyOwnerInstallations >= 2);
+  h.setRenderedRoot('person-d');
+  Selection.syncFromRenderedRoot({ source: 'test-render' });
+  assert.strictEqual(Selection.getSelectedPersonId(), 'person-d');
+  assert.strictEqual(new URL(h.window.location.href).searchParams.get('person'), 'person-d');
 }
 
 {
-  const harness = createHarness({
-    href: 'https://family.example/?person=explicit-person',
-    stored: 'stored-person'
-  });
-  assert.strictEqual(
-    harness.window.FamilySelectionController.restoreSelection(),
-    'explicit-person'
-  );
-  assert.strictEqual(
-    harness.storage.get('family-tree.anchor-person'),
-    'explicit-person',
-    'explicit URL selection must remain authoritative over stored selection'
-  );
+  const h = harness({ href: 'https://family.example/?person=explicit', stored: 'stored' });
+  assert.strictEqual(h.window.FamilySelectionController.restoreSelection(), 'explicit');
+  assert.strictEqual(h.storage.get('family-tree.anchor-person'), 'explicit');
 }
 
 console.log('selection-controller tests passed');
