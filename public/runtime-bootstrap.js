@@ -135,7 +135,6 @@
     async function installSyncStack() {
         await domReady();
         await loadScript('/graph-sync.js', 'data-family-graph-sync');
-        await loadScript('/graph-debug.js', 'data-family-graph-debug');
         diagnostics.syncStartedAt = new Date().toISOString();
         expose();
     }
