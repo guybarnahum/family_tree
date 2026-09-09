@@ -415,11 +415,14 @@
         if (changed) window.dispatchEvent(new CustomEvent('family-person-data-refreshed'));
     }
 
-    async function loadGraph(force = false, { recenter = false } = {}) {
+    async function loadGraph(force = false, { recenter = false, preferCache = false } = {}) {
         try {
-            const snapshot = force
-                ? await Store.refresh({ reason: 'graph-force' })
-                : await Store.read({ reason: 'graph-load' });
+            const cached = preferCache ? Store.snapshot() : null;
+            const snapshot = cached?.graph
+                ? cached
+                : (force
+                    ? await Store.refresh({ reason: 'graph-force' })
+                    : await Store.read({ reason: 'graph-load' }));
             const documentValue = snapshot?.graph;
             if (!documentValue) throw new Error('Canonical graph is unavailable');
             const nextPeople = documentValue.people || [];
@@ -593,5 +596,5 @@
         render: options => renderGraphView(options),
         rootId: () => graphRootId
     });
-    window.startFamilyGraph = () => refresh({ force: true, recenter: true });
+    window.startFamilyGraph = () => loadGraph(false, { recenter: true, preferCache: true });
 })();
