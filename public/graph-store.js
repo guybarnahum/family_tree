@@ -5,6 +5,7 @@
     if (!Api) return console.warn('FamilyApi must load before FamilyGraphStore');
 
     const STORAGE_KEY = 'family-tree.graph-cache.v1';
+    const GRAPH_REQUEST_TIMEOUT_MS = 5000;
     let graph = null;
     let savedAt = null;
     let revision = null;
@@ -244,12 +245,36 @@
         });
     }
 
+    async function requestGraph() {
+        if (typeof AbortController !== 'function') {
+            return Api.request('/api/graph', { cache: 'no-store' });
+        }
+        const controller = new AbortController();
+        let timedOut = false;
+        const timer = setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+        }, GRAPH_REQUEST_TIMEOUT_MS);
+        try {
+            return await Api.request('/api/graph', { cache: 'no-store', signal: controller.signal });
+        } catch (error) {
+            if (timedOut) {
+                const timeoutError = new Error(`Graph request timed out after ${GRAPH_REQUEST_TIMEOUT_MS}ms`);
+                timeoutError.name = 'TimeoutError';
+                throw timeoutError;
+            }
+            throw error;
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
     async function networkRead({ authoritative = false, reason = 'graph-read' } = {}) {
         if (networkPromise) return networkPromise.then(response => response.clone());
         const started = performance.now();
         networkPromise = (async () => {
             try {
-                const response = await Api.request('/api/graph', { cache: 'no-store' });
+                const response = await requestGraph();
                 if (!response.ok) {
                     const body = await response.clone().text().catch(() => '');
                     const error = new Error(body || `HTTP ${response.status}`);
@@ -272,7 +297,19 @@
                 if (graph) { stale = true; diagnostics.fallbackReads += 1; persist(); }
                 showFailure(error);
                 emitFetch({ source: 'error', kind: window.FamilyGraphStatus?.classify?.(error)?.kind || 'network' });
-                if (graph && !authoritative) return graphResponse(true);
+                if (graph && !authoritative) {
+                    console.warn('[FamilyGraphStore] Server graph refresh failed; using cached graph.', {
+                        reason,
+                        error: String(error?.message || error),
+                        status: Number(error?.status) || null,
+                        revision,
+                        serverRevision,
+                        savedAt,
+                        people: graph.people.length,
+                        relationships: graph.relationships.length
+                    });
+                    return graphResponse(true);
+                }
                 throw error;
             } finally {
                 networkPromise = null;
