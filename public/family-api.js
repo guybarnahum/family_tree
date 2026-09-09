@@ -103,6 +103,15 @@
         });
     }
 
+    function warnCatalogFallback(input, info, entry, detail = {}) {
+        console.warn('[FamilyApi] Server catalog request failed; using cached data.', {
+            kind: info.kind,
+            path: requestUrl(input)?.pathname || '',
+            savedAt: entry.savedAt,
+            ...detail
+        });
+    }
+
     function emitMutation(info, response) {
         if (!info || !response?.ok) return;
         window.dispatchEvent(new CustomEvent('family-api-mutation', {
@@ -134,10 +143,23 @@
             }
 
             const cached = loadCatalog(resilient);
-            return cached ? cachedCatalogResponse(cached) : response;
+            if (cached) {
+                warnCatalogFallback(input, resilient, cached, {
+                    status: response.status,
+                    error: response.ok ? 'Invalid catalog response' : `HTTP ${response.status}`
+                });
+                return cachedCatalogResponse(cached);
+            }
+            return response;
         } catch (error) {
             const cached = loadCatalog(resilient);
-            if (cached) return cachedCatalogResponse(cached);
+            if (cached) {
+                warnCatalogFallback(input, resilient, cached, {
+                    status: Number(error?.status) || null,
+                    error: String(error?.message || error)
+                });
+                return cachedCatalogResponse(cached);
+            }
             throw error;
         }
     }
