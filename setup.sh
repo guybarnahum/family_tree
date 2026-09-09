@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Load and export variables from .env if the file exists
 if [ -f .env ]; then
@@ -20,8 +21,8 @@ echo "and paste it into your wrangler.toml file."
 echo "=========================================================="
 read -p "Press [Enter] once you have updated wrangler.toml..."
 
-echo "2. Applying schema to local and remote D1 databases..."
-npx wrangler d1 execute family_tree_db --local --file=./schema.sql
-npx wrangler d1 execute family_tree_db --remote --file=./schema.sql
+echo "2. Applying D1 migrations locally and remotely..."
+npx wrangler d1 migrations apply family_tree_db --local
+npx wrangler d1 migrations apply family_tree_db --remote
 
 echo "Setup complete! You can now run ./deploy.sh"

@@ -7,8 +7,6 @@ const MIN_QUERY_LENGTH = 3;
 const HOURLY_EXTERNAL_LIMIT = 800;
 const DAILY_EXTERNAL_LIMIT = 8000;
 
-let placeSchemaPromise = null;
-
 function response(value, { cacheable = false, ...init } = {}) {
   const headers = new Headers(init.headers || {});
   headers.set('Cache-Control', cacheable ? 'private, max-age=86400' : 'no-store');
@@ -22,34 +20,6 @@ function normalizedQuery(value) {
 function normalizedLang(value) {
   const lang = String(value || '').trim().toLowerCase();
   return /^[a-z]{2,3}(?:-[a-z0-9]+)?$/.test(lang) ? lang.slice(0, 12) : 'en';
-}
-
-async function ensurePlaceSchema(env) {
-  if (!placeSchemaPromise) {
-    placeSchemaPromise = env.DB.batch([
-      env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS place_search_cache (
-          cache_key TEXT PRIMARY KEY,
-          response_json TEXT NOT NULL,
-          fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `),
-      env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS place_api_usage (
-          bucket TEXT PRIMARY KEY,
-          count INTEGER NOT NULL DEFAULT 0,
-          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `)
-    ]);
-  }
-
-  try {
-    await placeSchemaPromise;
-  } catch (error) {
-    placeSchemaPromise = null;
-    throw error;
-  }
 }
 
 function usageBuckets(now = new Date()) {
@@ -191,8 +161,6 @@ export async function handlePlacesApi(request, env, url) {
   if (request.method !== 'GET') {
     return new Response('Method not allowed', { status: 405 });
   }
-
-  await ensurePlaceSchema(env);
 
   const rawQuery = String(url.searchParams.get('q') || '').trim().replace(/\s+/g, ' ');
   const query = normalizedQuery(rawQuery);

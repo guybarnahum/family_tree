@@ -4,41 +4,13 @@ import { handleMediaApi } from './media.js';
 import { handleFacesApi } from './faces.js';
 import { normalizeParentUnions } from './graph-invariants.js';
 
-let graphRevisionSchemaPromise = null;
-
-async function ensureGraphRevisionSchema(env) {
-  if (!graphRevisionSchemaPromise) {
-    graphRevisionSchemaPromise = env.DB.batch([
-      env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS graph_state (
-          id INTEGER PRIMARY KEY CHECK (id = 1),
-          revision INTEGER NOT NULL DEFAULT 1,
-          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `),
-      env.DB.prepare(`
-        INSERT OR IGNORE INTO graph_state (id, revision)
-        VALUES (1, 1)
-      `)
-    ]);
-  }
-  try {
-    await graphRevisionSchemaPromise;
-  } catch (error) {
-    graphRevisionSchemaPromise = null;
-    throw error;
-  }
-}
-
 async function readGraphRevision(env) {
-  await ensureGraphRevisionSchema(env);
   const row = await env.DB.prepare('SELECT revision FROM graph_state WHERE id = 1').first();
   const revision = Number(row?.revision);
   return Number.isFinite(revision) && revision >= 1 ? revision : 1;
 }
 
 async function bumpGraphRevision(env) {
-  await ensureGraphRevisionSchema(env);
   await env.DB.prepare(`
     UPDATE graph_state
     SET revision = revision + 1,

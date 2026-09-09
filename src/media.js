@@ -7,8 +7,6 @@ const ALLOWED_IMAGE_TYPES = new Set([
   'image/avif'
 ]);
 
-let mediaSchemaPromise = null;
-
 function json(value, init = {}) {
   const headers = new Headers(init.headers || {});
   headers.set('Cache-Control', 'no-store');
@@ -57,46 +55,6 @@ function normalizePlace(value) {
   if (longitude !== null && longitude >= -180 && longitude <= 180) result.longitude = longitude;
 
   return result;
-}
-
-async function ensureMediaSchema(env) {
-  if (!mediaSchemaPromise) {
-    mediaSchemaPromise = env.DB.batch([
-      env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS media (
-          id TEXT PRIMARY KEY,
-          object_key TEXT NOT NULL UNIQUE,
-          original_filename TEXT,
-          mime_type TEXT NOT NULL,
-          byte_size INTEGER NOT NULL,
-          width INTEGER,
-          height INTEGER,
-          caption TEXT,
-          taken_date_text TEXT,
-          taken_place_json TEXT,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-      `),
-      env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS media_people (
-          media_id TEXT NOT NULL,
-          person_id TEXT NOT NULL,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          PRIMARY KEY (media_id, person_id),
-          FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE
-        )
-      `),
-      env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_media_people_person ON media_people(person_id)`),
-      env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_media_people_media ON media_people(media_id)`)
-    ]);
-  }
-
-  try {
-    await mediaSchemaPromise;
-  } catch (error) {
-    mediaSchemaPromise = null;
-    throw error;
-  }
 }
 
 function rowToMedia(row) {
@@ -273,7 +231,6 @@ export async function handleMediaApi(request, env, url) {
   }
 
   if (!env.DB) return new Response('DB binding missing', { status: 500 });
-  await ensureMediaSchema(env);
 
   if (!mediaId) {
     if (request.method === 'GET') {

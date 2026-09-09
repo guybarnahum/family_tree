@@ -11,6 +11,9 @@ else
   echo "Warning: .env file not found."
 fi
 
+echo "Applying pending D1 migrations..."
+npx wrangler d1 migrations apply family_tree_db --remote
+
 BUILD_SHA="$(git rev-parse --short=8 HEAD)"
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 

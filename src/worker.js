@@ -1,5 +1,3 @@
-let graphSchemaPromise = null;
-
 function jsonResponse(value, init = {}) {
   const headers = new Headers(init.headers || {});
   headers.set('Cache-Control', 'no-store');
@@ -97,94 +95,6 @@ function metadataObject(value, { strict = false } = {}) {
   }
 
   return JSON.parse(JSON.stringify(parsed));
-}
-
-async function ensureNodeMetadataSchema(env) {
-  const columns = await env.DB.prepare('PRAGMA table_info(nodes)').all();
-  const hasMetadata = (columns.results || []).some(column => column.name === 'metadata_json');
-
-  if (!hasMetadata) {
-    try {
-      await env.DB.prepare("ALTER TABLE nodes ADD COLUMN metadata_json TEXT DEFAULT '{}'").run();
-    } catch (error) {
-      if (!String(error?.message || error).toLowerCase().includes('duplicate column')) throw error;
-    }
-  }
-
-  await env.DB.prepare(`
-    UPDATE nodes
-    SET metadata_json = '{}'
-    WHERE metadata_json IS NULL OR TRIM(metadata_json) = ''
-  `).run();
-}
-
-async function ensureGraphSchema(env) {
-  if (!graphSchemaPromise) {
-    graphSchemaPromise = (async () => {
-      await ensureNodeMetadataSchema(env);
-
-      await env.DB.batch([
-        env.DB.prepare(`
-          CREATE TABLE IF NOT EXISTS relationships (
-            id TEXT PRIMARY KEY,
-            type TEXT NOT NULL CHECK (type IN ('parent', 'spouse')),
-            person1_id TEXT NOT NULL,
-            person2_id TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-          )
-        `),
-        env.DB.prepare(`
-          CREATE UNIQUE INDEX IF NOT EXISTS idx_relationship_unique
-          ON relationships(type, person1_id, person2_id)
-        `),
-        env.DB.prepare(`
-          CREATE INDEX IF NOT EXISTS idx_relationship_person1
-          ON relationships(person1_id)
-        `),
-        env.DB.prepare(`
-          CREATE INDEX IF NOT EXISTS idx_relationship_person2
-          ON relationships(person2_id)
-        `)
-      ]);
-
-      await env.DB.batch([
-        env.DB.prepare(`
-          INSERT OR IGNORE INTO relationships (id, type, person1_id, person2_id)
-          SELECT
-            'parent:' || parent_id || ':' || id,
-            'parent',
-            parent_id,
-            id
-          FROM nodes
-          WHERE parent_id IS NOT NULL
-            AND parent_id <> ''
-            AND parent_id IN (SELECT id FROM nodes)
-        `),
-        env.DB.prepare(`
-          INSERT OR IGNORE INTO relationships (id, type, person1_id, person2_id)
-          SELECT
-            'spouse:' ||
-              CASE WHEN id < spouse_id THEN id ELSE spouse_id END || ':' ||
-              CASE WHEN id < spouse_id THEN spouse_id ELSE id END,
-            'spouse',
-            CASE WHEN id < spouse_id THEN id ELSE spouse_id END,
-            CASE WHEN id < spouse_id THEN spouse_id ELSE id END
-          FROM nodes
-          WHERE spouse_id IS NOT NULL
-            AND spouse_id <> ''
-            AND spouse_id IN (SELECT id FROM nodes)
-            AND id <> spouse_id
-        `)
-      ]);
-    })();
-  }
-
-  try {
-    await graphSchemaPromise;
-  } catch (error) {
-    graphSchemaPromise = null;
-    throw error;
-  }
 }
 
 function normalizePerson(person) {
@@ -315,7 +225,6 @@ function legacyLinksFor(people, relationships) {
 }
 
 async function replaceGraph(env, payload) {
-  await ensureGraphSchema(env);
   const { people, relationships } = validateGraphPayload(payload);
   const legacy = legacyLinksFor(people, relationships);
 
@@ -362,7 +271,6 @@ async function replaceGraph(env, payload) {
 }
 
 async function graphDocument(env) {
-  await ensureGraphSchema(env);
   const [peopleResult, relationshipsResult] = await Promise.all([
     env.DB.prepare(`
       SELECT id, name, metadata_json, last_updated
@@ -454,7 +362,6 @@ async function handleTreeApi(request, env) {
 }
 
 async function handleNodesApi(request, env, url) {
-  await ensureGraphSchema(env);
   const pathParts = url.pathname.split('/').filter(Boolean);
   const nodeId = pathParts[2];
 

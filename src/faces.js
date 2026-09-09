@@ -1,5 +1,4 @@
 const MIN_FACE_SIZE = 0.01;
-let facesSchemaPromise = null;
 
 function json(value, init = {}) {
   const headers = new Headers(init.headers || {});
@@ -58,42 +57,6 @@ export function choosePreferredFace(items, primaryFaceId, personId = null) {
     if (preferred) return preferred;
   }
   return assigned[0];
-}
-
-async function ensureFacesSchema(env) {
-  if (!facesSchemaPromise) {
-    facesSchemaPromise = env.DB.batch([
-      env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS faces (
-          id TEXT PRIMARY KEY,
-          media_id TEXT NOT NULL,
-          person_id TEXT,
-          x REAL NOT NULL,
-          y REAL NOT NULL,
-          width REAL NOT NULL,
-          height REAL NOT NULL,
-          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (media_id) REFERENCES media(id) ON DELETE CASCADE,
-          CHECK (x >= 0 AND x <= 1),
-          CHECK (y >= 0 AND y <= 1),
-          CHECK (width > 0 AND width <= 1),
-          CHECK (height > 0 AND height <= 1),
-          CHECK (x + width <= 1.000001),
-          CHECK (y + height <= 1.000001)
-        )
-      `),
-      env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_faces_media ON faces(media_id)`),
-      env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id)`)
-    ]);
-  }
-
-  try {
-    await facesSchemaPromise;
-  } catch (error) {
-    facesSchemaPromise = null;
-    throw error;
-  }
 }
 
 function rowToFace(row) {
@@ -340,7 +303,6 @@ async function deleteFace(env, faceId) {
 
 export async function handleFacesApi(request, env, url) {
   if (!env.DB) return new Response('DB binding missing', { status: 500 });
-  await ensureFacesSchema(env);
 
   const parts = url.pathname.split('/').filter(Boolean);
   const faceId = parts[2] ? decodeURIComponent(parts[2]) : null;
