@@ -1,13 +1,13 @@
 # Installing Family Graph
 
-Family Graph is designed to run as a small Cloudflare application:
+Family Graph runs as a small Cloudflare application:
 
-- **Workers** serve the API and application entry point.
-- **Static Assets** serve the browser UI.
-- **D1** stores people, relationships, revisions, metadata, media records, and face data.
-- **R2** stores original image bytes.
+- **Workers** serve the API and application entry point
+- **Static Assets** serve the browser UI
+- **D1** stores people, relationships, revisions, metadata, media records, and face data
+- **R2** stores original image bytes
 
-There is no separate application server, build pipeline, or frontend framework to provision.
+There is no separate application server or frontend build service to provision.
 
 ---
 
@@ -15,14 +15,57 @@ There is no separate application server, build pipeline, or frontend framework t
 
 You will need:
 
-- a Cloudflare account with Workers, D1, and R2 available
+- a Cloudflare account with Workers, D1, and R2
 - Node.js and npm
 - Git
 - Wrangler access to the Cloudflare account
-- optionally, a domain managed through Cloudflare
+- optionally, a Cloudflare-managed domain
 - optionally, a GeoNames account for place autocomplete
 
-Wrangler is invoked through `npx`, so a global Wrangler installation is not required.
+Wrangler is invoked through `npx`; a global installation is not required.
+
+## Configuration model
+
+The project intentionally separates **deployment credentials** from **Worker runtime configuration**.
+
+### Operator credentials — `.env`
+
+`setup.sh` and `deploy.sh` source `.env` when it exists. This file is for credentials used by Wrangler itself, for example:
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=...
+CLOUDFLARE_API_TOKEN=...
+```
+
+For token-based authentication:
+
+```bash
+cp .env.example .env
+```
+
+Fill in the values locally. Never commit `.env`.
+
+If you use interactive Wrangler authentication instead, `npx wrangler login` is sufficient and `.env` is optional.
+
+### Worker runtime variables — `.dev.vars`
+
+Values that application code reads through the Worker `env` object belong to Worker runtime configuration, not to the deployment credential file.
+
+For local development:
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+The current optional runtime variable is:
+
+```bash
+GEONAMES_USERNAME=your_geonames_username
+```
+
+Keep Cloudflare account IDs and API tokens out of `.dev.vars`.
+
+For production, configure runtime values through Wrangler/Cloudflare rather than relying on the local `.env` file.
 
 ## 1. Clone and install
 
@@ -32,17 +75,17 @@ cd family_tree
 npm install
 ```
 
-Authenticate Wrangler if this machine is not already connected to your Cloudflare account:
+Authenticate Wrangler:
 
 ```bash
 npx wrangler login
 ```
 
-For non-interactive environments you can instead provide the appropriate Cloudflare API credentials through environment variables or your deployment environment.
+Or configure `.env` from `.env.example` when using API-token authentication.
 
 ## 2. Create the R2 media bucket
 
-The default Worker configuration expects an R2 bucket named:
+The default configuration expects:
 
 ```text
 family-tree-media
@@ -54,7 +97,7 @@ Create it with:
 npx wrangler r2 bucket create family-tree-media
 ```
 
-If you choose another bucket name, update the R2 binding in `wrangler.toml` before deploying.
+If you choose another name, update the binding in `wrangler.toml`:
 
 ```toml
 [[r2_buckets]]
@@ -62,9 +105,9 @@ binding = "MEDIA"
 bucket_name = "your-media-bucket"
 ```
 
-## 3. Create D1 and apply the initial schema
+## 3. Create D1 and apply migrations
 
-For a fresh installation, run:
+For a fresh installation:
 
 ```bash
 ./setup.sh
@@ -74,9 +117,9 @@ The script will:
 
 1. create the `family_tree_db` D1 database
 2. pause so you can copy the returned `database_id` into `wrangler.toml`
-3. apply the repository migrations to both the local and remote D1 databases
+3. apply repository migrations locally and remotely
 
-Update the D1 block in `wrangler.toml` with the ID returned by Cloudflare:
+Update:
 
 ```toml
 [[d1_databases]]
@@ -89,17 +132,17 @@ Then continue the setup script.
 
 ### Schema ownership
 
-The canonical database schema lives in:
+The canonical schema lives in:
 
 ```text
 migrations/
 ```
 
-Do not add schema creation, `ALTER TABLE`, index setup, or backfill work to HTTP request handlers. Runtime requests assume migrations have already been applied.
+Runtime requests assume migrations have already been applied. Do not perform schema creation, `ALTER TABLE`, index setup, or topology backfills from HTTP handlers.
 
-For future schema changes, add a new numbered D1 migration rather than modifying production schema from application code.
+Future schema changes should be added as numbered D1 migrations.
 
-You can apply migrations manually at any time with:
+Manual migration commands:
 
 ```bash
 npx wrangler d1 migrations apply family_tree_db --local
@@ -108,7 +151,7 @@ npx wrangler d1 migrations apply family_tree_db --remote
 
 ## 4. Configure the deployment route
 
-`wrangler.toml` contains a route block for the deployment environment. Replace it with your own hostname before deploying:
+Replace the route in `wrangler.toml` with your own hostname:
 
 ```toml
 [[routes]]
@@ -116,70 +159,84 @@ pattern = "tree.example.com"
 custom_domain = true
 ```
 
-If you do not want a custom domain, remove the custom route block and configure the Worker for the Cloudflare-provided Workers.dev hostname instead.
+If you prefer the Cloudflare-provided Workers.dev hostname, remove the custom-domain route and configure the Worker accordingly.
 
-The route, D1 database ID, and R2 bucket are deployment-specific values and should be reviewed before the first production deploy.
+Review the route, D1 database ID, and R2 bucket before the first production deployment.
 
-## 5. Optional place autocomplete
+## 5. Optional GeoNames place autocomplete
 
-Place fields work as free-form text without any external service.
+Place fields work as free-form text without GeoNames.
 
-To enable structured place suggestions, configure a GeoNames username as a Worker secret:
+The application looks for exactly:
+
+```text
+GEONAMES_USERNAME
+```
+
+### Production
+
+Configure it on the deployed Worker:
 
 ```bash
 npx wrangler secret put GEONAMES_USERNAME
 ```
 
-For a local development session, you can pass it directly:
+The GeoNames username is not particularly sensitive, but storing it as a Worker secret keeps deployment-specific configuration out of the repository.
+
+### Local development
+
+Copy the runtime example file:
 
 ```bash
-npx wrangler dev --var "GEONAMES_USERNAME:your_username"
+cp .dev.vars.example .dev.vars
 ```
 
-If `GEONAMES_USERNAME` is absent, the application simply leaves external place autocomplete disabled.
+Then set:
 
-## 6. Run locally
+```bash
+GEONAMES_USERNAME=your_geonames_username
+```
 
-Once local migrations have been applied:
+Run normally with:
 
 ```bash
 npx wrangler dev
 ```
 
-Wrangler provides local Worker execution together with the configured D1, R2, and static-asset bindings.
+When `.dev.vars` is present, Wrangler uses it for local Worker runtime variables rather than the project `.env`. This keeps deployment credentials separate from application runtime configuration.
 
-The browser application is served by the Worker; there is no separate frontend development server.
+If `GEONAMES_USERNAME` is absent, external place suggestions are simply disabled.
 
-## 7. Run the test suite
+## 6. Run locally
 
-Before deploying:
+Once local migrations are applied:
+
+```bash
+npx wrangler dev
+```
+
+The browser application is served through the Worker together with the configured D1, R2, and static-asset bindings.
+
+## 7. Test
 
 ```bash
 npm test
 ```
 
-The suite covers graph invariants, selection, browser graph state, API behavior, mutations, face geometry, visual roles, render ownership, layout behavior, and JavaScript syntax checks.
+The suite covers graph invariants, selection, browser graph state, API behavior, mutations, faces, rendering, layout, and JavaScript syntax.
 
 ## 8. Deploy
-
-Deploy with:
 
 ```bash
 ./deploy.sh
 ```
 
-The deployment script intentionally does two things in order:
+Deployment intentionally happens in this order:
 
-1. applies any pending remote D1 migrations
-2. deploys the Worker and static assets with the current Git SHA and UTC build time
+1. apply pending remote D1 migrations
+2. deploy the Worker and static assets with the current Git SHA and UTC build time
 
-The deployed build can be checked through:
-
-```text
-GET /api/version
-```
-
-A typical development/deployment cycle is therefore:
+A normal update cycle is:
 
 ```bash
 git pull
@@ -187,17 +244,15 @@ npm test
 ./deploy.sh
 ```
 
-## Environment and credentials
+The deployed build is visible at:
 
-Both `setup.sh` and `deploy.sh` load `.env` when it exists. The repository ignores `.env` and `.env.*`, so local Cloudflare credentials can be kept outside version control.
-
-Do not commit API tokens, account credentials, or private deployment secrets.
-
-The optional `GEONAMES_USERNAME` should be configured as a Worker binding/secret for production rather than relying on a shell-only value.
+```text
+GET /api/version
+```
 
 ## Existing installations
 
-For an existing deployment, do **not** run `setup.sh` just to deploy a new version. `setup.sh` is intended for first-time database creation.
+Do not run `setup.sh` for ordinary updates. It is for first-time database creation.
 
 Use:
 
@@ -207,15 +262,15 @@ npm test
 ./deploy.sh
 ```
 
-`deploy.sh` will apply only migrations that D1 has not already recorded as applied.
+D1 applies only migrations that have not already been recorded as applied.
 
-## Moving or cloning data
+## Data and backups
 
-The application exposes graph import/export in the UI. The exported graph document is human-readable JSON and is the simplest way to move the genealogy structure between installations.
+Graph import/export produces readable JSON for the genealogy structure.
 
-Photo bytes are stored separately in R2, while media metadata and face identity records live in D1. A graph JSON export is therefore not a complete media backup.
+Photo bytes live in R2; media metadata and face identity records live in D1. A graph JSON export is therefore not a complete backup.
 
-For a full deployment backup or migration, preserve both:
+For a full deployment backup, preserve both:
 
 - the D1 database
 - the R2 media bucket
@@ -224,17 +279,17 @@ For a full deployment backup or migration, preserve both:
 
 Family Graph does not implement application-level authentication.
 
-If the deployment contains private information, protect the Worker/custom domain with an access-control layer before adding real data. The application should not be assumed private merely because its URL is unlisted.
+If the deployment contains private information, protect the Worker or custom domain with an access-control layer before adding real data.
 
 ## Troubleshooting
 
 ### `database_id` errors
 
-Confirm that the D1 database exists in the same Cloudflare account Wrangler is using and that `wrangler.toml` contains its actual ID.
+Confirm that the D1 database exists in the Cloudflare account Wrangler is using and that `wrangler.toml` contains its actual ID.
 
 ### R2 binding errors
 
-Confirm that the configured bucket exists and that its name matches the `MEDIA` binding in `wrangler.toml`.
+Confirm that the configured bucket exists and matches the `MEDIA` binding.
 
 ### Schema/table errors
 
@@ -244,30 +299,12 @@ Apply migrations:
 npx wrangler d1 migrations apply family_tree_db --remote
 ```
 
-For local development, use `--local` instead.
+Use `--local` for the local database.
 
 ### Place autocomplete returns no suggestions
 
-Free-form place editing still works. If external suggestions are expected, verify that `GEONAMES_USERNAME` is configured for the Worker.
+Verify that the runtime Worker environment contains `GEONAMES_USERNAME`. For local development, put it in `.dev.vars`; for production, configure it with Wrangler/Cloudflare.
 
-### The graph loads from cache while the server is unavailable
+### The graph renders from cache while the server is unavailable
 
-The browser intentionally keeps the last valid graph snapshot so startup can remain usable during transient backend failures. When a server failure is covered by cached graph or media data, the browser logs a warning in the developer console.
-
-## Updating the schema
-
-Keep schema evolution explicit and deployment-time only:
-
-```text
-migrations/0001_initial_schema.sql
-migrations/0002_example_change.sql
-migrations/0003_another_change.sql
-```
-
-Then deploy normally:
-
-```bash
-./deploy.sh
-```
-
-This keeps database setup out of latency-sensitive request paths and makes schema history reviewable alongside the application code.
+This is intentional. The browser keeps the last valid graph snapshot so startup can remain usable during transient backend failures. Cache-covered server failures are logged in the developer console.
