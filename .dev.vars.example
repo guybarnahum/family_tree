@@ -1,0 +1,4 @@
+# Worker runtime variables for local `wrangler dev`.
+# Copy to .dev.vars. Keep Cloudflare operator credentials in .env instead.
+
+GEONAMES_USERNAME=
