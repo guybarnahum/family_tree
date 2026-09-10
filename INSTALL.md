@@ -26,11 +26,19 @@ Wrangler is invoked through `npx`; a global installation is not required.
 
 ## Configuration model
 
-The project intentionally separates **deployment credentials** from **Worker runtime configuration**.
+The project deliberately separates **deployment credentials** from **Worker runtime configuration**.
+
+| File / setting | Purpose | Example |
+| --- | --- | --- |
+| `.env` | Credentials used by `setup.sh` / `deploy.sh` to operate Cloudflare | `CLOUDFLARE_API_TOKEN` |
+| `.dev.vars` | Runtime values exposed to the Worker during local development | `GEONAMES_USERNAME` |
+| Cloudflare Worker secrets / variables | Runtime values exposed to the deployed Worker | `GEONAMES_USERNAME` |
+
+These are separate scopes. In particular, adding `GEONAMES_USERNAME` to `.env` does **not** configure it on the deployed Worker.
 
 ### Operator credentials — `.env`
 
-`setup.sh` and `deploy.sh` source `.env` when it exists. This file is for credentials used by Wrangler itself, for example:
+`setup.sh` and `deploy.sh` source `.env` when it exists. This file is for credentials used by Wrangler itself:
 
 ```bash
 CLOUDFLARE_ACCOUNT_ID=...
@@ -43,13 +51,19 @@ For token-based authentication:
 cp .env.example .env
 ```
 
-Fill in the values locally. Never commit `.env`.
+Fill in the real values locally. Never commit `.env`.
 
-If you use interactive Wrangler authentication instead, `npx wrangler login` is sufficient and `.env` is optional.
+If you use interactive Wrangler authentication instead, run:
 
-### Worker runtime variables — `.dev.vars`
+```bash
+npx wrangler login
+```
 
-Values that application code reads through the Worker `env` object belong to Worker runtime configuration, not to the deployment credential file.
+and `.env` is optional.
+
+### Local Worker runtime — `.dev.vars`
+
+Values that application code reads through the Worker `env` object belong in Worker runtime configuration.
 
 For local development:
 
@@ -57,7 +71,7 @@ For local development:
 cp .dev.vars.example .dev.vars
 ```
 
-The current optional runtime variable is:
+The current optional runtime value is:
 
 ```bash
 GEONAMES_USERNAME=your_geonames_username
@@ -65,7 +79,7 @@ GEONAMES_USERNAME=your_geonames_username
 
 Keep Cloudflare account IDs and API tokens out of `.dev.vars`.
 
-For production, configure runtime values through Wrangler/Cloudflare rather than relying on the local `.env` file.
+When `.dev.vars` is present, Wrangler uses it for local Worker runtime variables instead of loading `.env` into the Worker environment. This keeps application configuration separate from deployment credentials.
 
 ## 1. Clone and install
 
@@ -75,13 +89,13 @@ cd family_tree
 npm install
 ```
 
-Authenticate Wrangler:
+Authenticate Wrangler either with:
 
 ```bash
 npx wrangler login
 ```
 
-Or configure `.env` from `.env.example` when using API-token authentication.
+or by configuring `.env` from `.env.example` for API-token authentication.
 
 ## 2. Create the R2 media bucket
 
@@ -163,11 +177,11 @@ If you prefer the Cloudflare-provided Workers.dev hostname, remove the custom-do
 
 Review the route, D1 database ID, and R2 bucket before the first production deployment.
 
-## 5. Optional GeoNames place autocomplete
+## 5. Configure GeoNames place autocomplete (optional)
 
-Place fields work as free-form text without GeoNames.
+Place fields work as free-form text without GeoNames. GeoNames only enables structured place suggestions.
 
-The application looks for exactly:
+The Worker looks for exactly:
 
 ```text
 GEONAMES_USERNAME
@@ -175,35 +189,41 @@ GEONAMES_USERNAME
 
 ### Production
 
-Configure it on the deployed Worker:
+From the project directory, configure the deployed Worker runtime value with:
 
 ```bash
 npx wrangler secret put GEONAMES_USERNAME
 ```
 
-The GeoNames username is not particularly sensitive, but storing it as a Worker secret keeps deployment-specific configuration out of the repository.
+Wrangler will prompt for the value. Do **not** put the username in `.env` and expect `deploy.sh` to publish it to the Worker; `.env` is used by the shell scripts for Cloudflare operator credentials.
+
+You can verify that the binding exists with:
+
+```bash
+npx wrangler secret list
+```
+
+`GEONAMES_USERNAME` is not especially sensitive, but using a Worker secret keeps deployment-specific runtime configuration out of the repository.
 
 ### Local development
 
-Copy the runtime example file:
+Create the local runtime file:
 
 ```bash
 cp .dev.vars.example .dev.vars
 ```
 
-Then set:
+Then edit `.dev.vars`:
 
 ```bash
 GEONAMES_USERNAME=your_geonames_username
 ```
 
-Run normally with:
+Run:
 
 ```bash
 npx wrangler dev
 ```
-
-When `.dev.vars` is present, Wrangler uses it for local Worker runtime variables rather than the project `.env`. This keeps deployment credentials separate from application runtime configuration.
 
 If `GEONAMES_USERNAME` is absent, external place suggestions are simply disabled.
 
@@ -303,7 +323,19 @@ Use `--local` for the local database.
 
 ### Place autocomplete returns no suggestions
 
-Verify that the runtime Worker environment contains `GEONAMES_USERNAME`. For local development, put it in `.dev.vars`; for production, configure it with Wrangler/Cloudflare.
+For production, verify that the Worker has the runtime binding:
+
+```bash
+npx wrangler secret list
+```
+
+For local development, verify `.dev.vars` contains:
+
+```bash
+GEONAMES_USERNAME=your_geonames_username
+```
+
+Remember: adding it only to `.env` does not configure the Worker runtime.
 
 ### The graph renders from cache while the server is unavailable
 
