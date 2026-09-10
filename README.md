@@ -1,305 +1,257 @@
 # Family Graph
 
-A person-centric family tree built as a **single global relationship graph** rather than a collection of saved trees.
+A lightweight, person-centric genealogy application built around a simple idea:
 
-Choose any person and the UI dynamically renders the family around them: direct ancestry and descendants stay prominent, lateral context stays light, and less-relevant branches remain collapsed until requested.
+> **Store one relationship graph. Render the tree that matters from the person you are looking at.**
 
-**Live:** [family.barnahum.com](https://family.barnahum.com)
+Instead of treating a family tree as a fixed diagram, Family Graph stores people and relationships as the durable source of truth. Selecting any person produces a fresh, contextual projection around them — ancestry, descendants, partners, siblings, and nearby branches — with layout and emphasis generated on demand.
+
+The result is a family history tool that feels more like navigating a living graph than scrolling through a static chart.
+
+[Installation →](INSTALL.md)
 
 ---
 
-## What makes it different
+## Why a graph?
 
-Most family-tree applications start with a saved tree and navigate inside it. This project starts with people and relationships:
-
-```text
-People ←→ Relationships
-```
-
-A visible tree is only a projection:
+Traditional genealogy interfaces tend to make the drawing itself feel canonical. Family Graph separates **data** from **view**:
 
 ```text
-selected person
-      +
-relationship graph
-      +
-visibility rules
-      ↓
-visible subgraph
-      ↓
-generation-aware layout
+People ↔ Relationships
+          ↓
+   selected person
+          ↓
+ contextual projection
+          ↓
+ generation layout
+          ↓
+ routed family graph
 ```
 
-There is no permanent “view” to maintain. Selecting a different person simply regenerates the family around that person.
+The database answers **who is related to whom**.
 
-## Highlights
+The browser decides **which part of that graph is useful right now**.
 
-- **Person-centric navigation** — search for anyone or tap/click a card to make that person the new center.
-- **One global graph** — people and parent/spouse relationships are stored independently of the current view.
-- **Vertical genealogy is eager** — the selected person’s ancestry and descendants are rendered naturally.
-- **Horizontal genealogy is lazy** — siblings and collateral branches are contextual or collapsed behind `+N` controls.
-- **Spouse ancestry stays contextual** — only one spouse-ancestry level is shown by default.
-- **Ephemeral expansion** — `+N` branches reset on reload; only the selected anchor person is persisted in the browser.
-- **Responsive mobile UI** — touch-first selection, centered root person, compact context cards, and a full expanded selected card.
-- **Inline editing** — names, dates, descriptions, parents, spouses, children, and deletion are editable directly in the graph.
-- **Human-readable import/export** — the complete graph can be exported and restored as JSON.
-- **Generation-aware layout** — spouses stay on the same generation, children stay one generation below parents, and sibling groups remain coherent.
-- **Soft orthogonal connectors** — family lines use rounded knees rather than hard 90° corners.
-- **Build visibility** — every deployed page exposes the current Git SHA/build information.
+Re-rooting on another person does not load another saved tree. It recomputes a new view over the same underlying relationships.
+
+## Experience
+
+Family Graph is designed to stay visually calm even as the underlying genealogy becomes large.
+
+- **Person-centric navigation** — search for a person or select any visible card to make them the new root.
+- **Context-aware projection** — direct ancestry and descendants remain prominent while collateral branches stay lighter or collapsed until needed.
+- **Inline editing** — add or edit people, parents, partners, children, dates, places, notes, and life metadata directly from the graph.
+- **Relationship-aware families** — parent relationships and partner unions are represented explicitly rather than inferred from a saved drawing.
+- **Responsive layout** — the same graph model adapts to desktop and touch-first mobile interaction.
+- **Automatic routing** — spouses, parents, children, sibling groups, and multi-partner families are arranged by generation with orthogonal, crossing-aware connectors.
+- **Photos and portraits** — images are stored as media, can be associated with people, tagged with face regions, and used as primary portraits.
+- **Import / export** — the complete relationship graph can be exported as readable JSON and restored transactionally.
+- **Resilient startup** — the browser keeps a persistent graph snapshot so a previously loaded tree can render even when the server is temporarily unavailable.
+- **Cross-device synchronization** — a lightweight graph revision mechanism detects remote changes and refreshes the local view.
 
 ## Architecture
 
+The project intentionally avoids a large frontend framework or separate application server.
+
 ```mermaid
 flowchart LR
-    B[Browser] --> W[Cloudflare Worker]
-    W --> A[Static assets]
-    W --> D[(Cloudflare D1)]
-
     subgraph Browser
-        G[Graph projection]
-        L[Generation layout]
-        U[Responsive interaction]
+        S[SelectionController]
+        G[GraphStore]
+        V[GraphView]
+        R[RenderController]
+        L[Layout + Router]
+        UI[DOM / SVG]
+        A[FamilyApi]
+        Y[GraphSync]
+
+        S --> V
+        G --> V
+        V --> R
+        R --> L
+        L --> UI
+        G <--> A
+        Y --> G
     end
 
-    A --> G
-    G --> L
-    L --> U
+    A <--> W[Cloudflare Worker]
+    Y <--> W
+    W <--> D[(Cloudflare D1)]
+    W <--> O[(Cloudflare R2)]
+    W -. optional .-> P[Place search provider]
 ```
 
-The application intentionally stays lightweight:
+### Browser
 
-- **Cloudflare Workers** for the application/API origin
-- **Cloudflare D1** for persistent family data
-- **Cloudflare static assets** for the frontend
-- **Vanilla JavaScript** for graph projection and layout
-- **Tailwind CSS** for the base UI
-- No client framework and no separate application server
+The frontend is vanilla JavaScript, organized by ownership rather than framework conventions:
+
+- `SelectionController` owns the selected person and URL/browser persistence.
+- `GraphStore` owns the canonical browser graph, indexes, revisions, and persistent cache.
+- `GraphView` turns the global relationship graph into the visible person-centric projection.
+- `RenderController` owns one coherent geometry/render generation.
+- Layout refinements and `planar-router` arrange family units and produce SVG connectors.
+- `FamilyApi` is the browser transport boundary.
+- `GraphSync` reconciles revisions from other clients without making the UI depend on every network read.
+
+The visible graph is disposable. The relationship graph is not.
+
+### Server
+
+A Cloudflare Worker serves both the frontend and API:
+
+- **Cloudflare D1** stores people, relationships, graph revision state, media metadata, face regions, and cached place results.
+- **Cloudflare R2** stores original image bytes.
+- **Cloudflare static assets** serve the browser application.
+- **D1 migrations** own schema creation and evolution; normal HTTP request paths do not perform schema setup.
 
 ## Data model
 
-The conceptual model is deliberately simple:
+At the center of the application are two concepts:
 
 ```mermaid
 erDiagram
     PERSON ||--o{ RELATIONSHIP : participates_in
+    PERSON ||--o{ MEDIA_PERSON : appears_in
+    MEDIA ||--o{ MEDIA_PERSON : contains
+    MEDIA ||--o{ FACE : contains
+    PERSON ||--o{ FACE : identifies
+
     PERSON {
         string id PK
         string name
-        string dates
-        string description
+        json metadata
         datetime last_updated
     }
+
     RELATIONSHIP {
         string id PK
         string type
-        string person1_id FK
-        string person2_id FK
-        datetime created_at
+        string person1_id
+        string person2_id
+    }
+
+    MEDIA {
+        string id PK
+        string object_key
+        string mime_type
+        string caption
+        json place
+    }
+
+    FACE {
+        string id PK
+        string media_id
+        string person_id
+        float x
+        float y
+        float width
+        float height
     }
 ```
 
-Relationship semantics:
+Relationship semantics are deliberately small:
 
-- `parent`: `person1_id` is the parent and `person2_id` is the child.
-- `spouse`: symmetric; endpoints are normalized so the same couple is not stored twice in reverse order.
+- `parent` — `person1_id` is the parent and `person2_id` is the child.
+- `spouse` — a symmetric partner/union edge with normalized endpoints.
 
-The current database still retains the original `nodes` representation as a compatibility layer while `relationships` is the first-class graph representation. This keeps older CRUD behavior working during the migration to a fully relationship-native editor.
+The editor protects important graph invariants: explicit parentage is bounded, co-parents are never guessed, and family unions are created explicitly when required by the relationship model.
 
-### Graph API format
+Media is separate from genealogy. An image can be associated with multiple people, and face rectangles are normalized to the original image so they remain valid at any rendered size.
 
-`GET /api/graph` returns the complete family graph:
+## Projection and layout
 
-```json
-{
-  "format": "family-graph",
-  "version": 2,
-  "people": [
-    {
-      "id": "person_1",
-      "name": "Example Person",
-      "dates": "1950–2024",
-      "description": "Short family note",
-      "lastUpdated": "2026-01-01T00:00:00Z"
-    }
-  ],
-  "relationships": [
-    {
-      "id": "parent:person_1:person_2",
-      "type": "parent",
-      "person1Id": "person_1",
-      "person2Id": "person_2"
-    }
-  ]
-}
-```
+The renderer is intentionally asymmetric because genealogies grow very differently vertically and sideways.
 
-`PUT /api/graph` replaces the global graph transactionally after validation.
-
-Legacy `/api/tree` and `/api/nodes` endpoints remain available for compatibility with the current editing controls.
-
-## View rules
-
-The renderer is intentionally asymmetric. Family history is usually sparse going backward but can become extremely wide sideways.
-
-| Direction | Default behavior |
+| Relationship to the selected person | Default treatment |
 | --- | --- |
-| Selected person | Fully emphasized |
+| Selected person | Primary focus |
 | Ancestors | Eager / recursive |
 | Descendants | Eager / recursive |
-| Selected person’s spouse | Visible |
-| Spouse ancestry | One level by default |
-| Siblings | Visible, de-emphasized |
-| Sibling families / collateral branches | Lazy, behind `+N` |
-| Expanded branches | Temporary until reload or re-root |
+| Partners | Visible with the selected family context |
+| Siblings | Visible context |
+| Partner ancestry | Limited contextual depth |
+| Collateral branches | Collapsed until requested |
+| Expanded branches | Temporary view state |
 
-Clicking or tapping any person re-roots the graph and clears temporary branch expansion.
+Layout is generated from the visible projection, then refined in stages. The engine keeps partners on the same generation, parent/child relationships one generation apart, sibling groups coherent, and connector routes away from cards where possible.
 
-## Desktop interaction
+The final drawing is a combination of DOM cards and SVG connectors sharing the same canvas coordinate system.
 
-Unselected cards behave as clean name tiles. On hover/focus they expand visually to expose dates, description, edit controls, and the **center here** affordance without changing their measured outer geometry.
+## Photos and face identity
 
-The selected person gets a strong visual highlight and remains fully readable/editable.
+Photos are first-class family data rather than decoration attached directly to cards.
 
-Mouse drag-panning is intentionally disabled; trackpad, wheel, and scrollbars provide canvas navigation without fighting card selection.
+Original image bytes live in R2; D1 keeps their metadata and associations. A photo can belong to several people, individual faces can be marked and assigned, and a preferred face can become the portrait shown on a person card.
 
-## Mobile interaction
+This separation keeps the core relationship graph compact while allowing a richer visual archive to grow independently.
 
-Mobile uses the same graph and layout model with a touch-specific presentation:
+## Reliability and synchronization
 
-- Tap any unselected card to center the family on that person.
-- The selected person expands into a full card with all editable content and controls.
-- Unselected cards remain compact name tiles.
-- The selected card is recentered after initial load, re-rooting, rotation, and responsive relayout.
-- Touch-sized relationship controls surround the selected card.
-- `+N` frontier controls remain outside the card and are independently tappable.
-- Safe-area insets and iOS input behavior are handled explicitly.
+Family Graph is designed so a transient backend problem does not automatically become an empty screen.
 
-## Layout invariants
+The browser persists the latest valid graph snapshot and can render it immediately on startup. Server revisions are reconciled separately, and cache-covered network failures are surfaced in the developer console rather than silently hiding the failure.
 
-The layout engine tries to preserve a few hard rules before optimizing aesthetics:
+Structural edits still use the server as the authoritative persistence boundary; the cache is a resilience mechanism, not a competing source of truth.
 
-1. Married partners occupy the same generation.
-2. A child is exactly one generation below its parent family unit.
-3. Spouses remain a fixed visual distance apart.
-4. Cards in the same generation do not overlap.
-5. Sibling blocks are kept together when ordering generations.
-6. Parent/child trunks are made vertical where possible without breaking ordering or overlap constraints.
-7. Connector routing stays inside the empty space between generations.
-
-The final connector rendering uses straight vertical/horizontal segments with a small rounded radius at orthogonal knees.
-
-## Repository layout
+## Repository map
 
 ```text
 .
-├── deploy.sh
-├── package.json
-├── schema.sql
-├── setup.sh
-├── wrangler.toml
-├── src/
-│   └── worker.js
-└── public/
-    ├── index.html
-    ├── graph-view.js
-    ├── layout-refinement.js
-    ├── node-hover.js
-    ├── import-export.js
-    ├── interaction-refinement.js
-    ├── mobile-refinement.js
-    └── presentation-refinement.js
+├── public/                 Browser application
+│   ├── family-api.js       HTTP transport
+│   ├── graph-store.js      Canonical browser graph + cache
+│   ├── graph-view.js       Person-centric projection
+│   ├── render-controller.js
+│   ├── family-mutations.js
+│   ├── planar-*.js         Layout and connector routing
+│   ├── person-*.js         Person editing and metadata
+│   ├── *media*.js          Photo experience
+│   └── face-*.js           Face tagging and portraits
+├── src/                    Cloudflare Worker API
+│   ├── entry.js            Request routing / asset entry
+│   ├── worker.js           Graph and person API
+│   ├── media.js            R2 media API
+│   ├── faces.js            Face identity API
+│   ├── places.js           Optional place search
+│   └── graph-invariants.js
+├── migrations/             Canonical D1 schema migrations
+├── tests/                  Behavioral and invariant tests
+├── setup.sh                First-time D1 setup
+├── deploy.sh               Migrate + deploy current revision
+├── wrangler.toml           Cloudflare bindings and route config
+└── INSTALL.md              Installation and deployment guide
 ```
 
-### Frontend layers
+## Development
 
-The frontend is intentionally split into small progressive refinement files:
+The project favors small, explicit ownership boundaries over abstraction for its own sake. Rendering, graph state, transport, mutations, media, and server persistence each have a clear owner, while the runtime remains plain JavaScript that can be inspected directly in the browser.
 
-- `index.html` — base cards, CRUD, layout engine, SVG connectors
-- `layout-refinement.js` — post-layout straightening and family-unit alignment
-- `node-hover.js` — hover/default-text behavior
-- `graph-view.js` — person-centric graph projection, search, root selection, `+N` expansion
-- `import-export.js` — graph JSON import/export and anchor persistence
-- `interaction-refinement.js` — selection area, drag-pan suppression, contextual styling
-- `mobile-refinement.js` — touch interaction and compact mobile geometry
-- `presentation-refinement.js` — shared card presentation and mobile recentering
-
-The Worker injects these scripts with the deployed build SHA so frontend changes are cache-busted automatically.
-
-## Running locally
-
-Install dependencies:
+Run the test suite with:
 
 ```bash
-npm install
+npm test
 ```
 
-For a clean local D1 database:
+For local setup, Cloudflare resources, migrations, configuration, and deployment, see **[INSTALL.md](INSTALL.md)**.
 
-```bash
-npx wrangler d1 execute family_tree_db --local --file=./schema.sql
-```
+## API at a glance
 
-Then run the Worker locally:
+The Worker exposes a compact HTTP API around the graph and its supporting data, including:
 
-```bash
-npx wrangler dev
-```
+- graph read/write and revision endpoints
+- person/node updates
+- media upload and metadata
+- media/person associations
+- face regions and preferred portraits
+- optional place search
+- deployed build/version metadata
 
-> `schema.sql` is appropriate for creating a clean local database. Do not blindly re-run destructive setup steps against an existing production database.
+`GET /api/graph` returns the canonical `family-graph` document used by the browser and import/export flow.
 
-## Deployment
+## Security
 
-Deployment is intentionally simple:
+The application does not provide an application-level authentication system. A deployment containing private family information should be protected at the hosting/access layer before real data is added.
 
-```bash
-git pull
-./deploy.sh
-```
+## License
 
-`deploy.sh` injects the current Git SHA and deployment timestamp into the Worker build before running Wrangler.
-
-The production custom domain is version-controlled in `wrangler.toml`:
-
-```toml
-[[routes]]
-pattern = "family.barnahum.com"
-custom_domain = true
-```
-
-Cloudflare handles the custom-domain routing and TLS certificate.
-
-## API surface
-
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| `GET` | `/api/graph` | Read the complete global graph |
-| `PUT` | `/api/graph` | Replace/import the complete global graph |
-| `GET` | `/api/version` | Current deployed build metadata |
-| `GET/PUT` | `/api/tree` | Legacy tree compatibility |
-| CRUD | `/api/nodes` | Legacy/current inline editor compatibility |
-
-## Import / export
-
-The title card exposes JSON import/export controls. Exports use the `family-graph` v2 envelope and are intended to be readable, diffable, and easy to back up.
-
-The importer also accepts the older `family-tree` v1 format and translates it through the compatibility layer.
-
-## Current limitations / next steps
-
-The graph storage already supports multiple relationship records, but parts of the editing UI still expose the older single-parent / single-spouse interaction model.
-
-Likely next steps:
-
-- relationship-native editing with search/autocomplete for existing people
-- explicit multiple-parent and multiple-spouse UI
-- multiple-marriage layout units
-- richer relationship metadata such as biological/adoptive/step relationships and marriage status/dates
-- person photos/media with originals in object storage and crop metadata in D1
-
-## Design principle
-
-The database should answer **who is related to whom**.
-
-The UI should answer **what part of that graph matters from where I am standing right now**.
-
-That separation is the core of the project.
+ISC.
