@@ -91,6 +91,29 @@ function createStoreContext(requestImpl, { status = null } = {}) {
   assert(snapshot.indexes.parentsByChild.get('C').has('R'));
   assert(snapshot.indexes.childrenByParent.get('R').has('C'));
 
+  const draftAdded = Store.addDraft(
+    { id: 'D', name: null, metadata: {} },
+    [{ type: 'parent', person1Id: 'R', person2Id: 'D' }],
+    { reason: 'test-draft' }
+  );
+  assert.strictEqual(draftAdded, true);
+  snapshot = Store.snapshot();
+  assert.strictEqual(snapshot.draftCount, 1);
+  assert(!snapshot.graph.people.some(person => person.id === 'D'), 'canonical snapshot must exclude drafts');
+  assert.strictEqual(Store.person('D').id, 'D', 'drafts must be visible through person lookup');
+  assert(snapshot.indexes.parentsByChild.get('D').has('R'), 'draft relationships must participate in view indexes');
+
+  const view = await Store.read({ reason: 'draft-view' });
+  assert(view.graph.people.some(person => person.id === 'D'), 'view reads must include drafts');
+  assert(view.graph.relationships.some(relation => relation.type === 'parent' && relation.person2Id === 'D'));
+  assert.strictEqual(graphReads, 0, 'draft view reads must stay local');
+
+  let persisted = JSON.parse(storage.get('family-tree.graph-cache.v1'));
+  assert(!persisted.graph.people.some(person => person.id === 'D'), 'drafts must never enter persistent cache');
+  Store.removeDraft('D', { reason: 'test-draft-remove' });
+  assert.strictEqual(Store.person('D'), null);
+  assert.strictEqual(Store.snapshot().draftCount, 0);
+
   await Store.read({ reason: 'clean-read' });
   assert.strictEqual(graphReads, 0, 'clean graph reads must stay in GraphStore');
 
@@ -117,10 +140,10 @@ function createStoreContext(requestImpl, { status = null } = {}) {
   assert.strictEqual(snapshot.revision, 3);
   assert.strictEqual(snapshot.dirty, false, 'known local person delta should clean Store');
 
-  const persisted = JSON.parse(storage.get('family-tree.graph-cache.v1'));
+  persisted = JSON.parse(storage.get('family-tree.graph-cache.v1'));
   assert.strictEqual(persisted.revision, 3);
   assert.strictEqual(persisted.graph.people.find(person => person.id === 'A').name, 'Alicia');
-  assert(events.filter(event => event.type === 'family-graph-store-changed').length >= 3);
+  assert(events.filter(event => event.type === 'family-graph-store-changed').length >= 5);
   assert(events.some(event => event.type === 'family-graph-store-fetch'));
 
   const shown = [];
