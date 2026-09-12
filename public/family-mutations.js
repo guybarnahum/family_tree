@@ -7,6 +7,7 @@
     const Api = window.FamilyApi;
     const Selection = window.FamilySelectionController;
     const cardsLayer = document.getElementById('cards-layer');
+    const svgLayer = document.getElementById('svg-layer');
     if (!Store || !Api || !Selection || !cardsLayer) return;
 
     const DRAFT_TTL_MS = 30 * 60 * 1000;
@@ -32,13 +33,22 @@
                 28% { transform: translateX(-50%) scale(1.08); opacity: 1; filter: blur(0); }
                 100% { transform: translateX(-50%) translateY(8px) scale(.08) rotate(3deg); opacity: 0; filter: blur(2px); }
             }
+            @keyframes family-connector-plop-out {
+                0% { opacity: 1; }
+                28% { opacity: 1; }
+                100% { opacity: 0; stroke-width: .5px; }
+            }
             .absolute-card.graph-node-plop-out {
                 animation: family-node-plop-out .27s cubic-bezier(.55,.02,.9,.45) forwards !important;
                 pointer-events: none !important;
                 z-index: 120 !important;
             }
+            #svg-layer path.graph-connector-plop-out {
+                animation: family-connector-plop-out .27s cubic-bezier(.55,.02,.9,.45) forwards !important;
+            }
             @media (prefers-reduced-motion: reduce) {
-                .absolute-card.graph-node-plop-out { animation-duration: .08s !important; }
+                .absolute-card.graph-node-plop-out,
+                #svg-layer path.graph-connector-plop-out { animation-duration: .08s !important; }
             }
         `;
         document.head.appendChild(style);
@@ -163,10 +173,45 @@
         }, wait);
     }
 
+    function endpointOnCard(path, length, rect, padding = 5) {
+        if (typeof path?.getPointAtLength !== 'function' || typeof path?.getScreenCTM !== 'function') return false;
+        const matrix = path.getScreenCTM();
+        if (!matrix) return false;
+        const local = path.getPointAtLength(length);
+        let screen = null;
+        if (typeof DOMPoint === 'function') {
+            screen = new DOMPoint(local.x, local.y).matrixTransform(matrix);
+        } else {
+            const point = path.ownerSVGElement?.createSVGPoint?.();
+            if (!point) return false;
+            point.x = local.x;
+            point.y = local.y;
+            screen = point.matrixTransform(matrix);
+        }
+        return screen.x >= rect.left - padding && screen.x <= rect.right + padding &&
+            screen.y >= rect.top - padding && screen.y <= rect.bottom + padding;
+    }
+
+    function connectorsForCard(card) {
+        if (!svgLayer?.querySelectorAll || typeof card?.getBoundingClientRect !== 'function') return [];
+        const rect = card.getBoundingClientRect();
+        return [...svgLayer.querySelectorAll('path')].filter(path => {
+            if (typeof path.getTotalLength !== 'function') return false;
+            try {
+                const length = path.getTotalLength();
+                return endpointOnCard(path, 0, rect) || endpointOnCard(path, length, rect);
+            } catch (_) {
+                return false;
+            }
+        });
+    }
+
     async function animateRemoval(id) {
         const card = document.getElementById(`card-${id}`);
         if (!card?.classList) return;
+        const connectors = connectorsForCard(card);
         card.classList.add('graph-node-plop-out');
+        connectors.forEach(path => path.classList?.add?.('graph-connector-plop-out'));
         if (typeof card.addEventListener !== 'function') return;
         await new Promise(resolve => {
             let settled = false;
@@ -182,6 +227,9 @@
 
     function restoreRemoval(id) {
         document.getElementById(`card-${id}`)?.classList?.remove?.('graph-node-plop-out');
+        svgLayer?.querySelectorAll?.('.graph-connector-plop-out')?.forEach?.(path =>
+            path.classList?.remove?.('graph-connector-plop-out')
+        );
     }
 
     function selectAndFocus(personId, reason = 'new-person') {
