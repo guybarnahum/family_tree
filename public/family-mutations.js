@@ -9,17 +9,46 @@
     const cardsLayer = document.getElementById('cards-layer');
     if (!Store || !Api || !Selection || !cardsLayer) return;
 
+    const DRAFT_TTL_MS = 30 * 60 * 1000;
+    const draftLifecycle = new Map();
+
     const diagnostics = {
         structuralWrites: 0,
         personWrites: 0,
         noopPersonWrites: 0,
+        draftCreates: 0,
+        draftPromotions: 0,
+        draftExpirations: 0,
         actionClicks: 0,
         lastAction: '',
         lastError: null
     };
 
+    if (document.createElement && document.head) {
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes family-node-plop-out {
+                0% { transform: translateX(-50%) scale(1); opacity: 1; filter: blur(0); }
+                28% { transform: translateX(-50%) scale(1.08); opacity: 1; filter: blur(0); }
+                100% { transform: translateX(-50%) translateY(8px) scale(.08) rotate(3deg); opacity: 0; filter: blur(2px); }
+            }
+            .absolute-card.graph-node-plop-out {
+                animation: family-node-plop-out .27s cubic-bezier(.55,.02,.9,.45) forwards !important;
+                pointer-events: none !important;
+                z-index: 120 !important;
+            }
+            @media (prefers-reduced-motion: reduce) {
+                .absolute-card.graph-node-plop-out { animation-duration: .08s !important; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
     function expose() {
-        window.__familyMutationDiagnostics = { ...diagnostics };
+        window.__familyMutationDiagnostics = {
+            ...diagnostics,
+            activeDrafts: draftLifecycle.size
+        };
     }
 
     function cloneGraph(value) {
@@ -30,6 +59,14 @@
 
     function nextPersonId() {
         return 'node_' + Math.random().toString(36).slice(2, 11);
+    }
+
+    function meaningfulValue(value) {
+        if (value === null || value === undefined) return false;
+        if (typeof value === 'string') return !!value.trim();
+        if (Array.isArray(value)) return value.some(meaningfulValue);
+        if (typeof value === 'object') return Object.values(value).some(meaningfulValue);
+        return true;
     }
 
     function sameRelationship(a, b) {
@@ -65,9 +102,16 @@
     }
 
     async function authoritativeGraph(reason = 'mutation-intent') {
-        const snapshot = await Store.refresh({ authoritative: true, reason });
-        if (!snapshot?.graph) throw new Error('Authoritative graph is unavailable');
-        return cloneGraph(snapshot.graph);
+        await Store.refresh({ authoritative: true, reason });
+        const value = Store.snapshot().graph;
+        if (!value) throw new Error('Authoritative graph is unavailable');
+        return cloneGraph(value);
+    }
+
+    async function refreshProjection() {
+        const GraphView = window.FamilyGraphView;
+        if (!GraphView?.refresh) return null;
+        return GraphView.refresh({ force: false, recenter: false });
     }
 
     async function refreshAfterStructuralWrite() {
@@ -101,6 +145,161 @@
         return true;
     }
 
+    function clearDraftTimer(id) {
+        const lifecycle = draftLifecycle.get(id);
+        if (lifecycle?.timer != null && typeof clearTimeout === 'function') clearTimeout(lifecycle.timer);
+        if (lifecycle) lifecycle.timer = null;
+    }
+
+    function scheduleDraftExpiry(id, delay = DRAFT_TTL_MS) {
+        const lifecycle = draftLifecycle.get(id);
+        if (!lifecycle || typeof setTimeout !== 'function') return;
+        clearDraftTimer(id);
+        const wait = Math.max(0, Number(delay) || 0);
+        lifecycle.expiresAt = Date.now() + wait;
+        lifecycle.timer = setTimeout(() => {
+            lifecycle.timer = null;
+            void expireDraft(id);
+        }, wait);
+    }
+
+    async function animateRemoval(id) {
+        const card = document.getElementById(`card-${id}`);
+        if (!card?.classList) return;
+        card.classList.add('graph-node-plop-out');
+        if (typeof card.addEventListener !== 'function') return;
+        await new Promise(resolve => {
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                resolve();
+            };
+            card.addEventListener('animationend', finish, { once: true });
+            if (typeof setTimeout === 'function') setTimeout(finish, 340);
+        });
+    }
+
+    function restoreRemoval(id) {
+        document.getElementById(`card-${id}`)?.classList?.remove?.('graph-node-plop-out');
+    }
+
+    function selectAndFocus(personId, reason = 'new-person') {
+        if (!Selection.selectPerson?.(personId, { source: reason })) return false;
+        window.dispatchEvent(new CustomEvent('family-focus-person-name', {
+            detail: { id: personId, reason }
+        }));
+        return true;
+    }
+
+    async function createDraft(relationships, anchorId, reason) {
+        const id = nextPersonId();
+        const added = Store.addDraft(
+            { id, name: null, metadata: {} },
+            relationships,
+            { reason: `${reason}-draft` }
+        );
+        if (!added) throw new Error('Unable to create draft person');
+
+        draftLifecycle.set(id, {
+            anchorId: anchorId || null,
+            expiresAt: Date.now() + DRAFT_TTL_MS,
+            timer: null
+        });
+        scheduleDraftExpiry(id);
+        diagnostics.draftCreates += 1;
+        diagnostics.lastAction = `${reason}:draft`;
+        expose();
+
+        await refreshProjection();
+        selectAndFocus(id, reason);
+        return id;
+    }
+
+    function draftHasContent(record, patch = {}) {
+        const person = { ...(record?.person || {}), ...(patch || {}) };
+        return meaningfulValue(person.name) || meaningfulValue(person.metadata || {});
+    }
+
+    async function persistDraft(id, patch = {}, { reason = 'draft-persist', force = false } = {}) {
+        const record = Store.draft(id);
+        if (!record) return { changed: false, revision: Store.snapshot().revision, draft: false };
+        if (!force && !draftHasContent(record, patch)) {
+            return { changed: false, revision: Store.snapshot().revision, draft: true };
+        }
+
+        const lifecycle = draftLifecycle.get(id) || {
+            anchorId: null,
+            expiresAt: Date.now() + DRAFT_TTL_MS,
+            timer: null
+        };
+        const remaining = Math.max(0, lifecycle.expiresAt - Date.now());
+        const value = await authoritativeGraph(`${reason}-intent`);
+        const person = {
+            ...record.person,
+            ...patch,
+            metadata: patch.metadata && typeof patch.metadata === 'object'
+                ? { ...patch.metadata }
+                : { ...(record.person.metadata || {}) }
+        };
+        if (!value.people.some(candidate => candidate.id === id)) value.people.push(person);
+        for (const relation of record.relationships) addRelationship(value, relation);
+
+        clearDraftTimer(id);
+        Store.removeDraft(id, { reason: `${reason}-promote`, emit: false });
+        draftLifecycle.delete(id);
+        try {
+            await putGraph(value, { anchorId: lifecycle.anchorId || id, reason });
+            diagnostics.draftPromotions += 1;
+            diagnostics.lastAction = reason;
+            expose();
+            return {
+                changed: true,
+                revision: Store.snapshot().revision,
+                patch,
+                draft: false
+            };
+        } catch (error) {
+            Store.addDraft(record.person, record.relationships, { reason: `${reason}-restore` });
+            draftLifecycle.set(id, {
+                anchorId: lifecycle.anchorId,
+                expiresAt: Date.now() + remaining,
+                timer: null
+            });
+            scheduleDraftExpiry(id, remaining);
+            await refreshProjection();
+            throw error;
+        }
+    }
+
+    async function ensurePersisted(id, reason) {
+        if (!Store.isDraft?.(id)) return true;
+        await persistDraft(id, {}, { reason, force: true });
+        return !Store.isDraft?.(id);
+    }
+
+    async function expireDraft(id) {
+        if (!Store.isDraft?.(id)) return false;
+        const lifecycle = draftLifecycle.get(id) || {};
+        await animateRemoval(id);
+        const fallback = lifecycle.anchorId || Store.snapshot().graph?.people?.[0]?.id || null;
+        if (Selection.getSelectedPersonId?.() === id && fallback) {
+            Selection.replaceUrlPerson?.(fallback, {
+                source: 'draft-expired',
+                persist: true,
+                notify: false
+            });
+        }
+        Store.removeDraft(id, { reason: 'draft-expired' });
+        draftLifecycle.delete(id);
+        diagnostics.draftExpirations += 1;
+        diagnostics.lastAction = 'draft-expired';
+        expose();
+        await refreshProjection();
+        window.dispatchEvent(new CustomEvent('family-draft-expired', { detail: { id } }));
+        return true;
+    }
+
     async function updatePerson(id, patch, { reason = 'person-update' } = {}) {
         const person = Store.person(id) || globalNodeMap?.get?.(id) || null;
         if (!id || !patch || typeof patch !== 'object') throw new Error('Person update requires id + patch');
@@ -119,31 +318,43 @@
         }
         if (fields.length !== 1) throw new Error('Person update expects exactly one field');
 
+        if (Store.isDraft?.(id)) {
+            const result = await persistDraft(id, effective, { reason: 'initialize-person' });
+            if (result.changed) diagnostics.personWrites += 1;
+            expose();
+            return result;
+        }
+
         const response = await Api.request(`/api/nodes/${encodeURIComponent(id)}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(effective)
         });
         if (!response.ok) throw new Error(await response.text());
-        const revision = Api.revisionFromResponse(response);
-        Store.updatePerson(id, effective, { revision, reason });
+        const nextRevision = Api.revisionFromResponse(response);
+        Store.updatePerson(id, effective, { revision: nextRevision, reason });
         diagnostics.personWrites += 1;
         diagnostics.lastAction = reason;
         diagnostics.lastError = null;
         expose();
-        return { changed: true, revision, patch: effective };
+        return { changed: true, revision: nextRevision, patch: effective };
     }
 
     async function addSpouse(partnerId) {
         showStatus('מוסיף בן/בת זוג...');
         try {
+            await ensurePersisted(partnerId, 'initialize-before-spouse');
             const value = await authoritativeGraph('add-spouse-intent');
             if (!value.people.some(person => person.id === partnerId)) throw new Error('Partner is missing from graph');
-            const spouseId = nextPersonId();
-            value.people.push({ id: spouseId, name: null, metadata: {} });
-            addRelationship(value, { type: 'spouse', person1Id: partnerId, person2Id: spouseId });
-            await putGraph(value, { anchorId: partnerId, reason: 'add-spouse' });
-            showStatus('נשמר בהצלחה');
+            const spouseId = await createDraft(
+                [{ type: 'spouse', person1Id: partnerId, person2Id: nextPersonId() }],
+                partnerId,
+                'new-spouse'
+            );
+            // createDraft owns the id; replace the placeholder id in the relationship atomically.
+            const record = Store.draft(spouseId);
+            if (record) record.relationships[0].person2Id = spouseId;
+            showStatus('נוסף');
             return spouseId;
         } catch (error) {
             diagnostics.lastError = String(error?.message || error);
@@ -157,6 +368,7 @@
     async function addParent(childId) {
         showStatus('מוסיף הורה...');
         try {
+            await ensurePersisted(childId, 'initialize-before-parent');
             const value = await authoritativeGraph('add-parent-intent');
             const { parentsByChild } = graphIndexes(value);
             const existing = [...(parentsByChild.get(childId) || [])];
@@ -166,14 +378,19 @@
             }
             if (!value.people.some(person => person.id === childId)) throw new Error('Child is missing from graph');
 
-            const parentId = nextPersonId();
-            value.people.push({ id: parentId, name: null, metadata: {} });
-            addRelationship(value, { type: 'parent', person1Id: parentId, person2Id: childId });
+            const relations = [{ type: 'parent', person1Id: null, person2Id: childId }];
             if (existing.length === 1) {
-                addRelationship(value, { type: 'spouse', person1Id: existing[0], person2Id: parentId });
+                relations.push({ type: 'spouse', person1Id: existing[0], person2Id: null });
             }
-            await putGraph(value, { anchorId: childId, reason: 'add-parent' });
-            showStatus('נשמר בהצלחה');
+            const parentId = await createDraft(relations, childId, 'new-parent');
+            const record = Store.draft(parentId);
+            if (record) {
+                record.relationships.forEach(relation => {
+                    if (relation.person1Id === null) relation.person1Id = parentId;
+                    if (relation.person2Id === null) relation.person2Id = parentId;
+                });
+            }
+            showStatus('נוסף');
             return parentId;
         } catch (error) {
             diagnostics.lastError = String(error?.message || error);
@@ -184,17 +401,10 @@
         }
     }
 
-    function selectAndFocus(personId, reason = 'new-person') {
-        if (!Selection.selectPerson?.(personId, { source: reason })) return false;
-        window.dispatchEvent(new CustomEvent('family-focus-person-name', {
-            detail: { id: personId, reason }
-        }));
-        return true;
-    }
-
     async function addChildForParents(parentIds, anchorId, graphValue = null) {
         const parents = [...new Set(parentIds.filter(Boolean))];
         if (!parents.length || parents.length > 2) throw new Error('Child creation requires one or two explicit parents');
+        for (const parentId of parents) await ensurePersisted(parentId, 'initialize-before-child');
         const value = graphValue ? cloneGraph(graphValue) : await authoritativeGraph('add-child-intent');
         const ids = new Set(value.people.map(person => person.id));
         if (parents.some(id => !ids.has(id))) throw new Error('Parent is missing from graph');
@@ -210,11 +420,24 @@
         }
 
         const childId = nextPersonId();
-        value.people.push({ id: childId, name: null, metadata: {} });
-        parents.forEach(parentId => addRelationship(value, {
+        const relations = parents.map(parentId => ({
             type: 'parent', person1Id: parentId, person2Id: childId
         }));
-        await putGraph(value, { anchorId: anchorId || parents[0], reason: 'add-child' });
+        const added = Store.addDraft(
+            { id: childId, name: null, metadata: {} },
+            relations,
+            { reason: 'new-child-draft' }
+        );
+        if (!added) throw new Error('Unable to create draft child');
+        draftLifecycle.set(childId, {
+            anchorId: anchorId || parents[0],
+            expiresAt: Date.now() + DRAFT_TTL_MS,
+            timer: null
+        });
+        scheduleDraftExpiry(childId);
+        diagnostics.draftCreates += 1;
+        expose();
+        await refreshProjection();
         selectAndFocus(childId, 'new-child');
         return childId;
     }
@@ -222,6 +445,7 @@
     async function addChild(parentId) {
         showStatus('מוסיף ילד...');
         try {
+            await ensurePersisted(parentId, 'initialize-before-child-policy');
             const value = await authoritativeGraph('add-child-policy');
             const { spousesByPerson } = graphIndexes(value);
             const partners = [...(spousesByPerson.get(parentId) || [])];
@@ -231,7 +455,7 @@
             }
             const parents = partners.length === 1 ? [parentId, partners[0]] : [parentId];
             const childId = await addChildForParents(parents, parentId, value);
-            showStatus('נשמר בהצלחה');
+            showStatus('נוסף');
             return { requiresUnion: false, childId };
         } catch (error) {
             diagnostics.lastError = String(error?.message || error);
@@ -245,11 +469,15 @@
     async function addChildToUnion(a, b) {
         showStatus('מוסיף ילד...');
         try {
+            await ensurePersisted(a, 'initialize-before-union-child');
+            await ensurePersisted(b, 'initialize-before-union-child');
+            const value = await authoritativeGraph('add-child-union-intent');
             const childId = await addChildForParents(
                 [a, b],
-                Selection.getSelectedPersonId?.() || a
+                Selection.getSelectedPersonId?.() || a,
+                value
             );
-            showStatus('נשמר בהצלחה');
+            showStatus('נוסף');
             return childId;
         } catch (error) {
             diagnostics.lastError = String(error?.message || error);
@@ -258,14 +486,6 @@
             showStatus('שגיאה בהוספה');
             return null;
         }
-    }
-
-    function meaningfulValue(value) {
-        if (value === null || value === undefined) return false;
-        if (typeof value === 'string') return !!value.trim();
-        if (Array.isArray(value)) return value.some(meaningfulValue);
-        if (typeof value === 'object') return Object.values(value).some(meaningfulValue);
-        return true;
     }
 
     async function hasMedia(personId) {
@@ -279,7 +499,28 @@
         }
     }
 
+    async function deleteDraft(id) {
+        const lifecycle = draftLifecycle.get(id) || {};
+        showStatus('מוחק...');
+        await animateRemoval(id);
+        const fallback = lifecycle.anchorId || Store.snapshot().graph?.people?.[0]?.id || null;
+        if (Selection.getSelectedPersonId?.() === id && fallback) {
+            Selection.replaceUrlPerson?.(fallback, {
+                source: 'delete-draft-person',
+                persist: true,
+                notify: false
+            });
+        }
+        clearDraftTimer(id);
+        Store.removeDraft(id, { reason: 'delete-draft-person' });
+        draftLifecycle.delete(id);
+        await refreshProjection();
+        showStatus('נמחק');
+        return true;
+    }
+
     async function deletePerson(id) {
+        if (Store.isDraft?.(id)) return deleteDraft(id);
         try {
             const value = await authoritativeGraph('delete-person-intent');
             const person = value.people.find(candidate => candidate.id === id);
@@ -292,6 +533,7 @@
             if ((!blank || media) && !confirm('האם אתה בטוח שברצונך למחוק איש קשר זה?')) return false;
 
             showStatus('מוחק...');
+            await animateRemoval(id);
             value.people = value.people.filter(candidate => candidate.id !== id);
             value.relationships = value.relationships.filter(relation =>
                 relation.person1Id !== id && relation.person2Id !== id
@@ -301,13 +543,14 @@
                 Selection.replaceUrlPerson(anchorId, {
                     source: 'delete-person',
                     persist: true,
-                    notify: true
+                    notify: false
                 });
             }
             await putGraph(value, { anchorId, reason: 'delete-person' });
             showStatus('נמחק');
             return true;
         } catch (error) {
+            restoreRemoval(id);
             diagnostics.lastError = String(error?.message || error);
             expose();
             console.error('Unable to delete person:', error);
@@ -341,7 +584,10 @@
         addParent,
         addSpouse,
         deletePerson,
+        persistDraft,
+        expireDraft,
         putGraph,
+        constants: Object.freeze({ draftTtlMs: DRAFT_TTL_MS }),
         diagnostics: () => ({ ...window.__familyMutationDiagnostics })
     });
 
