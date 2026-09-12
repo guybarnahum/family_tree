@@ -20,13 +20,14 @@
     let parentsByChild = new Map();
     let childrenByParent = new Map();
     let spousesByPerson = new Map();
+    const drafts = new Map();
 
     const diagnostics = {
         cacheLoads: 0, cacheWrites: 0, memoryReads: 0, networkReads: 0,
         fallbackReads: 0, networkErrors: 0, graphReplacements: 0,
-        personUpdates: 0, observedMutations: 0, lastFetchSource: '',
-        lastFetchAt: null, lastFetchLatencyMs: null, lastChangeReason: '',
-        lastStructuralChanged: false
+        personUpdates: 0, observedMutations: 0, draftAdds: 0, draftRemoves: 0,
+        lastFetchSource: '', lastFetchAt: null, lastFetchLatencyMs: null,
+        lastChangeReason: '', lastStructuralChanged: false
     };
 
     const finiteRevision = value => Api.finiteRevision(value);
@@ -47,12 +48,45 @@
         ]);
     }
 
+    function sameRelationship(a, b) {
+        if (a?.type !== b?.type) return false;
+        if (a?.type === 'spouse') {
+            return (a.person1Id === b.person1Id && a.person2Id === b.person2Id) ||
+                (a.person1Id === b.person2Id && a.person2Id === b.person1Id);
+        }
+        return a?.person1Id === b?.person1Id && a?.person2Id === b?.person2Id;
+    }
+
+    function viewGraph() {
+        if (!graph) return null;
+        if (!drafts.size) return graph;
+
+        const people = [...(graph.people || [])];
+        const relationships = [...(graph.relationships || [])];
+        const ids = new Set(people.map(person => person.id));
+
+        for (const record of drafts.values()) {
+            if (!ids.has(record.person.id)) {
+                people.push(record.person);
+                ids.add(record.person.id);
+            }
+            for (const relation of record.relationships) {
+                if (!relationships.some(existing => sameRelationship(existing, relation))) {
+                    relationships.push(relation);
+                }
+            }
+        }
+
+        return { ...graph, people, relationships };
+    }
+
     function rebuildIndexes() {
-        peopleById = new Map((graph?.people || []).map(person => [person.id, person]));
+        const value = viewGraph();
+        peopleById = new Map((value?.people || []).map(person => [person.id, person]));
         parentsByChild = new Map();
         childrenByParent = new Map();
         spousesByPerson = new Map();
-        for (const relation of graph?.relationships || []) {
+        for (const relation of value?.relationships || []) {
             if (relation.type === 'parent') {
                 addSet(parentsByChild, relation.person2Id, relation.person1Id);
                 addSet(childrenByParent, relation.person1Id, relation.person2Id);
@@ -88,16 +122,21 @@
     function snapshot() {
         return {
             graph, savedAt, revision, serverRevision, stale, dirty, source,
-            generation, structuralSignature,
+            generation, structuralSignature, draftCount: drafts.size,
             indexes: { peopleById, parentsByChild, childrenByParent, spousesByPerson }
         };
+    }
+
+    function viewSnapshot() {
+        return { ...snapshot(), graph: viewGraph() };
     }
 
     function expose() {
         window.__familyGraphStoreDiagnostics = {
             ...diagnostics, generation, revision, serverRevision, stale, dirty, source, savedAt,
             people: graph?.people?.length || 0,
-            relationships: graph?.relationships?.length || 0
+            relationships: graph?.relationships?.length || 0,
+            drafts: drafts.size
         };
     }
 
@@ -135,10 +174,60 @@
         window.dispatchEvent(new CustomEvent('family-graph-store-fetch', { detail: payload }));
     }
 
+    function addDraft(personValue, relationships = [], { reason = 'draft-add' } = {}) {
+        if (!personValue?.id || peopleById.has(personValue.id)) return false;
+        const personRecord = {
+            ...personValue,
+            name: personValue.name ?? null,
+            metadata: personValue.metadata && typeof personValue.metadata === 'object'
+                ? { ...personValue.metadata }
+                : {}
+        };
+        const relationRecords = (relationships || []).map(relation => ({ ...relation }));
+        drafts.set(personRecord.id, { person: personRecord, relationships: relationRecords });
+        generation += 1;
+        diagnostics.draftAdds += 1;
+        rebuildIndexes();
+        emitStoreChange(reason, true, 'draft');
+        return true;
+    }
+
+    function draft(personId) {
+        return drafts.get(personId) || null;
+    }
+
+    function isDraft(personId) {
+        return drafts.has(personId);
+    }
+
+    function removeDraft(personId, { reason = 'draft-remove', emit = true } = {}) {
+        const record = drafts.get(personId) || null;
+        if (!record) return null;
+        drafts.delete(personId);
+        generation += 1;
+        diagnostics.draftRemoves += 1;
+        rebuildIndexes();
+        if (emit) emitStoreChange(reason, true, 'draft');
+        else expose();
+        return record;
+    }
+
+    function updateDraftPerson(personId, patch, { reason = 'draft-person-update' } = {}) {
+        const record = drafts.get(personId);
+        if (!record || !patch || typeof patch !== 'object') return false;
+        Object.assign(record.person, patch);
+        generation += 1;
+        rebuildIndexes();
+        emitStoreChange(reason, Object.prototype.hasOwnProperty.call(patch, 'name'), 'draft');
+        return true;
+    }
+
     function replace(value, options = {}) {
         if (!isGraphDocument(value)) throw new Error('Invalid family graph document');
         const before = structuralSignature;
         graph = value;
+        const persistedIds = new Set((graph.people || []).map(personValue => personValue.id));
+        for (const id of [...drafts.keys()]) if (persistedIds.has(id)) drafts.delete(id);
         structuralSignature = structureOf(value);
         const structuralChanged = before !== structuralSignature;
         revision = finiteRevision(options.revision) || revision;
@@ -322,15 +411,16 @@
     async function read({ refresh: forceNetwork = false, authoritative = false, reason = 'graph-read' } = {}) {
         if (graph && !forceNetwork && !stale && !dirty) {
             diagnostics.memoryReads += 1;
+            const value = viewGraph();
             emitFetch({ source: 'store', revision,
-                people: graph.people.length, relationships: graph.relationships.length });
-            return snapshot();
+                people: value?.people?.length || 0, relationships: value?.relationships?.length || 0 });
+            return viewSnapshot();
         }
         const response = await networkRead({ authoritative, reason });
         if (authoritative && response.headers.get('X-Family-Graph-Stale') === '1') {
             throw new Error('Authoritative graph is unavailable');
         }
-        return snapshot();
+        return viewSnapshot();
     }
 
     async function refresh({ serverRevision: value = null, authoritative = false, reason = 'refresh' } = {}) {
@@ -339,9 +429,10 @@
     }
 
     function updatePerson(personId, patch, { revision: value = null, reason = 'person-update' } = {}) {
-        const person = peopleById.get(personId);
-        if (!person || !patch || typeof patch !== 'object') return false;
-        Object.assign(person, patch);
+        if (drafts.has(personId)) return updateDraftPerson(personId, patch, { reason });
+        const personValue = peopleById.get(personId);
+        if (!personValue || !patch || typeof patch !== 'object') return false;
+        Object.assign(personValue, patch);
         const next = finiteRevision(value);
         if (next) {
             revision = next; serverRevision = next; stale = false; dirty = false;
@@ -358,6 +449,7 @@
     function clear() {
         graph = null; savedAt = null; revision = null; serverRevision = null;
         stale = false; dirty = false; source = 'empty'; structuralSignature = '';
+        drafts.clear();
         generation += 1; rebuildIndexes();
         try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
         emitStoreChange('clear', true);
@@ -376,8 +468,10 @@
 
     window.FamilyGraphStore = Object.freeze({
         snapshot, read, refresh, replace,
+        viewGraph,
         indexes: () => snapshot().indexes,
         person, sex,
+        addDraft, draft, isDraft, removeDraft, updateDraftPerson,
         updatePerson, markStale, markDirty, markClean, acknowledgeRevision,
         noteMutation, clear, ageMs, isGraphDocument, finiteRevision
     });
