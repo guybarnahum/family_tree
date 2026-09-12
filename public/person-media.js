@@ -197,7 +197,7 @@
                     <div class="person-media-meta-value" contenteditable="true" data-media-field="takenDate" data-placeholder="שנה, תאריך או תיאור חופשי"></div>
                 </div>
                 <div class="person-media-meta-field">
-                    <span class="person-pane-meta-label">מקום</span>
+                    <span class="person-media-meta-label">מקום</span>
                     <div class="person-media-place-row">
                         <div class="person-media-meta-value" contenteditable="true" data-media-field="takenPlace" data-placeholder="עיר, אזור או מדינה"></div>
                         <span class="person-media-place-flag" aria-hidden="true"></span>
