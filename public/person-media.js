@@ -8,6 +8,7 @@
     const paneBody = pane?.querySelector('.person-pane-body');
     const Api = window.FamilyApi;
     const Selection = window.FamilySelectionController;
+    const Mutations = window.FamilyMutations;
     if (!pane || !paneBody || !Api || !Selection) return;
 
     const Metadata = window.FamilyPersonMetadata || {
@@ -196,7 +197,7 @@
                     <div class="person-media-meta-value" contenteditable="true" data-media-field="takenDate" data-placeholder="שנה, תאריך או תיאור חופשי"></div>
                 </div>
                 <div class="person-media-meta-field">
-                    <span class="person-media-meta-label">מקום</span>
+                    <span class="person-pane-meta-label">מקום</span>
                     <div class="person-media-place-row">
                         <div class="person-media-meta-value" contenteditable="true" data-media-field="takenPlace" data-placeholder="עיר, אזור או מדינה"></div>
                         <span class="person-media-place-flag" aria-hidden="true"></span>
@@ -317,6 +318,11 @@
 
         showStatus('מעלה תמונה...');
         try {
+            await Mutations?.persistDraft?.(
+                section.dataset.personId,
+                {},
+                { reason: 'initialize-person-media', force: true }
+            );
             const size = await dimensions(file);
             const form = new FormData();
             form.append('file', file);
