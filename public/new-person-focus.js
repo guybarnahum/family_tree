@@ -37,9 +37,10 @@
     function focusName(personId) {
         pendingPersonId = String(personId || '').trim() || null;
         if (!pendingPersonId) return false;
-        if (!focusNow(pendingPersonId)) return false;
-        pendingPersonId = null;
-        return true;
+        // Selection can render the pane before GraphView commits the new root. Focus now for
+        // responsiveness, but keep the request pending because the committed render replaces
+        // the pane DOM and must receive the final focus.
+        return focusNow(pendingPersonId);
     }
 
     window.addEventListener('family-focus-person-name', event => {
