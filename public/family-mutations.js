@@ -194,9 +194,12 @@
 
     async function createDraft(relationships, anchorId, reason) {
         const id = nextPersonId();
+        const resolvedRelationships = typeof relationships === 'function'
+            ? relationships(id)
+            : relationships;
         const added = Store.addDraft(
             { id, name: null, metadata: {} },
-            relationships,
+            resolvedRelationships || [],
             { reason: `${reason}-draft` }
         );
         if (!added) throw new Error('Unable to create draft person');
@@ -347,13 +350,10 @@
             const value = await authoritativeGraph('add-spouse-intent');
             if (!value.people.some(person => person.id === partnerId)) throw new Error('Partner is missing from graph');
             const spouseId = await createDraft(
-                [{ type: 'spouse', person1Id: partnerId, person2Id: nextPersonId() }],
+                id => [{ type: 'spouse', person1Id: partnerId, person2Id: id }],
                 partnerId,
                 'new-spouse'
             );
-            // createDraft owns the id; replace the placeholder id in the relationship atomically.
-            const record = Store.draft(spouseId);
-            if (record) record.relationships[0].person2Id = spouseId;
             showStatus('נוסף');
             return spouseId;
         } catch (error) {
@@ -378,18 +378,17 @@
             }
             if (!value.people.some(person => person.id === childId)) throw new Error('Child is missing from graph');
 
-            const relations = [{ type: 'parent', person1Id: null, person2Id: childId }];
-            if (existing.length === 1) {
-                relations.push({ type: 'spouse', person1Id: existing[0], person2Id: null });
-            }
-            const parentId = await createDraft(relations, childId, 'new-parent');
-            const record = Store.draft(parentId);
-            if (record) {
-                record.relationships.forEach(relation => {
-                    if (relation.person1Id === null) relation.person1Id = parentId;
-                    if (relation.person2Id === null) relation.person2Id = parentId;
-                });
-            }
+            const parentId = await createDraft(
+                id => {
+                    const relations = [{ type: 'parent', person1Id: id, person2Id: childId }];
+                    if (existing.length === 1) {
+                        relations.push({ type: 'spouse', person1Id: existing[0], person2Id: id });
+                    }
+                    return relations;
+                },
+                childId,
+                'new-parent'
+            );
             showStatus('נוסף');
             return parentId;
         } catch (error) {
@@ -419,27 +418,13 @@
             if (!union) throw new Error('Selected parents are not a union');
         }
 
-        const childId = nextPersonId();
-        const relations = parents.map(parentId => ({
-            type: 'parent', person1Id: parentId, person2Id: childId
-        }));
-        const added = Store.addDraft(
-            { id: childId, name: null, metadata: {} },
-            relations,
-            { reason: 'new-child-draft' }
+        return createDraft(
+            id => parents.map(parentId => ({
+                type: 'parent', person1Id: parentId, person2Id: id
+            })),
+            anchorId || parents[0],
+            'new-child'
         );
-        if (!added) throw new Error('Unable to create draft child');
-        draftLifecycle.set(childId, {
-            anchorId: anchorId || parents[0],
-            expiresAt: Date.now() + DRAFT_TTL_MS,
-            timer: null
-        });
-        scheduleDraftExpiry(childId);
-        diagnostics.draftCreates += 1;
-        expose();
-        await refreshProjection();
-        selectAndFocus(childId, 'new-child');
-        return childId;
     }
 
     async function addChild(parentId) {
