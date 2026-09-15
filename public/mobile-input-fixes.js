@@ -16,25 +16,39 @@
                 display: block;
                 width: 100%;
                 box-sizing: border-box;
+                min-height: 28px;
+                padding: 5px 7px;
+                margin: 0 -7px;
                 border: 0;
+                border-radius: 7px;
+                outline: 0;
+                box-shadow: none;
                 background: transparent;
                 color: #37423a;
                 font: 400 16px/1.5 Inter, sans-serif;
+                direction: inherit;
+                text-align: inherit;
+                appearance: none;
+                -webkit-appearance: none;
                 -webkit-text-size-adjust: 100%;
             }
 
-            #person-pane input.person-pane-value {
-                min-height: 38px;
+            #person-pane textarea.person-pane-value {
+                min-height: 72px;
+                resize: none;
+                overflow: auto;
             }
 
-            #person-pane textarea.person-pane-value {
-                min-height: 88px;
-                resize: vertical;
+            #person-pane input.person-pane-value::placeholder,
+            #person-pane textarea.person-pane-value::placeholder {
+                color: #a4aaa4;
+                opacity: 1;
             }
 
             #person-pane input.person-pane-value:focus,
             #person-pane textarea.person-pane-value:focus {
                 outline: none;
+                box-shadow: none;
                 background: rgba(163, 177, 138, 0.12);
             }
 
