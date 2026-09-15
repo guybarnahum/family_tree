@@ -90,6 +90,7 @@
             ['/union-child-actions.js', 'data-family-union-child-actions'],
             ['/person-pane-position.js', 'data-family-person-pane-position'],
             ['/person-pane-editing.js', 'data-family-person-pane-editing'],
+            ['/mobile-input-fixes.js', 'data-family-mobile-input-fixes'],
             ['/print-refinement.js', 'data-family-print']
         ];
         for (const [src, dataKey] of features) await loadScript(src, dataKey);
