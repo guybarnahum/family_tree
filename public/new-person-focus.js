@@ -5,6 +5,7 @@
 
     const mobileQuery = window.matchMedia('(max-width: 768px), (hover: none) and (pointer: coarse)');
     const cardsLayer = document.getElementById('cards-layer');
+    const pane = document.getElementById('person-pane');
     let pendingPersonId = null;
 
     function placeCaret(editor) {
@@ -17,11 +18,10 @@
         selection?.addRange(range);
     }
 
-    function openMobilePane() {
-        const pane = document.getElementById('person-pane');
+    function setMobilePaneOpen(open) {
         if (!pane || !mobileQuery.matches) return;
-        pane.classList.add('person-pane-open');
-        pane.querySelector('.person-pane-handle')?.setAttribute('aria-expanded', 'true');
+        pane.classList.toggle('person-pane-open', open);
+        pane.querySelector('.person-pane-handle')?.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
 
     function editorFor(personId) {
@@ -30,25 +30,11 @@
         );
     }
 
-    function focusNow(personId, { userGesture = false } = {}) {
+    function focusNow(personId) {
         const editor = editorFor(personId);
         if (!editor) return false;
 
-        openMobilePane();
-
-        // Mobile browsers only show the virtual keyboard reliably when focus happens inside
-        // the user's tap. New-person creation crosses async graph/render work, so on mobile
-        // simply expose the editor until the user taps it. Never blur a field the user already
-        // focused, because that dismisses the virtual keyboard.
-        if (mobileQuery.matches && !userGesture) {
-            if (document.activeElement === editor) {
-                pendingPersonId = null;
-                return true;
-            }
-            editor.scrollIntoView?.({ block: 'nearest' });
-            return true;
-        }
-
+        setMobilePaneOpen(true);
         try { editor.focus({ preventScroll: true }); }
         catch (_) { editor.focus(); }
         placeCaret(editor);
@@ -59,8 +45,14 @@
     function focusName(personId) {
         pendingPersonId = String(personId || '').trim() || null;
         if (!pendingPersonId) return false;
-        // Selection can render the pane before GraphView commits the new root. Desktop can
-        // focus immediately. Mobile opens the editor pane now and waits for a direct name tap.
+
+        // Desktop can focus immediately. On mobile the new-person selection still has a render
+        // to commit; close the pane until that render lands so a user cannot focus an editor
+        // that is about to be replaced (which dismisses the virtual keyboard).
+        if (mobileQuery.matches) {
+            setMobilePaneOpen(false);
+            return true;
+        }
         return focusNow(pendingPersonId);
     }
 
@@ -69,21 +61,25 @@
         const name = event.target.closest?.('h2[data-field="name"][data-id]');
         if (!name) return;
         const id = name.dataset.id;
-        if (focusNow(id, { userGesture: true }) && pendingPersonId === id) pendingPersonId = null;
+        if (pendingPersonId === id) return;
+        focusNow(id);
     });
-
-    document.getElementById('person-pane')?.addEventListener('focusin', event => {
-        if (!mobileQuery.matches || !pendingPersonId) return;
-        const editor = event.target.closest?.('.person-pane-name[data-id]');
-        if (editor?.dataset.id === pendingPersonId) pendingPersonId = null;
-    }, true);
 
     window.addEventListener('family-focus-person-name', event => {
         focusName(event.detail?.id);
     });
+
     window.addEventListener('family-graph-rendered', event => {
         if (!pendingPersonId || event.detail?.rootId !== pendingPersonId) return;
-        if (focusNow(pendingPersonId) && !mobileQuery.matches) pendingPersonId = null;
+        const personId = pendingPersonId;
+        pendingPersonId = null;
+
+        if (mobileQuery.matches) {
+            setMobilePaneOpen(true);
+            editorFor(personId)?.scrollIntoView?.({ block: 'nearest' });
+            return;
+        }
+        focusNow(personId);
     });
 
     window.FamilyNewPersonFocus = Object.freeze({ focusName });
