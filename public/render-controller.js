@@ -26,6 +26,7 @@
     let centerFrameId = 0;
     let centerInsetX = 0;
     let centerInsetY = 0;
+    let viewportWidth = Math.round(Number(window.innerWidth) || 0);
 
     const diagnostics = {
         generationsStarted: 0,
@@ -513,10 +514,13 @@
     });
 
     window.addEventListener('resize', () => {
+        const nextWidth = Math.round(Number(window.innerWidth) || 0);
+        const widthChanged = nextWidth !== viewportWidth;
+        viewportWidth = nextWidth;
         cancelCenterAnimation();
         syncViewportCenteringInsets();
         scheduleIdleRecenter();
-        if (!globalNodes?.length) return;
+        if (!globalNodes?.length || !widthChanged) return;
         void requestLayout({ reason: 'viewport-resize', preserveAnchor: false, recenter: true });
     }, { passive: true });
 
