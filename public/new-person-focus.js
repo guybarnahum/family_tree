@@ -37,11 +37,14 @@
         openMobilePane();
 
         // Mobile browsers only show the virtual keyboard reliably when focus happens inside
-        // the user's tap. New-person creation crosses async graph/render work, so focusing here
-        // afterward can leave the contenteditable focused with no keyboard. Keep the pane open,
-        // but leave the editor unfocused until the user taps the visible name.
+        // the user's tap. New-person creation crosses async graph/render work, so on mobile
+        // simply expose the editor until the user taps it. Never blur a field the user already
+        // focused, because that dismisses the virtual keyboard.
         if (mobileQuery.matches && !userGesture) {
-            if (document.activeElement === editor) editor.blur();
+            if (document.activeElement === editor) {
+                pendingPersonId = null;
+                return true;
+            }
             editor.scrollIntoView?.({ block: 'nearest' });
             return true;
         }
@@ -65,15 +68,22 @@
         if (!mobileQuery.matches) return;
         const name = event.target.closest?.('h2[data-field="name"][data-id]');
         if (!name) return;
-        focusNow(name.dataset.id, { userGesture: true });
+        const id = name.dataset.id;
+        if (focusNow(id, { userGesture: true }) && pendingPersonId === id) pendingPersonId = null;
     });
+
+    document.getElementById('person-pane')?.addEventListener('focusin', event => {
+        if (!mobileQuery.matches || !pendingPersonId) return;
+        const editor = event.target.closest?.('.person-pane-name[data-id]');
+        if (editor?.dataset.id === pendingPersonId) pendingPersonId = null;
+    }, true);
 
     window.addEventListener('family-focus-person-name', event => {
         focusName(event.detail?.id);
     });
     window.addEventListener('family-graph-rendered', event => {
         if (!pendingPersonId || event.detail?.rootId !== pendingPersonId) return;
-        if (focusNow(pendingPersonId)) pendingPersonId = null;
+        if (focusNow(pendingPersonId) && !mobileQuery.matches) pendingPersonId = null;
     });
 
     window.FamilyNewPersonFocus = Object.freeze({ focusName });
