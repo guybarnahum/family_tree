@@ -51,6 +51,19 @@
         return target instanceof HTMLElement && target.dataset.field === 'metadata' &&
             target.dataset.metaKind === 'place' && !!target.dataset.metaKey;
     }
+    function editorText(editor) {
+        if (editor instanceof HTMLInputElement || editor instanceof HTMLTextAreaElement) return editor.value || '';
+        return editor.textContent || '';
+    }
+    function setEditorText(editor, value) {
+        const text = String(value || '');
+        if (editor instanceof HTMLInputElement || editor instanceof HTMLTextAreaElement) {
+            editor.value = text;
+            editor.dataset.value = text;
+            return;
+        }
+        editor.textContent = text;
+    }
     function closeSuggestions() {
         openMenu?.remove();
         openMenu = null;
@@ -73,7 +86,7 @@
         if (!isPlaceEditor(editor)) return;
         const place = storedPlace(editor);
         const code = Metadata.placeCountryCode?.(place) ||
-            Metadata.inferCountryCode?.(editor.textContent.trim()) || null;
+            Metadata.inferCountryCode?.(editorText(editor).trim()) || null;
         setFlag(editor, code);
     }
     function syncAllStoredFlags() {
@@ -91,7 +104,7 @@
     function chooseResult(editor, result) {
         const place = resultPlace(result);
         if (!place.text) return;
-        editor.textContent = place.text;
+        setEditorText(editor, place.text);
         editor.dataset.placeSelection = JSON.stringify(place);
         setFlag(editor, place.countryCode || null);
         closeSuggestions();
@@ -163,7 +176,7 @@
         clearTimeout(timer);
         closeSuggestions();
         if (composing) return;
-        const query = editor.textContent.trim().replace(/\s+/g, ' ');
+        const query = editorText(editor).trim().replace(/\s+/g, ' ');
         if (query.length < MIN_QUERY_LENGTH) return;
         timer = setTimeout(() => requestSuggestions(editor, query), DEBOUNCE_MS);
     }
