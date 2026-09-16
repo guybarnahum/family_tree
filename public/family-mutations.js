@@ -233,7 +233,12 @@
     }
 
     function selectAndFocus(personId, reason = 'new-person') {
-        if (!Selection.selectPerson?.(personId, { source: reason })) return false;
+        const selected = Selection.replaceUrlPerson?.(personId, {
+            source: reason,
+            persist: true,
+            notify: false
+        }) || false;
+        if (!selected) return false;
         window.dispatchEvent(new CustomEvent('family-focus-person-name', {
             detail: { id: personId, reason }
         }));
@@ -262,8 +267,11 @@
         diagnostics.lastAction = `${reason}:draft`;
         expose();
 
-        await refreshProjection();
+        // Selection is canonical intent and does not require a rendered card. Set it before the
+        // projection refresh so GraphView can render exactly one generation rooted at the draft.
+        // The focus request is intentionally early; new-person-focus holds it until that render commits.
         selectAndFocus(id, reason);
+        await refreshProjection();
         return id;
     }
 
