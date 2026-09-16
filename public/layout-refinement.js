@@ -78,21 +78,37 @@
         units.splice(0, units.length, ...reordered);
     }
 
-    function directChildNodes(parentUnit) {
-        return globalNodes
-            .filter(child => {
-                if (!child.parent_id || child.gen !== parentUnit.gen + 1) return false;
-                return unitByNodeId.get(child.parent_id) === parentUnit;
-            })
-            .sort((a, b) => a.x - b.x || a.id.localeCompare(b.id));
+    function descendantBounds(unit, seen = new Set()) {
+        if (!unit || seen.has(unit)) {
+            return {
+                left: unit?.centerX ?? 0,
+                right: unit?.centerX ?? 0
+            };
+        }
+        seen.add(unit);
+        let left = unit.centerX - unit.width / 2;
+        let right = unit.centerX + unit.width / 2;
+        for (const child of directChildUnits(unit)) {
+            const bounds = descendantBounds(child, seen);
+            left = Math.min(left, bounds.left);
+            right = Math.max(right, bounds.right);
+        }
+        return { left, right };
     }
 
     function alignmentTarget(parentUnit) {
-        const children = directChildNodes(parentUnit);
+        const children = directChildUnits(parentUnit);
         if (!children.length) return relationshipTarget(parentUnit);
-        if (children.length === 1) return children[0].x;
-        const xs = children.map(child => child.x);
-        return (Math.min(...xs) + Math.max(...xs)) / 2;
+        let left = Infinity;
+        let right = -Infinity;
+        for (const child of children) {
+            const bounds = descendantBounds(child, new Set());
+            left = Math.min(left, bounds.left);
+            right = Math.max(right, bounds.right);
+        }
+        return Number.isFinite(left) && Number.isFinite(right)
+            ? (left + right) / 2
+            : relationshipTarget(parentUnit);
     }
 
     function compactRelationshipRow(units) {
@@ -104,13 +120,39 @@
         compactGeneration(units, targets);
     }
 
+    function spreadGenerationAroundTargets(units, targets) {
+        if (!units?.length) return;
+        units.sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
+        const positions = units.map(unit => {
+            const target = targets.get(unit);
+            return Number.isFinite(target) ? target : unit.centerX;
+        });
+        const passes = Math.max(4, units.length * 4);
+        for (let pass = 0; pass < passes; pass++) {
+            let moved = false;
+            for (let i = 1; i < units.length; i++) {
+                const minimum = unitSeparation(units[i - 1], units[i]);
+                const gap = positions[i] - positions[i - 1];
+                if (gap >= minimum - 0.01) continue;
+                const delta = (minimum - gap) / 2;
+                positions[i - 1] -= delta;
+                positions[i] += delta;
+                moved = true;
+            }
+            if (!moved) break;
+        }
+        units.forEach((unit, index) => unit.centerX = positions[index]);
+    }
+
     function alignParentsBottomUp(byGen, gens) {
         for (let gi = gens.length - 2; gi >= 0; gi--) {
             const units = byGen.get(gens[gi]);
             units.sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
             const targets = new Map();
             for (const unit of units) targets.set(unit, alignmentTarget(unit));
-            compactGeneration(units, targets);
+            // Parent rows are allowed to expand. Compressing them back into their previous width
+            // is exactly what makes a wide descendant tree look top-heavy and off-center.
+            spreadGenerationAroundTargets(units, targets);
             positionMembers();
         }
     }
@@ -137,10 +179,8 @@
             alignParentsBottomUp(byGen, gens);
         }
 
-        // Descendant geometry owns the final horizontal placement. Do not finish with another
-        // parent-driven child compaction pass: on wide trees that pulls sibling branches inward
-        // and leaves parents visibly off-center over the child span. Settling from the leaves
-        // upward makes the result behave like a tree laid out from the bottom.
+        // Final authority flows upward from the leaves. Each parent is centered over the full
+        // horizontal span occupied by its child subtrees, not merely over direct child card centers.
         alignParentsBottomUp(byGen, gens);
         normalizeHorizontalBounds();
         positionMembers();
