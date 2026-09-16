@@ -188,6 +188,18 @@
         return { left, right, center: (left + right) / 2, width: right - left };
     }
 
+    function groupTargetAxis(group, fallback = null) {
+        const xs = [...new Set(group.targetIds)]
+            .map(id => globalNodeMap.get(id)?.x)
+            .filter(Number.isFinite)
+            .sort((a, b) => a - b);
+        if (!xs.length) return fallback;
+        const middle = Math.floor(xs.length / 2);
+        return xs.length % 2
+            ? xs[middle]
+            : (xs[middle - 1] + xs[middle]) / 2;
+    }
+
     function translateUnit(unit, dx) {
         if (!Number.isFinite(dx) || Math.abs(dx) < 0.001) return;
         unit.centerX += dx;
@@ -277,8 +289,9 @@
             const span = groupSpan(group);
             if (!span) continue;
             const source = sourceForGroup(parentUnit, group);
+            const targetAxis = groupTargetAxis(group, span.center);
             const weight = Math.max(1, span.width);
-            weighted += (span.center - source.anchor) * weight;
+            weighted += (targetAxis - source.anchor) * weight;
             totalWeight += weight;
         }
         return totalWeight ? weighted / totalWeight : null;
@@ -344,6 +357,7 @@
         const targets = group.targetIds
             .map(id => globalNodeMap.get(id)?.x)
             .filter(Number.isFinite);
+        const targetAxis = groupTargetAxis(group, span.center);
         const connectorXs = [source.anchor, ...targets];
         const connectorLeft = Math.min(...connectorXs);
         const connectorRight = Math.max(...connectorXs);
@@ -354,7 +368,10 @@
             parentIds: [...group.parentIds],
             children: group.children.map(unitLabel).join(' | '),
             childCount: group.children.length,
+            targetCount: targets.length,
             unionAnchor: Math.round(source.anchor),
+            childAxis: Math.round(targetAxis),
+            axisOffset: Math.round(source.anchor - targetAxis),
             subtreeCenter: Math.round(span.center),
             offset: Math.round(source.anchor - span.center),
             subtreeWidth: Math.round(span.width),
@@ -411,10 +428,12 @@
         const groups = globalUnits.flatMap(unit =>
             childSourceGroups(unit).map(group => diagnosticsFor(unit, group)).filter(Boolean)
         ).sort((a, b) =>
-            a.gen - b.gen || Math.abs(b.offset) - Math.abs(a.offset) || b.connectorWidth - a.connectorWidth
+            a.gen - b.gen || Math.abs(b.axisOffset) - Math.abs(a.axisOffset) ||
+            Math.abs(b.offset) - Math.abs(a.offset) || b.connectorWidth - a.connectorWidth
         );
         window.__familySubtreeLayoutDiagnostics = {
             groups,
+            maxAxisOffset: groups.length ? Math.max(...groups.map(item => Math.abs(item.axisOffset))) : 0,
             maxOffset: groups.length ? Math.max(...groups.map(item => Math.abs(item.offset))) : 0,
             maxConnectorWidth: groups.length ? Math.max(...groups.map(item => item.connectorWidth)) : 0,
             remainingAvoidableGap: groups.reduce((sum, item) => sum + item.avoidableGap, 0),
