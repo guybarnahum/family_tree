@@ -6,6 +6,7 @@
     if (!Controller) return;
 
     const ALIGNMENT_PASSES = 7;
+    const REFINED_DESKTOP_GAP = 68;
 
     function generationRowsByCurrentX() {
         const byGen = new Map();
@@ -111,49 +112,92 @@
             : relationshipTarget(parentUnit);
     }
 
+    function refinedGap() {
+        return typeof geometryMobileQuery !== 'undefined' && geometryMobileQuery.matches
+            ? MOBILE_UNIT_GAP
+            : REFINED_DESKTOP_GAP;
+    }
+
+    function refinedSeparation(left, right) {
+        return left.width / 2 + refinedGap() + right.width / 2;
+    }
+
+    function translateUnit(unit, dx) {
+        if (!Number.isFinite(dx) || Math.abs(dx) < 0.001) return;
+        unit.centerX += dx;
+        for (const member of unit.members || []) {
+            if (Number.isFinite(member.x)) member.x += dx;
+        }
+    }
+
+    function compactAroundTargets(units, targets, { orderByTarget = false } = {}) {
+        if (!units?.length) return;
+        const oldX = new Map(units.map(unit => [unit, unit.centerX]));
+        if (orderByTarget) {
+            units.sort((a, b) => {
+                const ax = targets.get(a);
+                const bx = targets.get(b);
+                const af = Number.isFinite(ax);
+                const bf = Number.isFinite(bx);
+                if (af && bf && Math.abs(ax - bx) > 0.01) return ax - bx;
+                if (af !== bf) return af ? -1 : 1;
+                return oldX.get(a) - oldX.get(b) || a.id.localeCompare(b.id);
+            });
+        } else {
+            units.sort((a, b) => oldX.get(a) - oldX.get(b) || a.id.localeCompare(b.id));
+        }
+
+        const positions = units.map(unit => {
+            const target = targets.get(unit);
+            return Number.isFinite(target) ? target : oldX.get(unit);
+        });
+
+        for (let i = 1; i < units.length; i++) {
+            positions[i] = Math.max(
+                positions[i],
+                positions[i - 1] + refinedSeparation(units[i - 1], units[i])
+            );
+        }
+        for (let i = units.length - 2; i >= 0; i--) {
+            positions[i] = Math.min(
+                positions[i],
+                positions[i + 1] - refinedSeparation(units[i], units[i + 1])
+            );
+        }
+
+        const requested = units.map((unit, index) => {
+            const target = targets.get(unit);
+            return Number.isFinite(target) ? target : positions[index];
+        });
+        const delta = requested.length
+            ? requested.reduce((sum, value, index) => sum + value - positions[index], 0) / requested.length
+            : 0;
+
+        units.forEach((unit, index) => {
+            const next = positions[index] + delta;
+            translateUnit(unit, next - unit.centerX);
+        });
+    }
+
     function compactRelationshipRow(units) {
         if (!units?.length) return;
         units.sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
         reorderSafeSiblingCohorts(units);
         const targets = new Map();
         for (const unit of units) targets.set(unit, relationshipTarget(unit));
-        compactGeneration(units, targets);
-    }
-
-    function spreadGenerationAroundTargets(units, targets) {
-        if (!units?.length) return;
-        units.sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
-        const positions = units.map(unit => {
-            const target = targets.get(unit);
-            return Number.isFinite(target) ? target : unit.centerX;
-        });
-        const passes = Math.max(4, units.length * 4);
-        for (let pass = 0; pass < passes; pass++) {
-            let moved = false;
-            for (let i = 1; i < units.length; i++) {
-                const minimum = unitSeparation(units[i - 1], units[i]);
-                const gap = positions[i] - positions[i - 1];
-                if (gap >= minimum - 0.01) continue;
-                const delta = (minimum - gap) / 2;
-                positions[i - 1] -= delta;
-                positions[i] += delta;
-                moved = true;
-            }
-            if (!moved) break;
-        }
-        units.forEach((unit, index) => unit.centerX = positions[index]);
+        compactAroundTargets(units, targets);
     }
 
     function alignParentsBottomUp(byGen, gens) {
         for (let gi = gens.length - 2; gi >= 0; gi--) {
             const units = byGen.get(gens[gi]);
-            units.sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
             const targets = new Map();
             for (const unit of units) targets.set(unit, alignmentTarget(unit));
-            // Parent rows are allowed to expand. Compressing them back into their previous width
-            // is exactly what makes a wide descendant tree look top-heavy and off-center.
-            spreadGenerationAroundTargets(units, targets);
-            positionMembers();
+
+            // A true bottom-up layout must let descendant geometry determine parent ordering.
+            // Sorting by the old row order can trap a parent on the wrong side of another family,
+            // producing very large parent-to-subtree offsets even when there is ample room.
+            compactAroundTargets(units, targets, { orderByTarget: true });
         }
     }
 
@@ -162,7 +206,7 @@
         const minLeft = Math.min(...globalUnits.map(unit => unit.centerX - unit.width / 2));
         const delta = CANVAS_PAD_X - minLeft;
         if (Math.abs(delta) < 0.5) return;
-        globalUnits.forEach(unit => unit.centerX += delta);
+        globalUnits.forEach(unit => translateUnit(unit, delta));
     }
 
     function straightenRelationshipRows() {
@@ -171,6 +215,8 @@
         const gens = [...byGen.keys()].sort((a, b) => a - b);
 
         for (let pass = 0; pass < ALIGNMENT_PASSES; pass++) {
+            // positionMembers may also refine multi-partner child clusters. Let that settle first,
+            // then make the upward centering pass authoritative without invoking it again afterward.
             positionMembers();
             for (let gi = 1; gi < gens.length; gi++) {
                 compactRelationshipRow(byGen.get(gens[gi]));
@@ -179,11 +225,12 @@
             alignParentsBottomUp(byGen, gens);
         }
 
-        // Final authority flows upward from the leaves. Each parent is centered over the full
-        // horizontal span occupied by its child subtrees, not merely over direct child card centers.
+        // One final union/child refinement is allowed to move descendant groups. Recompute parent
+        // targets after it, then update units and member x-coordinates directly so nothing can
+        // silently move the descendants again after their parents have been centered.
+        positionMembers();
         alignParentsBottomUp(byGen, gens);
         normalizeHorizontalBounds();
-        positionMembers();
     }
 
     Controller.registerLayoutStage({
