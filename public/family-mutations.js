@@ -236,7 +236,7 @@
         const selected = Selection.replaceUrlPerson?.(personId, {
             source: reason,
             persist: true,
-            notify: false
+            notify: true
         }) || false;
         if (!selected) return false;
         window.dispatchEvent(new CustomEvent('family-focus-person-name', {
@@ -267,11 +267,11 @@
         diagnostics.lastAction = `${reason}:draft`;
         expose();
 
-        // Selection is canonical intent and does not require a rendered card. Set it before the
-        // projection refresh so GraphView can render exactly one generation rooted at the draft.
-        // The focus request is intentionally early; new-person-focus holds it until that render commits.
-        selectAndFocus(id, reason);
+        // First let GraphView accept the draft overlay while the existing root remains stable.
+        // Then publish the selection change. applySelectedRoot can now see the draft and reroot to it
+        // without relying on a synthetic card click or selecting a person absent from its projection.
         await refreshProjection();
+        selectAndFocus(id, reason);
         return id;
     }
 
