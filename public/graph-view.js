@@ -435,7 +435,12 @@
             }
 
             acceptGraph(documentValue);
-            if (!graphRootId || !graphPeopleById.has(graphRootId)) {
+            const selectedRoot = Selection?.getSelectedPersonId?.();
+            if (selectedRoot && graphPeopleById.has(selectedRoot) && selectedRoot !== graphRootId) {
+                graphRootId = selectedRoot;
+                expandedBySource.clear();
+                recenter = true;
+            } else if (!graphRootId || !graphPeopleById.has(graphRootId)) {
                 graphRootId = chooseInitialRoot();
                 recenter = true;
             }
