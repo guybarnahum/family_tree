@@ -188,7 +188,9 @@
 
     Controller.registerLayoutStage({
         name: 'relationship-compaction',
-        order: 20,
+        // This must run after member-order (40) and bridge-compaction (50). Member-order owns the
+        // earlier layout prefix, so an order-20 refinement is bypassed/overwritten on full renders.
+        order: 60,
         run() {
             if (!globalNodes.length || !globalUnits.length) return;
             straightenRelationshipRows();
