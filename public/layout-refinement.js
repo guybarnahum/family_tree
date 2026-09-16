@@ -1,32 +1,16 @@
-// Post-layout refinement: preserve planar family structure while reducing unnecessary
-// horizontal connector length. The base layered layout is intentionally conservative
-// about crossings; this pass adds local attachment pressure after branches are expanded.
+// Final horizontal refinement: pack whole descendant branches beneath their actual parent/union anchors.
+// Earlier stages own topology, member order and planarity; this stage only translates settled subtrees.
 (() => {
     const Controller = window.FamilyRenderController;
-    if (!Controller) return;
+    const Store = window.FamilyGraphStore;
+    if (!Controller || !Store) return;
 
-    const ALIGNMENT_PASSES = 7;
-    const REFINED_DESKTOP_GAP = 68;
+    const DESKTOP_SUBTREE_GAP = 68;
 
-    function generationRowsByCurrentX() {
-        const byGen = new Map();
-        for (const unit of globalUnits) {
-            if (!byGen.has(unit.gen)) byGen.set(unit.gen, []);
-            byGen.get(unit.gen).push(unit);
-        }
-        for (const units of byGen.values()) {
-            units.sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
-        }
-        return byGen;
-    }
-
-    function median(values, fallback = 0) {
-        const finite = values.filter(Number.isFinite).sort((a, b) => a - b);
-        if (!finite.length) return fallback;
-        const middle = Math.floor(finite.length / 2);
-        return finite.length % 2
-            ? finite[middle]
-            : (finite[middle - 1] + finite[middle]) / 2;
+    function subtreeGap() {
+        return typeof geometryMobileQuery !== 'undefined' && geometryMobileQuery.matches
+            ? MOBILE_UNIT_GAP
+            : DESKTOP_SUBTREE_GAP;
     }
 
     function directParentUnits(unit) {
@@ -37,89 +21,44 @@
         return [...unit.children].filter(child => child.gen === unit.gen + 1);
     }
 
-    function relationshipTarget(unit) {
+    // A child unit may technically be connected to more than one parent unit through bridge
+    // marriages. Keep the planar stage's chosen parent_id authoritative so every unit belongs to
+    // exactly one movable subtree for this refinement.
+    function primaryParentUnit(unit) {
+        for (const member of unit.members || []) {
+            const parentId = member.parent_id;
+            const parent = parentId ? unitByNodeId.get(parentId) : null;
+            if (parent && parent !== unit && parent.gen === unit.gen - 1) return parent;
+        }
         const parents = directParentUnits(unit);
-        const children = directChildUnits(unit);
-        const xs = [
-            ...parents.map(parent => parent.centerX),
-            ...children.map(child => child.centerX)
-        ];
-        return median(xs, unit.centerX);
+        if (parents.length === 1) return parents[0];
+        if (!parents.length) return null;
+        return [...parents].sort((a, b) =>
+            Math.abs(a.centerX - unit.centerX) - Math.abs(b.centerX - unit.centerX) ||
+            a.id.localeCompare(b.id)
+        )[0];
     }
 
-    function orderingTarget(unit) {
-        const children = directChildUnits(unit);
-        if (children.length) return median(children.map(child => child.centerX), unit.centerX);
-        const parents = directParentUnits(unit);
-        if (parents.length) return median(parents.map(parent => parent.centerX), unit.centerX);
-        return unit.centerX;
+    function ownedChildren(unit) {
+        return directChildUnits(unit)
+            .filter(child => primaryParentUnit(child) === unit)
+            .sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
     }
 
-    function reorderSafeSiblingCohorts(units) {
-        if (units.length < 2 || typeof siblingBlocks !== 'function') return;
-        const blocks = siblingBlocks(units);
-        const reordered = [];
-
-        for (const block of blocks) {
-            const hasMultiPartnerParent = block.members.some(unit =>
-                directParentUnits(unit).some(parent => parent.multiPartner)
-            );
-            if (!hasMultiPartnerParent && block.members.length > 1) {
-                const currentIndex = new Map(block.members.map((unit, index) => [unit, index]));
-                block.members.sort((a, b) => {
-                    const ax = orderingTarget(a);
-                    const bx = orderingTarget(b);
-                    return ax - bx ||
-                        currentIndex.get(a) - currentIndex.get(b) ||
-                        a.id.localeCompare(b.id);
-                });
-            }
-            reordered.push(...block.members);
-        }
-        units.splice(0, units.length, ...reordered);
+    function collectSubtree(unit, target = new Set()) {
+        if (!unit || target.has(unit)) return target;
+        target.add(unit);
+        for (const child of ownedChildren(unit)) collectSubtree(child, target);
+        return target;
     }
 
-    function descendantBounds(unit, seen = new Set()) {
-        if (!unit || seen.has(unit)) {
-            return {
-                left: unit?.centerX ?? 0,
-                right: unit?.centerX ?? 0
-            };
-        }
-        seen.add(unit);
-        let left = unit.centerX - unit.width / 2;
-        let right = unit.centerX + unit.width / 2;
-        for (const child of directChildUnits(unit)) {
-            const bounds = descendantBounds(child, seen);
-            left = Math.min(left, bounds.left);
-            right = Math.max(right, bounds.right);
-        }
-        return { left, right };
-    }
-
-    function alignmentTarget(parentUnit) {
-        const children = directChildUnits(parentUnit);
-        if (!children.length) return relationshipTarget(parentUnit);
-        let left = Infinity;
-        let right = -Infinity;
-        for (const child of children) {
-            const bounds = descendantBounds(child, new Set());
-            left = Math.min(left, bounds.left);
-            right = Math.max(right, bounds.right);
-        }
-        return Number.isFinite(left) && Number.isFinite(right)
-            ? (left + right) / 2
-            : relationshipTarget(parentUnit);
-    }
-
-    function refinedGap() {
-        return typeof geometryMobileQuery !== 'undefined' && geometryMobileQuery.matches
-            ? MOBILE_UNIT_GAP
-            : REFINED_DESKTOP_GAP;
-    }
-
-    function refinedSeparation(left, right) {
-        return left.width / 2 + refinedGap() + right.width / 2;
+    function subtreeBounds(unit) {
+        const units = [...collectSubtree(unit)];
+        if (!units.length) return { left: unit.centerX, right: unit.centerX };
+        return {
+            left: Math.min(...units.map(item => item.centerX - item.width / 2)),
+            right: Math.max(...units.map(item => item.centerX + item.width / 2))
+        };
     }
 
     function translateUnit(unit, dx) {
@@ -130,75 +69,115 @@
         }
     }
 
-    function compactAroundTargets(units, targets, { orderByTarget = false } = {}) {
-        if (!units?.length) return;
-        const oldX = new Map(units.map(unit => [unit, unit.centerX]));
-        if (orderByTarget) {
-            units.sort((a, b) => {
-                const ax = targets.get(a);
-                const bx = targets.get(b);
-                const af = Number.isFinite(ax);
-                const bf = Number.isFinite(bx);
-                if (af && bf && Math.abs(ax - bx) > 0.01) return ax - bx;
-                if (af !== bf) return af ? -1 : 1;
-                return oldX.get(a) - oldX.get(b) || a.id.localeCompare(b.id);
+    function translateSubtree(unit, dx) {
+        if (!Number.isFinite(dx) || Math.abs(dx) < 0.001) return;
+        for (const item of collectSubtree(unit)) translateUnit(item, dx);
+    }
+
+    function explicitParentIdsForChild(childUnit, parentUnit) {
+        const indexes = Store.snapshot().indexes;
+        const parentsByChild = indexes?.parentsByChild || new Map();
+        const spousesByPerson = indexes?.spousesByPerson || new Map();
+        const result = new Set();
+
+        for (const member of childUnit.members || []) {
+            const explicit = [...(parentsByChild.get(member.id) || [])]
+                .filter(id => unitByNodeId.get(id) === parentUnit);
+            for (const id of explicit) result.add(id);
+
+            // Match GraphView's conservative legacy normalization: one explicit parent with one
+            // spouse in this unit behaves as a two-parent union for visual attachment.
+            if (explicit.length === 1) {
+                const partners = [...(spousesByPerson.get(explicit[0]) || [])]
+                    .filter(id => unitByNodeId.get(id) === parentUnit);
+                if (partners.length === 1) result.add(partners[0]);
+            }
+        }
+
+        if (!result.size) {
+            for (const member of childUnit.members || []) {
+                if (member.parent_id && unitByNodeId.get(member.parent_id) === parentUnit) {
+                    result.add(member.parent_id);
+                }
+            }
+        }
+        return [...result].sort();
+    }
+
+    function anchorForParentIds(parentUnit, parentIds) {
+        const nodes = parentIds.map(id => globalNodeMap.get(id)).filter(Boolean);
+        if (!nodes.length) return parentUnit.centerX;
+        if (nodes.length === 1) return nodes[0].x;
+
+        // Children have at most two explicit parents. For a spouse union, the connector anchor is
+        // the midpoint of the facing card edges, not the bounding-box center of the whole unit.
+        const [a, b] = nodes.slice(0, 2).sort((x, y) => x.x - y.x);
+        const leftEdge = a.x + a.cardWidth / 2;
+        const rightEdge = b.x - b.cardWidth / 2;
+        return (leftEdge + rightEdge) / 2;
+    }
+
+    function groupChildrenByAnchor(parentUnit) {
+        const groups = new Map();
+        for (const child of ownedChildren(parentUnit)) {
+            const parentIds = explicitParentIdsForChild(child, parentUnit);
+            const key = parentIds.join('|') || `unit:${parentUnit.id}`;
+            if (!groups.has(key)) groups.set(key, { parentIds, children: [] });
+            groups.get(key).children.push(child);
+        }
+        return [...groups.values()];
+    }
+
+    function packChildren(children) {
+        if (!children.length) return null;
+        children.sort((a, b) => {
+            const ab = subtreeBounds(a);
+            const bb = subtreeBounds(b);
+            const ac = (ab.left + ab.right) / 2;
+            const bc = (bb.left + bb.right) / 2;
+            return ac - bc || a.id.localeCompare(b.id);
+        });
+
+        let cursor = null;
+        for (const child of children) {
+            const bounds = subtreeBounds(child);
+            if (cursor == null) {
+                cursor = bounds.right;
+                continue;
+            }
+            const desiredLeft = cursor + subtreeGap();
+            translateSubtree(child, desiredLeft - bounds.left);
+            cursor = subtreeBounds(child).right;
+        }
+
+        const left = Math.min(...children.map(child => subtreeBounds(child).left));
+        const right = Math.max(...children.map(child => subtreeBounds(child).right));
+        return { left, right, center: (left + right) / 2 };
+    }
+
+    function centerChildGroups(parentUnit) {
+        const groups = groupChildrenByAnchor(parentUnit);
+        if (!groups.length) return [];
+        const diagnostics = [];
+
+        for (const group of groups) {
+            const packed = packChildren(group.children);
+            if (!packed) continue;
+            const anchor = anchorForParentIds(parentUnit, group.parentIds);
+            const dx = anchor - packed.center;
+            for (const child of group.children) translateSubtree(child, dx);
+            const after = packChildren(group.children) || packed;
+            diagnostics.push({
+                parentUnit: parentUnit.id,
+                parentIds: [...group.parentIds],
+                childCount: group.children.length,
+                anchor: Math.round(anchor),
+                center: Math.round(after.center),
+                offset: Math.round(anchor - after.center),
+                width: Math.round(after.right - after.left)
             });
-        } else {
-            units.sort((a, b) => oldX.get(a) - oldX.get(b) || a.id.localeCompare(b.id));
         }
-
-        const positions = units.map(unit => {
-            const target = targets.get(unit);
-            return Number.isFinite(target) ? target : oldX.get(unit);
-        });
-
-        for (let i = 1; i < units.length; i++) {
-            positions[i] = Math.max(
-                positions[i],
-                positions[i - 1] + refinedSeparation(units[i - 1], units[i])
-            );
-        }
-        for (let i = units.length - 2; i >= 0; i--) {
-            positions[i] = Math.min(
-                positions[i],
-                positions[i + 1] - refinedSeparation(units[i], units[i + 1])
-            );
-        }
-
-        const requested = units.map((unit, index) => {
-            const target = targets.get(unit);
-            return Number.isFinite(target) ? target : positions[index];
-        });
-        const delta = requested.length
-            ? requested.reduce((sum, value, index) => sum + value - positions[index], 0) / requested.length
-            : 0;
-
-        units.forEach((unit, index) => {
-            const next = positions[index] + delta;
-            translateUnit(unit, next - unit.centerX);
-        });
-    }
-
-    function compactRelationshipRow(units) {
-        if (!units?.length) return;
-        units.sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
-        reorderSafeSiblingCohorts(units);
-        const targets = new Map();
-        for (const unit of units) targets.set(unit, relationshipTarget(unit));
-        compactAroundTargets(units, targets);
-    }
-
-    function alignParentsBottomUp(byGen, gens) {
-        for (let gi = gens.length - 2; gi >= 0; gi--) {
-            const units = byGen.get(gens[gi]);
-            const targets = new Map();
-            for (const unit of units) targets.set(unit, alignmentTarget(unit));
-
-            // A true bottom-up layout must let descendant geometry determine parent ordering.
-            // Sorting by the old row order can trap a parent on the wrong side of another family,
-            // producing very large parent-to-subtree offsets even when there is ample room.
-            compactAroundTargets(units, targets, { orderByTarget: true });
-        }
+        return diagnostics;
     }
 
     function normalizeHorizontalBounds() {
@@ -209,38 +188,49 @@
         globalUnits.forEach(unit => translateUnit(unit, delta));
     }
 
-    function straightenRelationshipRows() {
+    function refineSubtrees() {
         if (!globalUnits.length) return;
-        const byGen = generationRowsByCurrentX();
-        const gens = [...byGen.keys()].sort((a, b) => a - b);
 
-        for (let pass = 0; pass < ALIGNMENT_PASSES; pass++) {
-            // positionMembers may also refine multi-partner child clusters. Let that settle first,
-            // then make the upward centering pass authoritative without invoking it again afterward.
-            positionMembers();
-            for (let gi = 1; gi < gens.length; gi++) {
-                compactRelationshipRow(byGen.get(gens[gi]));
-                positionMembers();
-            }
-            alignParentsBottomUp(byGen, gens);
+        // Member-order and bridge-compaction are authoritative for topology and internal union
+        // geometry. Settle member positions once, then never call positionMembers again after
+        // subtree translation or it can undo the anchor alignment.
+        positionMembers();
+
+        const byGen = new Map();
+        for (const unit of globalUnits) {
+            if (!byGen.has(unit.gen)) byGen.set(unit.gen, []);
+            byGen.get(unit.gen).push(unit);
+        }
+        const generations = [...byGen.keys()].sort((a, b) => b - a);
+        const diagnostics = [];
+
+        // Bottom-up is important: first compact every child branch internally, then let its parent
+        // treat that finished branch as one block. Ancestor translations subsequently move the
+        // already-centered branch as a whole and preserve all lower-level alignment.
+        for (const gen of generations) {
+            const parents = [...(byGen.get(gen) || [])]
+                .sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
+            for (const parent of parents) diagnostics.push(...centerChildGroups(parent));
         }
 
-        // One final union/child refinement is allowed to move descendant groups. Recompute parent
-        // targets after it, then update units and member x-coordinates directly so nothing can
-        // silently move the descendants again after their parents have been centered.
-        positionMembers();
-        alignParentsBottomUp(byGen, gens);
         normalizeHorizontalBounds();
+        window.__familySubtreeLayoutDiagnostics = {
+            groups: diagnostics,
+            maxOffset: diagnostics.length
+                ? Math.max(...diagnostics.map(item => Math.abs(item.offset)))
+                : 0,
+            checkedAt: new Date().toISOString()
+        };
     }
 
     Controller.registerLayoutStage({
         name: 'relationship-compaction',
-        // This must run after member-order (40) and bridge-compaction (50). Member-order owns the
-        // earlier layout prefix, so an order-20 refinement is bypassed/overwritten on full renders.
+        // Run after member-order (40) and bridge-compaction (50); no later layout stage may move
+        // child branches after they have been packed under their actual union anchors.
         order: 60,
         run() {
             if (!globalNodes.length || !globalUnits.length) return;
-            straightenRelationshipRows();
+            refineSubtrees();
             updateCanvasBounds();
             syncCardPositions();
         }
