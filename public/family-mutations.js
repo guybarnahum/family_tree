@@ -233,11 +233,7 @@
     }
 
     function selectAndFocus(personId, reason = 'new-person') {
-        const selected = Selection.replaceUrlPerson?.(personId, {
-            source: reason,
-            persist: true,
-            notify: true
-        }) || false;
+        const selected = Selection.selectPerson?.(personId, { source: reason }) || false;
         if (!selected) return false;
         window.dispatchEvent(new CustomEvent('family-focus-person-name', {
             detail: { id: personId, reason }
@@ -267,11 +263,11 @@
         diagnostics.lastAction = `${reason}:draft`;
         expose();
 
-        // First let GraphView accept the draft overlay while the existing root remains stable.
-        // Then publish the selection change. applySelectedRoot can now see the draft and reroot to it
-        // without relying on a synthetic card click or selecting a person absent from its projection.
-        await refreshProjection();
+        // Selection is canonical intent and does not depend on a rendered card. Commit it while
+        // the draft is already in Store.viewGraph(), then let GraphView render one generation
+        // rooted at that selected draft. New-person focus waits for the matching render commit.
         selectAndFocus(id, reason);
+        await refreshProjection();
         return id;
     }
 

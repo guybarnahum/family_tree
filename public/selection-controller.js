@@ -124,17 +124,8 @@
         return selectedId || locationPersonId() || readStored();
     }
 
-    function selectPerson(personId, { source = 'explicit-select' } = {}) {
-        const id = normalizeId(personId);
-        const card = id ? document.getElementById(`card-${id}`) : null;
-        if (!card) return false;
-        replaceUrlPerson(id, { source });
-        card.dispatchEvent(new MouseEvent('click', {
-            bubbles: true,
-            cancelable: true,
-            view: window
-        }));
-        return true;
+    function selectPerson(personId, { source = 'explicit-select', persist = true, notify = true } = {}) {
+        return replaceUrlPerson(personId, { source, persist, notify });
     }
 
     document.getElementById('cards-layer')?.addEventListener('click', event => {

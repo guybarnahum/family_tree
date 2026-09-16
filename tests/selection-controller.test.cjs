@@ -37,8 +37,7 @@ function harness({ href = 'https://family.example/', stored = null } = {}) {
     URL,
     Date,
     console,
-    CustomEvent: class { constructor(type, init = {}) { this.type = type; this.detail = init.detail; } },
-    MouseEvent: class { constructor(type, init = {}) { this.type = type; Object.assign(this, init); } }
+    CustomEvent: class { constructor(type, init = {}) { this.type = type; this.detail = init.detail; } }
   };
   vm.createContext(context);
   vm.runInContext(fs.readFileSync('public/selection-controller.js', 'utf8'), context);
@@ -59,6 +58,11 @@ function harness({ href = 'https://family.example/', stored = null } = {}) {
   assert.strictEqual(Selection.getSelectedPersonId(), 'person-c');
   assert.strictEqual(h.storage.get('family-tree.anchor-person'), 'person-c');
   assert.deepStrictEqual(events.slice(-2), [['will', 'person-c'], ['changed', 'person-c']]);
+
+  assert.strictEqual(Selection.selectPerson('draft-person', { source: 'draft-create' }), true,
+    'programmatic selection must not depend on a rendered card');
+  assert.strictEqual(Selection.getSelectedPersonId(), 'draft-person');
+  assert.strictEqual(new URL(h.window.location.href).searchParams.get('person'), 'draft-person');
 
   h.history.replaceState(null, '', 'https://family.example/?person=person-e');
   h.window.dispatchEvent({ type: 'popstate' });
