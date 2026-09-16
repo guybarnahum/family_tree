@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node tests/planar-core.test.cjs && node tests/layout-refinement.test.cjs && node tests/odd-child-axis.test.cjs && node tests/draft-root-selection.test.cjs && node tests/person-metadata.test.cjs && node tests/person-identity.test.cjs && node tests/graph-invariants.test.cjs && node tests/faces.test.cjs && node tests/selection-controller.test.cjs && node tests/family-api.test.cjs && node tests/graph-store.test.cjs && node tests/visual-roles.test.cjs && node tests/node-hover.test.cjs && node tests/family-mutations.test.cjs && node tests/render-controller.test.cjs && for f in public/*.js; do node --check \"$f\" || exit 1; done && for f in src/*.js; do node --input-type=module --check < \"$f\" || exit 1; done"
+    "test": "node tests/planar-core.test.cjs && node tests/layout-refinement.test.cjs && node tests/odd-child-axis.test.cjs && node tests/planar-router-odd-center.test.cjs && node tests/draft-root-selection.test.cjs && node tests/person-metadata.test.cjs && node tests/person-identity.test.cjs && node tests/graph-invariants.test.cjs && node tests/faces.test.cjs && node tests/selection-controller.test.cjs && node tests/family-api.test.cjs && node tests/graph-store.test.cjs && node tests/visual-roles.test.cjs && node tests/node-hover.test.cjs && node tests/family-mutations.test.cjs && node tests/render-controller.test.cjs && for f in public/*.js; do node --check \"$f\" || exit 1; done && for f in src/*.js; do node --input-type=module --check < \"$f\" || exit 1; done"
   },
   "keywords": [],
   "author": "",
