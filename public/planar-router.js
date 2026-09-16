@@ -90,6 +90,8 @@
                     key: `union:${unit.id}:${key}`,
                     x: (x1 + x2) / 2,
                     y: centerY,
+                    attachMinX: Math.min(x1, x2),
+                    attachMaxX: Math.max(x1, x2),
                     path: `M ${x1} ${centerY} L ${x2} ${centerY}`,
                     width: 2.5
                 });
@@ -97,13 +99,17 @@
             }
             const laneY = maxBottom + UNION_LANE_CLEARANCE + (laneByPair.get(key) || 0) * UNION_LANE_STEP;
             const inset = Math.min(14, Math.max(8, (x2 - x1) * 0.08));
+            const laneX1 = x1 + inset;
+            const laneX2 = x2 - inset;
             result.set(key, {
                 key: `union:${unit.id}:${key}`,
                 x: (x1 + x2) / 2,
                 y: laneY,
+                attachMinX: Math.min(laneX1, laneX2),
+                attachMaxX: Math.max(laneX1, laneX2),
                 path: roundedOrthogonalPath([
-                    [x1, centerY], [x1 + inset, centerY], [x1 + inset, laneY],
-                    [x2 - inset, laneY], [x2 - inset, centerY], [x2, centerY]
+                    [x1, centerY], [laneX1, centerY], [laneX1, laneY],
+                    [laneX2, laneY], [laneX2, centerY], [x2, centerY]
                 ], CONNECTOR_KNEE_RADIUS),
                 width: 2.3
             });
@@ -131,6 +137,20 @@
         return { key: `unit:${parentUnit.id}`, x: parent.x, y: bottomEdge(parent) };
     }
 
+    function snapOddGroupSource(group) {
+        if (group.edges.length % 2 !== 1 || !Number.isFinite(group.attachMinX) || !Number.isFinite(group.attachMaxX)) {
+            return false;
+        }
+        const ordered = [...group.edges].sort((a, b) => a.targetX - b.targetX || a.childId.localeCompare(b.childId));
+        const middle = ordered[Math.floor(ordered.length / 2)];
+        if (!middle || middle.targetX < group.attachMinX - EPSILON || middle.targetX > group.attachMaxX + EPSILON) {
+            return false;
+        }
+        group.sourceX = middle.targetX;
+        group.centerChildId = middle.childId;
+        return true;
+    }
+
     function buildRouteGroups() {
         const geometryByUnit = new Map();
         for (const unit of globalUnits) geometryByUnit.set(unit, unionGeometry(unit));
@@ -149,14 +169,20 @@
                 if (!layer.has(source.key)) {
                     layer.set(source.key, {
                         key: source.key,
+                        parentUnitId: parentUnit.id,
                         sourceX: source.x,
                         sourceY: source.y,
+                        attachMinX: source.attachMinX,
+                        attachMaxX: source.attachMaxX,
                         clearY: Math.max(source.y, ...parentUnit.members.map(bottomEdge)),
                         edges: []
                     });
                 }
                 layer.get(source.key).edges.push({ childId: child.id, targetX: child.x, targetY: child.targetY });
             }
+        }
+        for (const layer of groupsByLayer.values()) {
+            for (const group of layer.values()) snapOddGroupSource(group);
         }
         return { geometryByUnit, groupsByLayer };
     }
@@ -258,9 +284,9 @@
                 .filter(laneIndex => !used.has(laneIndex))
                 .sort((a, b) => Math.abs(a - preferred.get(group.key)) - Math.abs(b - preferred.get(group.key)));
             const ignored = new Set(group.edges.map(edge => edge.childId));
-            for (const member of globalUnits.find(unit =>
-                unit.members.some(person => Math.abs(person.x - group.sourceX) < EPSILON)
-            )?.members || []) ignored.add(member.id);
+            for (const member of globalUnits.find(unit => unit.id === group.parentUnitId)?.members || []) {
+                ignored.add(member.id);
+            }
 
             for (const laneIndex of candidateIndexes) {
                 const laneY = lanes[laneIndex];
@@ -326,9 +352,11 @@
         }
 
         let residualCrossings = 0;
+        let snappedOddCenters = 0;
         const layerDiagnostics = [];
         for (const [layerKey, layerMap] of groupsByLayer) {
             const groups = [...layerMap.values()];
+            snappedOddCenters += groups.filter(group => group.centerChildId).length;
             const solved = solveLayer(groups);
             residualCrossings += solved.crossings;
             layerDiagnostics.push({ layerKey, groups: groups.length, crossings: solved.crossings });
@@ -342,6 +370,7 @@
         svgLayer.innerHTML = svg;
         window.__familyRouteDiagnostics = {
             crossingCount: residualCrossings,
+            snappedOddCenters,
             layers: layerDiagnostics,
             crossingFree: residualCrossings === 0,
             checkedAt: new Date().toISOString()
