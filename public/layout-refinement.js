@@ -1,36 +1,21 @@
-// Final horizontal refinement: pack whole descendant branches beneath their actual parent/union anchors.
-// Earlier stages own topology, member order and planarity; this stage only translates settled subtrees.
+// Final horizontal refinement: descendants keep their settled geometry; parents move above them.
+// Earlier stages own topology, ordering and planarity. This stage only translates parent rows.
 (() => {
     const Controller = window.FamilyRenderController;
     const Store = window.FamilyGraphStore;
     if (!Controller || !Store) return;
 
-    const DESKTOP_SUBTREE_GAP = 68;
-
-    function subtreeGap() {
-        return typeof geometryMobileQuery !== 'undefined' && geometryMobileQuery.matches
-            ? MOBILE_UNIT_GAP
-            : DESKTOP_SUBTREE_GAP;
-    }
-
-    function directParentUnits(unit) {
-        return [...unit.parents].filter(parent => parent.gen === unit.gen - 1);
-    }
-
     function directChildUnits(unit) {
         return [...unit.children].filter(child => child.gen === unit.gen + 1);
     }
 
-    // A child unit may technically be connected to more than one parent unit through bridge
-    // marriages. Keep the planar stage's chosen parent_id authoritative so every unit belongs to
-    // exactly one movable subtree for this refinement.
     function primaryParentUnit(unit) {
         for (const member of unit.members || []) {
             const parentId = member.parent_id;
             const parent = parentId ? unitByNodeId.get(parentId) : null;
             if (parent && parent !== unit && parent.gen === unit.gen - 1) return parent;
         }
-        const parents = directParentUnits(unit);
+        const parents = [...unit.parents].filter(parent => parent.gen === unit.gen - 1);
         if (parents.length === 1) return parents[0];
         if (!parents.length) return null;
         return [...parents].sort((a, b) =>
@@ -61,17 +46,13 @@
         };
     }
 
-    function translateUnit(unit, dx) {
-        if (!Number.isFinite(dx) || Math.abs(dx) < 0.001) return;
-        unit.centerX += dx;
-        for (const member of unit.members || []) {
-            if (Number.isFinite(member.x)) member.x += dx;
-        }
-    }
-
-    function translateSubtree(unit, dx) {
-        if (!Number.isFinite(dx) || Math.abs(dx) < 0.001) return;
-        for (const item of collectSubtree(unit)) translateUnit(item, dx);
+    function childSubtreeSpan(parentUnit) {
+        const children = ownedChildren(parentUnit);
+        if (!children.length) return null;
+        const bounds = children.map(subtreeBounds);
+        const left = Math.min(...bounds.map(item => item.left));
+        const right = Math.max(...bounds.map(item => item.right));
+        return { children, left, right, center: (left + right) / 2 };
     }
 
     function explicitParentIdsForChild(childUnit, parentUnit) {
@@ -85,8 +66,6 @@
                 .filter(id => unitByNodeId.get(id) === parentUnit);
             for (const id of explicit) result.add(id);
 
-            // Match GraphView's conservative legacy normalization: one explicit parent with one
-            // spouse in this unit behaves as a two-parent union for visual attachment.
             if (explicit.length === 1) {
                 const partners = [...(spousesByPerson.get(explicit[0]) || [])]
                     .filter(id => unitByNodeId.get(id) === parentUnit);
@@ -109,75 +88,87 @@
         if (!nodes.length) return parentUnit.centerX;
         if (nodes.length === 1) return nodes[0].x;
 
-        // Children have at most two explicit parents. For a spouse union, the connector anchor is
-        // the midpoint of the facing card edges, not the bounding-box center of the whole unit.
-        const [a, b] = nodes.slice(0, 2).sort((x, y) => x.x - y.x);
-        const leftEdge = a.x + a.cardWidth / 2;
-        const rightEdge = b.x - b.cardWidth / 2;
-        return (leftEdge + rightEdge) / 2;
-    }
-
-    function groupChildrenByAnchor(parentUnit) {
-        const groups = new Map();
-        for (const child of ownedChildren(parentUnit)) {
-            const parentIds = explicitParentIdsForChild(child, parentUnit);
-            const key = parentIds.join('|') || `unit:${parentUnit.id}`;
-            if (!groups.has(key)) groups.set(key, { parentIds, children: [] });
-            groups.get(key).children.push(child);
+        const spouseSet = Store.snapshot().indexes?.spousesByPerson || new Map();
+        for (let i = 0; i < nodes.length; i++) {
+            for (let j = i + 1; j < nodes.length; j++) {
+                const a = nodes[i];
+                const b = nodes[j];
+                if (!spouseSet.get(a.id)?.has(b.id)) continue;
+                const left = a.x <= b.x ? a : b;
+                const right = left === a ? b : a;
+                return ((left.x + left.cardWidth / 2) + (right.x - right.cardWidth / 2)) / 2;
+            }
         }
-        return [...groups.values()];
+
+        return nodes.reduce((sum, node) => sum + node.x, 0) / nodes.length;
     }
 
-    function packChildren(children) {
-        if (!children.length) return null;
-        children.sort((a, b) => {
-            const ab = subtreeBounds(a);
-            const bb = subtreeBounds(b);
-            const ac = (ab.left + ab.right) / 2;
-            const bc = (bb.left + bb.right) / 2;
-            return ac - bc || a.id.localeCompare(b.id);
+    function outgoingAnchor(parentUnit, children) {
+        const ids = new Set();
+        for (const child of children) {
+            for (const id of explicitParentIdsForChild(child, parentUnit)) ids.add(id);
+        }
+        const parentIds = [...ids];
+        if (parentIds.length <= 2) return anchorForParentIds(parentUnit, parentIds);
+
+        // Multi-partner units can have more than one outgoing union. A rigid translation cannot
+        // satisfy every union independently, so center the whole unit over the aggregate child span.
+        return parentUnit.centerX;
+    }
+
+    function translateUnit(unit, dx) {
+        if (!Number.isFinite(dx) || Math.abs(dx) < 0.001) return;
+        unit.centerX += dx;
+        for (const member of unit.members || []) {
+            if (Number.isFinite(member.x)) member.x += dx;
+        }
+    }
+
+    function placeGeneration(units, targets) {
+        if (!units.length) return;
+        units.sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
+        if (units.length === 1) {
+            const target = targets.get(units[0]);
+            if (Number.isFinite(target)) translateUnit(units[0], target - units[0].centerX);
+            return;
+        }
+
+        const positions = units.map(unit => {
+            const target = targets.get(unit);
+            return Number.isFinite(target) ? target : unit.centerX;
         });
 
-        let cursor = null;
-        for (const child of children) {
-            const bounds = subtreeBounds(child);
-            if (cursor == null) {
-                cursor = bounds.right;
-                continue;
-            }
-            const desiredLeft = cursor + subtreeGap();
-            translateSubtree(child, desiredLeft - bounds.left);
-            cursor = subtreeBounds(child).right;
+        for (let i = 1; i < units.length; i++) {
+            positions[i] = Math.max(
+                positions[i],
+                positions[i - 1] + unitSeparation(units[i - 1], units[i])
+            );
+        }
+        for (let i = units.length - 2; i >= 0; i--) {
+            positions[i] = Math.min(
+                positions[i],
+                positions[i + 1] - unitSeparation(units[i], units[i + 1])
+            );
         }
 
-        const left = Math.min(...children.map(child => subtreeBounds(child).left));
-        const right = Math.max(...children.map(child => subtreeBounds(child).right));
-        return { left, right, center: (left + right) / 2 };
+        const requested = units.map((unit, index) => {
+            const target = targets.get(unit);
+            return Number.isFinite(target) ? target : positions[index];
+        });
+        const rowShift = average(requested.map((value, index) => value - positions[index]));
+
+        units.forEach((unit, index) => {
+            const next = positions[index] + rowShift;
+            translateUnit(unit, next - unit.centerX);
+        });
     }
 
-    function centerChildGroups(parentUnit) {
-        const groups = groupChildrenByAnchor(parentUnit);
-        if (!groups.length) return [];
-        const diagnostics = [];
+    function unitLabel(unit) {
+        return (unit.members || []).map(member => member.name || member.id).join(' + ');
+    }
 
-        for (const group of groups) {
-            const packed = packChildren(group.children);
-            if (!packed) continue;
-            const anchor = anchorForParentIds(parentUnit, group.parentIds);
-            const dx = anchor - packed.center;
-            for (const child of group.children) translateSubtree(child, dx);
-            const after = packChildren(group.children) || packed;
-            diagnostics.push({
-                parentUnit: parentUnit.id,
-                parentIds: [...group.parentIds],
-                childCount: group.children.length,
-                anchor: Math.round(anchor),
-                center: Math.round(after.center),
-                offset: Math.round(anchor - after.center),
-                width: Math.round(after.right - after.left)
-            });
-        }
-        return diagnostics;
+    function childLabels(unit) {
+        return ownedChildren(unit).map(unitLabel).join(' | ');
     }
 
     function normalizeHorizontalBounds() {
@@ -188,49 +179,65 @@
         globalUnits.forEach(unit => translateUnit(unit, delta));
     }
 
-    function refineSubtrees() {
-        if (!globalUnits.length) return;
+    function diagnosticsFor(unit) {
+        const span = childSubtreeSpan(unit);
+        if (!span) return null;
+        const anchor = outgoingAnchor(unit, span.children);
+        return {
+            gen: unit.gen,
+            parents: unitLabel(unit),
+            children: childLabels(unit),
+            unionAnchor: Math.round(anchor),
+            subtreeCenter: Math.round(span.center),
+            offset: Math.round(anchor - span.center),
+            subtreeWidth: Math.round(span.right - span.left)
+        };
+    }
 
-        // Member-order and bridge-compaction are authoritative for topology and internal union
-        // geometry. Settle member positions once, then never call positionMembers again after
-        // subtree translation or it can undo the anchor alignment.
-        positionMembers();
+    function refineParentsBottomUp() {
+        if (!globalUnits.length) return;
 
         const byGen = new Map();
         for (const unit of globalUnits) {
             if (!byGen.has(unit.gen)) byGen.set(unit.gen, []);
             byGen.get(unit.gen).push(unit);
         }
-        const generations = [...byGen.keys()].sort((a, b) => b - a);
-        const diagnostics = [];
+        const gens = [...byGen.keys()].sort((a, b) => b - a);
 
-        // Bottom-up is important: first compact every child branch internally, then let its parent
-        // treat that finished branch as one block. Ancestor translations subsequently move the
-        // already-centered branch as a whole and preserve all lower-level alignment.
-        for (const gen of generations) {
-            const parents = [...(byGen.get(gen) || [])]
-                .sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
-            for (const parent of parents) diagnostics.push(...centerChildGroups(parent));
+        // Descendant rows stay fixed. Starting at the leaves, move only the parent generation
+        // above the center of the already-settled child subtrees. This is intentionally the inverse
+        // of top-down compaction and may create longer horizontal sibling arms.
+        for (let gi = 1; gi < gens.length; gi++) {
+            const units = byGen.get(gens[gi]) || [];
+            const targets = new Map();
+            for (const unit of units) {
+                const span = childSubtreeSpan(unit);
+                if (!span) continue;
+                const anchor = outgoingAnchor(unit, span.children);
+                targets.set(unit, unit.centerX + (span.center - anchor));
+            }
+            placeGeneration(units, targets);
         }
 
         normalizeHorizontalBounds();
+
+        const groups = globalUnits
+            .map(diagnosticsFor)
+            .filter(Boolean)
+            .sort((a, b) => a.gen - b.gen || Math.abs(b.offset) - Math.abs(a.offset));
         window.__familySubtreeLayoutDiagnostics = {
-            groups: diagnostics,
-            maxOffset: diagnostics.length
-                ? Math.max(...diagnostics.map(item => Math.abs(item.offset)))
-                : 0,
+            groups,
+            maxOffset: groups.length ? Math.max(...groups.map(item => Math.abs(item.offset))) : 0,
             checkedAt: new Date().toISOString()
         };
     }
 
     Controller.registerLayoutStage({
         name: 'relationship-compaction',
-        // Run after member-order (40) and bridge-compaction (50); no later layout stage may move
-        // child branches after they have been packed under their actual union anchors.
         order: 60,
         run() {
             if (!globalNodes.length || !globalUnits.length) return;
-            refineSubtrees();
+            refineParentsBottomUp();
             updateCanvasBounds();
             syncCardPositions();
         }
