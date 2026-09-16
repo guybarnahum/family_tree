@@ -370,6 +370,10 @@
         if (fields.length !== 1) throw new Error('Person update expects exactly one field');
 
         if (Store.isDraft?.(id)) {
+            // Draft edits belong to the local overlay immediately. Promotion may cross one or
+            // more network/render turns; keeping the overlay current prevents a selection change
+            // from re-rendering the draft from its older blank state while persistence is pending.
+            Store.updateDraftPerson(id, effective, { reason: `${reason}-optimistic` });
             const result = await persistDraft(id, effective, { reason: 'initialize-person' });
             if (result.changed) diagnostics.personWrites += 1;
             expose();
