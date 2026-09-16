@@ -104,6 +104,17 @@
         compactGeneration(units, targets);
     }
 
+    function alignParentsBottomUp(byGen, gens) {
+        for (let gi = gens.length - 2; gi >= 0; gi--) {
+            const units = byGen.get(gens[gi]);
+            units.sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
+            const targets = new Map();
+            for (const unit of units) targets.set(unit, alignmentTarget(unit));
+            compactGeneration(units, targets);
+            positionMembers();
+        }
+    }
+
     function normalizeHorizontalBounds() {
         if (!globalUnits.length) return;
         const minLeft = Math.min(...globalUnits.map(unit => unit.centerX - unit.width / 2));
@@ -123,20 +134,14 @@
                 compactRelationshipRow(byGen.get(gens[gi]));
                 positionMembers();
             }
-            for (let gi = gens.length - 2; gi >= 0; gi--) {
-                const units = byGen.get(gens[gi]);
-                units.sort((a, b) => a.centerX - b.centerX || a.id.localeCompare(b.id));
-                const targets = new Map();
-                for (const unit of units) targets.set(unit, alignmentTarget(unit));
-                compactGeneration(units, targets);
-                positionMembers();
-            }
+            alignParentsBottomUp(byGen, gens);
         }
 
-        for (let gi = 1; gi < gens.length; gi++) {
-            compactRelationshipRow(byGen.get(gens[gi]));
-            positionMembers();
-        }
+        // Descendant geometry owns the final horizontal placement. Do not finish with another
+        // parent-driven child compaction pass: on wide trees that pulls sibling branches inward
+        // and leaves parents visibly off-center over the child span. Settling from the leaves
+        // upward makes the result behave like a tree laid out from the bottom.
+        alignParentsBottomUp(byGen, gens);
         normalizeHorizontalBounds();
         positionMembers();
     }
